@@ -145,7 +145,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
                         return jsonResult({
                             company,
                             refused: true,
-                            reason: `A ${entity} with EXTERNALID ${externalId} already exists. Nothing was sent. Read it and continue from it instead of creating another.`,
+                            reason: `An ${entity} record with EXTERNALID ${externalId} already exists. Nothing was sent. Read it and continue from it instead of creating another.`,
                             existing,
                         });
                     }

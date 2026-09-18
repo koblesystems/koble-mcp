@@ -140,3 +140,17 @@ test("a 401 is retried once with a fresh token", async () => {
     assert.deepEqual(r.record, { AUTOID: "X" });
     assert.equal(sent.length, 2);
 });
+
+test("a failed read is never described as a write that was or wasn't saved", async () => {
+    fresh();
+    script.push(() => json(422, { Messages: [{ TextBriefDescription: "Key not found" }] }));
+    const refused = await call("ebms_get", { company: "sbx", path: "ARINV('NOPE')", select: "AUTOID" });
+    assert.equal(refused.advice, "EBMS refused this request.");
+    script.push(() => json(504, null));
+    const lost = await call("ebms_get", { company: "sbx", path: "ARINV('X')", select: "AUTOID" });
+    assert.equal(lost.uncertain, true);
+    assert.match(String(lost.advice), /safe to try again/);
+    script.push(() => json(504, null));
+    const write = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    assert.match(String(write.advice), /Read the record back/);
+});

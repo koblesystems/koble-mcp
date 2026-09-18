@@ -34,8 +34,12 @@ export function errorResult(error: unknown, extra: Record<string, unknown> = {})
                             error: { status: error.status, kind: error.kind, message: error.message, detail: error.detail, solution: error.solution },
                             uncertain: error.uncertain,
                             advice: error.uncertain
-                                ? "The outcome is unknown. Read the record back before sending this again; a resent create or add duplicates."
-                                : "EBMS refused this request; nothing was saved.",
+                                ? extra["method"] === undefined && extra["command"] === undefined
+                                    ? "The read did not complete; it is safe to try again."
+                                    : "The outcome is unknown. Read the record back before sending this again; a resent create or add duplicates."
+                                : extra["method"] === undefined && extra["command"] === undefined
+                                  ? "EBMS refused this request."
+                                  : "EBMS refused this request; nothing was saved.",
                             ...extra,
                         },
                         null,
