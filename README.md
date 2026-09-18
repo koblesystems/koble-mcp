@@ -21,9 +21,41 @@ Every result names the company it ran against. Every failure comes back as
 connection or a 5xx: the write may or may not have happened, so **read the record back
 before sending it again**. A resent create or add duplicates.
 
-A 2xx is not proof. EBMS silently ignores unknown `@id`s and fields it won't accept, and
-can attach warnings to a success; the result carries those as `warnings`. Read back and
-compare.
+## Every write is verified
+
+A 2xx is not proof. EBMS answers 200 to writes it only partly applies: an unknown `@id` is
+ignored, an unwritable field is dropped, an over-long value is cut, a quantity can come back
+as 0. So after each write the server reads back **exactly the fields that were sent** and
+compares them in code — numbers within half a cent, strings ignoring padding and line-ending
+style — instead of leaving the arithmetic to a model:
+
+```json
+"verification": {
+  "ok": false,
+  "checked": 6,
+  "mismatches": [{ "where": "Details[1] › Materials[2] TEAMJERSEY", "field": "M_QUAN_VIS", "sent": 1, "stored": 0 }],
+  "problems": [],
+  "notes": [],
+  "rows": [ … the stored values of every row the write touched or created … ]
+}
+```
+
+- `mismatches` — a field stored differently from what was sent.
+- `problems` — a row that never appeared, an `@id` EBMS ignored, a removal that didn't happen.
+- `notes` — rows EBMS added on its own, such as an assembly kit's default components. Not a
+  failure. Pass `readBack.children: "Materials"` to have new rows checked for them.
+- `rows` — what EBMS stored, including anything asked for in `readBack.lines`
+  (`UNIT_MEAS,UNIT_VIS,SO_AMOUNT`) or `readBack.record`. Report these, not what was sent.
+
+It is generic: it understands OData's shapes (top-level fields, `Nav@delta` arrays, nested
+arrays on a create) and knows nothing about any one entity. New rows are told apart from old
+by a light read of row IDs before a PATCH; children are read only for the parent rows the
+write touched, because an unfiltered nested expand costs EBMS tens of seconds on a large
+document. If the write succeeds and only the read-back fails, the result says exactly that
+and tells the caller not to resend. `verify: false` switches it off.
+
+The write result no longer echoes EBMS's whole record (about a hundred fields); it returns
+the record's `AUTOID`, `INVOICE` and `ID` plus the verification.
 
 ## Companies
 
@@ -62,7 +94,7 @@ confirmation step does not catch.
 ```bash
 npm install
 cp .env.example .env    # fill it in; the file is gitignored
-npm run check           # build + 23 tests, none of which touch the network
+npm run check           # build + tests, none of which touch the network
 ```
 
 The server reads its settings from the process environment; supply them through the MCP
@@ -70,9 +102,10 @@ client's `env` block (or `node --env-file=.env index.js`).
 
 ## Design rules
 
-- **The server never decides.** No chunking, no resume logic, no diffing. Those were the
+- **The server never decides.** No chunking, no resume logic, no planning. Those were the
   parts that went wrong in the previous design, and they are the parts a skill can fix
-  without a rebuild and a restart.
+  without a rebuild and a restart. What it does do in code is arithmetic nobody should
+  trust a model with: comparing what was stored against what was sent.
 - **The guards are the ones a model skips under pressure**, and only those: an
   unconfigured company, `PROCESS`, duplicate `EXTERNALID`, denied commands, path shape.
 - **Uncertainty is explicit.** Timeouts, network failures and 5xx responses are labelled

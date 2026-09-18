@@ -15,6 +15,8 @@ import { z } from "zod/v4";
 import { assertWriteCompany, availableCompanies, isWriteCompany, loadSettings, resolveCompany, setDiscoveredCompanies, setDiscoveryError } from "../config.js";
 import { odataString, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
+import { readBefore, verifyDelete, verifyWrite, type Before } from "../verify-run.js";
+import type { Verification } from "../verify.js";
 import { DOCUMENT_ENTITIES, entityOf, externalIdOf, findProcessKeys, isDeniedCommand, validateName, validatePath } from "../guards.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
@@ -114,12 +116,20 @@ export function registerProxyTools(register: ToolRegistrar): void {
         "ebms_write",
         {
             description:
-                "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one. Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists. A 2xx is not proof: EBMS silently ignores unknown @ids and unwritable fields, so read the record back afterwards. If the result says uncertain, read back before resending — a resent create or add duplicates.",
+                "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one. Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists. A 2xx is not proof — EBMS silently ignores unknown @ids and unwritable fields — so the server reads back the fields you sent and returns a verification: ok, mismatches (sent vs stored), problems (a row that never appeared or was not removed), notes (rows EBMS added itself) and the stored rows. Treat ok:false as a partly failed write and tell the user. If the result says uncertain, read back before resending — a resent create or add duplicates.",
             inputSchema: z.object({
                 company: companyField(true),
                 method: z.enum(["POST", "PATCH", "DELETE"]),
                 path: z.string().min(1).describe("Required. ARINV for a POST; ARINV('<AUTOID>') for PATCH or DELETE."),
                 body: z.record(z.string(), z.unknown()).optional().describe("JSON body for POST and PATCH. Omit for DELETE."),
+                verify: z.boolean().optional().describe("Default true: after the write the server reads back exactly the fields you sent and reports each mismatch. Set false only for a write whose result you will read yourself."),
+                readBack: z
+                    .object({
+                        record: z.string().optional().describe("Extra top-level fields to return with the verification, e.g. INVOICE,TOTAL_S_SO,TOTAL_SO."),
+                        lines: z.string().optional().describe("Extra fields to return for every row the write touched or created, e.g. UNIT_MEAS,UNIT_VIS,SO_AMOUNT — the values EBMS computed."),
+                        children: z.string().optional().describe("A child navigation to read under every new row, e.g. Materials, so rows EBMS adds by itself (an assembly kit's default components) are reported in notes."),
+                    })
+                    .optional(),
             }),
         },
         async (args) => {
@@ -150,8 +160,42 @@ export function registerProxyTools(register: ToolRegistrar): void {
                         });
                     }
                 }
+                const wantVerify = args.verify ?? true;
+                let before: Before | null = null;
+                if (wantVerify && args.method === "PATCH") before = await readBefore(company, path, args.body);
+
                 const result = await request(company, args.method, path, args.body);
-                return jsonResult({ company, method: args.method, path, status: result.status, record: result.body, warnings: result.warnings, ms: result.ms, next: "Read the record back and compare each field you sent." });
+                const created = (result.body ?? {}) as Record<string, unknown>;
+                const identity = Object.fromEntries(["AUTOID", "INVOICE", "ID"].filter((key) => created[key] !== undefined).map((key) => [key, created[key]]));
+                const base = { company, method: args.method, path, status: result.status, ...(Object.keys(identity).length > 0 ? { record: identity } : {}), warnings: result.warnings, ms: result.ms };
+                if (!wantVerify) return jsonResult({ ...base, verification: "skipped", next: "Read the record back and compare each field you sent." });
+
+                const verifyStarted = Date.now();
+                try {
+                    let verification: Verification;
+                    if (args.method === "DELETE") verification = await verifyDelete(company, path);
+                    else {
+                        const autoId = typeof created["AUTOID"] === "string" ? created["AUTOID"] : undefined;
+                        const recordPath = args.method === "POST" ? (autoId ? `${entity}(${odataString(autoId)})` : null) : path;
+                        if (recordPath === null) throw new Error("EBMS returned no AUTOID for the new record, so it could not be read back.");
+                        verification = await verifyWrite(company, recordPath, args.body, args.method === "POST" ? null : before, args.readBack);
+                    }
+                    return jsonResult({
+                        ...base,
+                        verification,
+                        verifyMs: Date.now() - verifyStarted,
+                        next: verification.ok
+                            ? "Every field sent was stored as sent. Report EBMS's values from verification.rows, not the ones you sent."
+                            : "EBMS accepted the request but did not store everything as sent. Show the user the mismatches and problems; do not resend an add.",
+                    });
+                } catch (error) {
+                    return jsonResult({
+                        ...base,
+                        verification: null,
+                        verificationError: error instanceof Error ? error.message : String(error),
+                        next: "The write itself returned the status above; only the read-back failed. Read the record before doing anything else, and do not resend the write.",
+                    });
+                }
             } catch (error) {
                 return errorResult(error, { company: args.company, method: args.method, path: args.path });
             }

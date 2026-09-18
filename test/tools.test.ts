@@ -45,7 +45,7 @@ const fresh = (env: Record<string, string> = {}) => {
 
 test("in testing mode a write outside the sandbox is refused before any request is sent", async () => {
     fresh();
-    const r = await call("ebms_write", { company: "live", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    const r = await call("ebms_write", { company: "live", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.equal(r.isError, true);
     assert.match(String((r.error as { message: string }).message), /restricts writes to SBX/);
     assert.equal(sent.length, 0);
@@ -72,7 +72,7 @@ test("a POST whose EXTERNALID already exists is refused, and the existing record
 test("a POST with a new EXTERNALID checks first, then creates", async () => {
     fresh();
     script.push(() => json(200, { value: [] }), () => json(201, { AUTOID: "O2", INVOICE: "1194" }));
-    const r = await call("ebms_write", { company: "sbx", method: "POST", path: "ARINV", body: { ID: "SMIJOH", EXTERNALID: "mcp-2", Details: [] } });
+    const r = await call("ebms_write", { company: "sbx", method: "POST", path: "ARINV", body: { ID: "SMIJOH", EXTERNALID: "mcp-2", Details: [] }, verify: false });
     assert.equal(r.status, 201);
     assert.deepEqual(sent.map((s) => s.method), ["GET", "POST"]);
     assert.deepEqual(sent[1]?.body, { ID: "SMIJOH", EXTERNALID: "mcp-2", Details: [] });
@@ -81,16 +81,16 @@ test("a POST with a new EXTERNALID checks first, then creates", async () => {
 test("a timeout or a 5xx comes back uncertain; a 422 does not", async () => {
     fresh();
     script.push(() => Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" }));
-    const t = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    const t = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.equal(t.uncertain, true);
     assert.equal((t.error as { kind: string }).kind, "timeout");
 
     script.push(() => json(504, null));
-    const g = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    const g = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.equal(g.uncertain, true);
 
     script.push(() => json(422, { Messages: [{ TextBriefDescription: "Saving has been aborted", TextDetail: "requires a general ledger account" }] }));
-    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.equal(r.uncertain, false);
     assert.equal((r.error as { detail: string }).detail, "requires a general ledger account");
 });
@@ -98,7 +98,7 @@ test("a timeout or a 5xx comes back uncertain; a 422 does not", async () => {
 test("a 2xx with warnings succeeds and carries them", async () => {
     fresh();
     script.push(() => json(200, { AUTOID: "X", Messages: [{ Severity: "Warning", TextBriefDescription: "Over credit limit" }] }));
-    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.equal(r.isError, undefined);
     assert.deepEqual(r.warnings, ["Warning: Over credit limit"]);
 });
@@ -151,6 +151,6 @@ test("a failed read is never described as a write that was or wasn't saved", asy
     assert.equal(lost.uncertain, true);
     assert.match(String(lost.advice), /safe to try again/);
     script.push(() => json(504, null));
-    const write = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    const write = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.match(String(write.advice), /Read the record back/);
 });
