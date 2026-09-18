@@ -1,0 +1,111 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { addDays, lotSize, lowLevelCodes, runMrp, type Demand, type ItemParams, type Supply } from "../src/mrp/engine.js";
+
+const today = "2026-09-18";
+const sales = (item: string, qty: number, date: string, ref = "SO-1"): Demand => ({ item, qty, date, kind: "sales", ref });
+const po = (item: string, qty: number, date: string, ref = "PO-1"): Supply => ({ item, qty, date, kind: "purchase", ref });
+
+test("lot sizing: minimum order, then rounded up to the increment", () => {
+    assert.equal(lotSize(9, { orderMultiple: 5 }), 10);
+    assert.equal(lotSize(3, { minOrder: 12 }), 12);
+    assert.equal(lotSize(0.2756, {}), 0.2756);
+    assert.equal(lotSize(10, { orderMultiple: 5 }), 10);
+});
+
+test("dates move by whole days", () => {
+    assert.equal(addDays("2026-03-01", -1), "2026-02-28");
+    assert.equal(addDays("2026-09-18", 14), "2026-10-02");
+});
+
+test("stock and a receipt that arrives in time mean nothing is planned", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 5, leadTimeDays: 7 }], demands: [sales("A", 8, "2026-10-01")], supplies: [po("A", 10, "2026-09-25")] });
+    assert.deepEqual(plan.plannedOrders, []);
+    assert.deepEqual(plan.exceptions, []);
+    assert.equal(plan.items[0]?.endingBalance, 7);
+});
+
+test("the point of time-phasing: enough is on order in total, but it arrives after it is needed", () => {
+    // EBMS's single-bucket NET_ORDER would call this covered: 1 + 26 - 7 = 20.
+    const plan = runMrp({ today, items: [{ id: "BIKE", onHand: 1, leadTimeDays: 10 }], demands: [sales("BIKE", 7, "2026-09-25")], supplies: [{ item: "BIKE", qty: 26, date: "2026-11-01", kind: "batch", ref: "178" }] });
+    assert.deepEqual(plan.plannedOrders, []);
+    assert.equal(plan.exceptions.length, 1);
+    assert.equal(plan.exceptions[0]?.type, "expedite");
+    assert.equal(plan.exceptions[0]?.from, "2026-11-01");
+    assert.equal(plan.exceptions[0]?.to, "2026-09-25");
+});
+
+test("a shortage with nothing to pull in becomes a planned order, released one lead time earlier and pegged to its cause", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 2, leadTimeDays: 14 }], demands: [sales("A", 10, "2026-11-01", "SO-1193")], supplies: [] });
+    assert.deepEqual(plan.plannedOrders, [{ item: "A", action: "buy", qty: 8, receiptDate: "2026-11-01", releaseDate: "2026-10-18", pastDue: false, pegs: [{ ref: "SO-1193", kind: "sales", qty: 8, date: "2026-11-01" }] }]);
+});
+
+test("when the lead time has already run out, the order is flagged past due rather than hidden", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0, leadTimeDays: 30 }], demands: [sales("A", 4, "2026-09-25")], supplies: [] });
+    assert.equal(plan.plannedOrders[0]?.pastDue, true);
+    assert.equal(plan.plannedOrders[0]?.releaseDate, "2026-08-26");
+    assert.ok(plan.exceptions.some((e) => e.type === "past-due-release"));
+});
+
+test("demand dated in the past is planned as due today and reported", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0, leadTimeDays: 0 }], demands: [sales("A", 1, "2026-07-24", "SO-1173")], supplies: [] });
+    assert.equal(plan.plannedOrders[0]?.receiptDate, today);
+    assert.ok(plan.exceptions.some((e) => e.type === "past-due-demand" && e.ref === "SO-1173"));
+});
+
+test("EBMS's own numbers are the one-bucket case: minimum, order-up-to and reorder increment", () => {
+    const at = (item: ItemParams, demands: Demand[] = [], supplies: Supply[] = []) => runMrp({ today, items: [item], demands, supplies }).plannedOrders.map((o) => o.qty);
+    // Below the minimum with nothing on order: EBMS trips on on-hand alone, so the check is a zero-quantity "demand" today.
+    const probe = (id: string): Demand => ({ item: id, qty: 0.0001, date: today, kind: "forecast", ref: "min check" });
+    assert.deepEqual(at({ id: "GRAVELBIKE-01", onHand: 1, leadTimeDays: 0, safetyStock: 10, orderMultiple: 5 }, [probe("GRAVELBIKE-01")]), [10]); // QUAN2ORDER 10
+    assert.deepEqual(at({ id: "FRAMESET-ALU", onHand: 5, leadTimeDays: 0, safetyStock: 10 }, [probe("FRAMESET-ALU")]).map(Math.round), [5]); // QUAN2ORDER 5
+    assert.deepEqual(at({ id: "SHIFTERS", onHand: 0, leadTimeDays: 0, safetyStock: 10, orderUpTo: 20 }, [probe("SHIFTERS")], [po("SHIFTERS", 20, today)]), []); // 20 on order: QUAN2ORDER 0
+    assert.deepEqual(at({ id: "GRAVEL2", onHand: 1, leadTimeDays: 0, safetyStock: 2, orderUpTo: 5 }, [probe("GRAVEL2")]).map(Math.round), [4]); // up to the maximum
+});
+
+test("planned production explodes into dated demand on its components, lowest level last", () => {
+    const items: ItemParams[] = [
+        { id: "LEG", onHand: 10, leadTimeDays: 5 },
+        { id: "BENCH", onHand: 0, leadTimeDays: 3, make: true, components: [{ item: "LEG", qtyPer: 4 }, { item: "SEAT", qtyPer: 1 }] },
+        { id: "SEAT", onHand: 0, leadTimeDays: 7 },
+    ];
+    const plan = runMrp({ today, items, demands: [sales("BENCH", 6, "2026-10-20", "SO-9")], supplies: [] });
+    const by = Object.fromEntries(plan.plannedOrders.map((o) => [o.item, o]));
+    assert.equal(by["BENCH"]?.action, "make");
+    assert.equal(by["BENCH"]?.releaseDate, "2026-10-17");
+    assert.equal(by["LEG"]?.qty, 14); // 6 x 4 = 24 needed, 10 on hand
+    assert.equal(by["LEG"]?.receiptDate, "2026-10-17"); // needed when the batch starts
+    assert.equal(by["LEG"]?.releaseDate, "2026-10-12");
+    assert.equal(by["SEAT"]?.qty, 6);
+    assert.match(by["LEG"]?.pegs[0]?.ref ?? "", /make BENCH x6 for 2026-10-20/);
+    assert.deepEqual(plan.items.map((i) => `${i.item}:${i.level}`), ["BENCH:0", "LEG:1", "SEAT:1"]);
+});
+
+test("a component shared by two parents is planned after both", () => {
+    const { levels } = lowLevelCodes([
+        { id: "BIKE", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "WHEEL", qtyPer: 2 }] },
+        { id: "WHEEL", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "TUBE", qtyPer: 1 }] },
+        { id: "REPAIRKIT", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "TUBE", qtyPer: 2 }] },
+        { id: "TUBE", onHand: 0, leadTimeDays: 0 },
+    ]);
+    assert.equal(levels.get("TUBE"), 2);
+    assert.equal(levels.get("WHEEL"), 1);
+});
+
+test("a rework batch that consumes its own finished good does not loop, and a real cycle is reported once", () => {
+    const rework = runMrp({ today, items: [{ id: "HSBLEND", onHand: 0, leadTimeDays: 1, make: true, components: [{ item: "HSBLEND", qtyPer: 5 }, { item: "BAG", qtyPer: 1 }] }, { id: "BAG", onHand: 0, leadTimeDays: 1 }], demands: [sales("HSBLEND", 5, "2026-10-01")], supplies: [] });
+    assert.deepEqual(rework.plannedOrders.map((o) => `${o.item}:${o.qty}`), ["HSBLEND:5", "BAG:5"]);
+    const cyc = runMrp({ today, items: [{ id: "A", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "B", qtyPer: 1 }] }, { id: "B", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "A", qtyPer: 1 }] }], demands: [sales("A", 1, "2026-10-01")], supplies: [] });
+    assert.ok(cyc.exceptions.some((e) => e.type === "bom-cycle"));
+});
+
+test("a receipt nothing needs is reported, and one with an assumed date says so", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 50, leadTimeDays: 7 }], demands: [sales("A", 5, "2026-10-01")], supplies: [{ ...po("A", 100, "2026-10-15", "PO#123"), dateAssumed: true }] });
+    assert.ok(plan.exceptions.some((e) => e.type === "not-needed" && e.ref === "PO#123"));
+    assert.ok(plan.exceptions.some((e) => e.type === "assumed-date" && e.ref === "PO#123"));
+});
+
+test("demand or supply for an item with no parameters is reported, not silently dropped", () => {
+    const plan = runMrp({ today, items: [], demands: [sales("GHOST", 1, "2026-10-01")], supplies: [] });
+    assert.deepEqual(plan.exceptions.map((e) => e.type), ["unknown-item"]);
+});
