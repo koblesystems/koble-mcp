@@ -78,7 +78,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 "Read from EBMS OData: a collection (path 'ARINV') or one record (path \"ARINV('<AUTOID>')\"). Always pass select — an unselected read returns every field, many computed, and large ones hit the 2-minute limit. For a collection, count is on by default and the result says whether rows were truncated. Query syntax and the install's quirks are in the ebms-api skill.",
             inputSchema: z.object({
                 company: companyField(false),
-                path: z.string().min(1).describe("Entity path only, e.g. ARINV, ARINV('7XQPR42LM8W91000'), EntityMetaData('ARINV'), $metadata. No query string."),
+                path: z.string().min(1).describe("Required. Entity path only, e.g. ARINV, ARINV('7XQPR42LM8W91000'), EntityMetaData('ARINV'), $metadata. No query string."),
                 select: z.string().optional().describe("$select, comma-separated. Include one inside expand too: Details($select=AUTOID,INVEN)."),
                 filter: z.string().optional().describe("$filter, unencoded."),
                 expand: z.string().optional(),
@@ -118,7 +118,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
             inputSchema: z.object({
                 company: companyField(true),
                 method: z.enum(["POST", "PATCH", "DELETE"]),
-                path: z.string().min(1).describe("ARINV for a POST; ARINV('<AUTOID>') for PATCH or DELETE."),
+                path: z.string().min(1).describe("Required. ARINV for a POST; ARINV('<AUTOID>') for PATCH or DELETE."),
                 body: z.record(z.string(), z.unknown()).optional().describe("JSON body for POST and PATCH. Omit for DELETE."),
             }),
         },
@@ -165,9 +165,9 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>. Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}. Pass the dialog's fields for one that has a dialog (ChangeCustomer). Refused for a company that is not configured (or not the sandbox, while testing) and for denied commands (Send, RecordPayment by default). Commands return little; read the record back afterwards.",
             inputSchema: z.object({
                 company: companyField(true),
-                entity: z.string().min(1).describe("e.g. ARINV"),
-                key: z.string().min(1).describe("AUTOID of the record."),
-                command: z.string().min(1).describe("e.g. MarkAllAsShipped, RecalculateAllPrices, ChangeCustomer"),
+                entity: z.string().min(1).describe("Required. The entity, e.g. ARINV"),
+                key: z.string().min(1).describe("Required. AUTOID of the record."),
+                command: z.string().min(1).describe("Required. The action name, e.g. MarkAllAsShipped, RecalculateAllPrices, ChangeCustomer"),
                 body: z.record(z.string(), z.unknown()).optional().describe("Dialog fields, only for commands that have a dialog."),
             }),
         },
