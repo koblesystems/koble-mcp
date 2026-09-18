@@ -55,20 +55,8 @@ cp .env.example .env    # fill it in; the file is gitignored
 npm run check           # build + 23 tests, none of which touch the network
 ```
 
-**Credentials stay in the server's own `.env`.** On startup the server loads `.env` from
-its own directory (or the file named by `EBMS_ENV_FILE`), so the MCP client's config carries
-no secrets — just the command:
-
-```json
-"koble-mcp": {
-  "command": "node",
-  "args": ["/path/to/koble-mcp/index.js"]
-}
-```
-
-Values already in the process environment win over the file, so a client can still set
-`EBMS_COMPANIES` or `EBMS_WRITE_COMPANIES` in its `env` block without touching the
-credentials. Keep `.env` at mode 600. It is gitignored.
+The server reads its settings from the process environment; supply them through the MCP
+client's `env` block (or `node --env-file=.env index.js`).
 
 ## Design rules
 
