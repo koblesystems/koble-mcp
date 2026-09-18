@@ -8,7 +8,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import type { z } from "zod/v4";
-import { loadSettings } from "./src/config.js";
+import { loadEnvFile, loadSettings } from "./src/config.js";
 import { registerProxyTools } from "./src/tools/proxy-tools.js";
 import type { McpToolResult, ToolDefinition } from "./src/tools/types.js";
 
@@ -27,6 +27,8 @@ function describeSetup(): string {
         return `Not configured: ${error instanceof Error ? error.message : String(error)}`;
     }
 }
+
+loadEnvFile();
 
 const server = new McpServer(
     { name: "koble-mcp", version: "0.1.0" },

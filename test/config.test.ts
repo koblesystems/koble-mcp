@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertWriteCompany, configure, connectionFor, isWriteCompany, loadSettings, resolveCompany } from "../src/config.js";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assertWriteCompany, configure, connectionFor, isWriteCompany, loadEnvFile, loadSettings, parseEnvFile, resolveCompany } from "../src/config.js";
 
 const base = { EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p" };
 
@@ -48,4 +51,22 @@ test("per-company credentials override the defaults and never leak into the URL"
 test("a company with no credentials at all is an error, not a request", () => {
     configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_COMPANIES: "sbx" });
     assert.throws(() => connectionFor("sbx"), /no credentials/);
+});
+
+test("an env file fills in what the process environment lacks, and never overrides it", () => {
+    const parsed = parseEnvFile('# creds\nexport EBMS_USERNAME="alice"\nEBMS_PASSWORD=\'p#ss word\'\nEBMS_COMPANIES=sbx\nnot a line\n');
+    assert.deepEqual(parsed, { EBMS_USERNAME: "alice", EBMS_PASSWORD: "p#ss word", EBMS_COMPANIES: "sbx" });
+});
+
+test("loadEnvFile reads the named file into the configured environment, process values winning", () => {
+    const dir = mkdtempSync(join(tmpdir(), "koble-mcp-"));
+    const file = join(dir, ".env");
+    writeFileSync(file, "EBMS_SERIAL_NUMBER=000000000000000\nEBMS_USERNAME=filed\nEBMS_PASSWORD=secret\nEBMS_COMPANIES=sbx\n");
+    const env: Record<string, string | undefined> = { EBMS_USERNAME: "fromclient" };
+    configure(env);
+    assert.equal(loadEnvFile(file), file);
+    assert.equal(env["EBMS_USERNAME"], "fromclient");
+    assert.equal(env["EBMS_PASSWORD"], "secret");
+    assert.equal(connectionFor("sbx").password, "secret");
+    assert.equal(loadEnvFile(join(dir, "missing.env")), null);
 });

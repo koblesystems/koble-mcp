@@ -4,6 +4,9 @@
  * Credentials never leave this module except into the EBMS client, and never enter a tool
  * result. Loading is lazy so the guards are testable without a real serial number.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod/v4";
 
 const envSchema = z.object({
@@ -44,6 +47,45 @@ type Env = Record<string, string | undefined>;
 
 let env: Env = process.env;
 let settings: Settings | null = null;
+
+/**
+ * Parses a KEY=value file: blank lines and # comments skipped, optional `export `, optional
+ * single or double quotes around the value. Enough for a credentials file; not a shell.
+ */
+export function parseEnvFile(text: string): Record<string, string> {
+    const values: Record<string, string> = {};
+    for (const raw of text.split(/\r?\n/)) {
+        const line = raw.trim();
+        if (line.length === 0 || line.startsWith("#")) continue;
+        const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+        if (!match) continue;
+        const [, key, rest] = match;
+        let value = (rest ?? "").trim();
+        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+        if (key) values[key] = value;
+    }
+    return values;
+}
+
+/**
+ * Loads credentials from a file the server owns, so the MCP client's config never has to
+ * carry them. `EBMS_ENV_FILE` names the file; otherwise `.env` beside the server's
+ * package.json is used if it exists. Values already present in the process environment win,
+ * so a client can still override a single setting such as EBMS_COMPANIES.
+ */
+export function loadEnvFile(path: string | undefined = env["EBMS_ENV_FILE"] ?? defaultEnvPath()): string | null {
+    if (!path || !existsSync(path)) return null;
+    const values = parseEnvFile(readFileSync(path, "utf8"));
+    for (const [key, value] of Object.entries(values)) {
+        if (env[key] === undefined || env[key] === "") env[key] = value;
+    }
+    settings = null;
+    return path;
+}
+
+function defaultEnvPath(): string {
+    return resolve(dirname(fileURLToPath(import.meta.url)), "..", ".env");
+}
 
 const splitList = (value: string | undefined): string[] =>
     (value ?? "")
