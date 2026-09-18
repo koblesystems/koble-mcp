@@ -10,7 +10,10 @@ const envSchema = z.object({
     EBMS_SERIAL_NUMBER: z.string().min(1),
     EBMS_USERNAME: z.string().min(1).optional(),
     EBMS_PASSWORD: z.string().min(1).optional(),
-    /** Comma-separated company IDs this server may read. */
+    /**
+     * Comma-separated company IDs this server may use. Optional: left unset, every company
+     * the serial number reaches is available (discovered from the company-list endpoint).
+     */
     EBMS_COMPANIES: z.string().optional(),
     /** The single-company form ebms-mcp used; still honoured. */
     EBMS_COMPANY_ID: z.string().optional(),
@@ -28,10 +31,16 @@ const envSchema = z.object({
 
 export const DEFAULT_DENIED_COMMANDS = ["Send", "RecordPayment", "PrintReport", "Sign"];
 
+export interface CompanyInfo {
+    id: string;
+    name: string;
+    version: string | null;
+}
+
 export interface Settings {
     serial: string;
-    /** Every listed company may be read and written. */
-    companies: string[];
+    /** Company IDs named in the environment, or null to use whatever the serial reaches. */
+    configured: string[] | null;
     /** When set, the only company writes may go to. */
     sandbox: string | null;
     deniedCommands: string[];
@@ -49,6 +58,8 @@ type Env = Record<string, string | undefined>;
 
 let env: Env = process.env;
 let settings: Settings | null = null;
+let discovered: CompanyInfo[] = [];
+let discoveryError: string | null = null;
 
 const splitList = (value: string | undefined): string[] =>
     (value ?? "")
@@ -63,6 +74,22 @@ export const normalizeCompany = (company: string): string => company.trim().toUp
 export function configure(newEnv: Env): void {
     env = newEnv;
     settings = null;
+    discovered = [];
+    discoveryError = null;
+}
+
+/** Records what the company-list endpoint reported for this serial. */
+export function setDiscoveredCompanies(list: CompanyInfo[]): void {
+    discovered = list;
+    discoveryError = null;
+}
+
+export function setDiscoveryError(message: string): void {
+    discoveryError = message;
+}
+
+export function discoveredCompanies(): CompanyInfo[] {
+    return discovered;
 }
 
 export function loadSettings(): Settings {
@@ -76,11 +103,9 @@ export function loadSettings(): Settings {
     const listed = splitList(values.EBMS_COMPANIES ?? values.EBMS_COMPANY_ID).map(normalizeCompany);
     const sandbox = values.EBMS_SANDBOX?.trim() ? normalizeCompany(values.EBMS_SANDBOX) : null;
     if (sandbox !== null && sandbox.includes(",")) throw new Error("koble-mcp: EBMS_SANDBOX names one company, the only one writes may go to while testing.");
-    const companies = sandbox !== null && !listed.includes(sandbox) ? [...listed, sandbox] : listed;
-    if (companies.length === 0) throw new Error("koble-mcp: no companies configured. Set EBMS_COMPANIES to the company IDs this server may use.");
     settings = {
         serial: values.EBMS_SERIAL_NUMBER,
-        companies,
+        configured: listed.length > 0 ? listed : null,
         sandbox,
         deniedCommands: values.EBMS_DENIED_COMMANDS === undefined ? DEFAULT_DENIED_COMMANDS : splitList(values.EBMS_DENIED_COMMANDS),
         logFile: values.EBMS_LOG_FILE,
@@ -89,38 +114,58 @@ export function loadSettings(): Settings {
 }
 
 /**
- * Turns an optional company argument into a configured company ID. With one company
- * configured it may be omitted; with several it must be named, so a call never lands on a
- * company by accident.
+ * The companies this server may use: the configured IDs if any were named, otherwise
+ * everything discovered for the serial; plus the sandbox, which is always available. Names
+ * and versions come from discovery when it ran.
+ */
+export function availableCompanies(): CompanyInfo[] {
+    const { configured, sandbox } = loadSettings();
+    const known = new Map(discovered.map((info) => [info.id, info]));
+    const ids = configured ?? discovered.map((info) => info.id);
+    const withSandbox = sandbox !== null && !ids.includes(sandbox) ? [...ids, sandbox] : ids;
+    return withSandbox.map((id) => known.get(id) ?? { id, name: "", version: null });
+}
+
+const describe = (info: CompanyInfo): string => (info.name ? `${info.id} (${info.name})` : info.id);
+export const describeCompanies = (): string => availableCompanies().map(describe).join(", ");
+
+/**
+ * Turns a company argument — an ID or a name, either case — into a company ID. With one
+ * company available it may be omitted; with several it must be named, so a call never lands
+ * on a company by accident.
  */
 export function resolveCompany(company: string | undefined): string {
-    const { companies } = loadSettings();
+    const available = availableCompanies();
+    if (available.length === 0) {
+        throw new Error(
+            `No companies are known${discoveryError ? ` (discovery failed: ${discoveryError})` : ""}. Set EBMS_COMPANIES, or call ebms_companies to retry discovery.`,
+        );
+    }
     if (company === undefined || company.trim() === "") {
-        const [only] = companies;
-        if (companies.length === 1 && only) return only;
-        throw new Error(`Name the company. This server is configured for: ${companies.join(", ")}.`);
+        const [only] = available;
+        if (available.length === 1 && only) return only.id;
+        throw new Error(`Name the company. Available: ${describeCompanies()}.`);
     }
-    const wanted = normalizeCompany(company);
-    if (!companies.includes(wanted)) {
-        throw new Error(`Company "${company}" is not configured on this server (configured: ${companies.join(", ")}).`);
-    }
-    return wanted;
+    const wanted = company.trim().toLowerCase();
+    const match = available.find((info) => info.id.toLowerCase() === wanted) ?? available.find((info) => info.name.toLowerCase() === wanted);
+    if (!match) throw new Error(`Company "${company}" is not available on this server. Available: ${describeCompanies()}. Call ebms_companies to see what the serial reaches.`);
+    return match.id;
 }
 
 export function isWriteCompany(company: string): boolean {
-    const { companies, sandbox } = loadSettings();
+    const { sandbox } = loadSettings();
     const wanted = normalizeCompany(company);
-    return sandbox === null ? companies.includes(wanted) : sandbox === wanted;
+    return sandbox === null ? availableCompanies().some((info) => info.id === wanted) : sandbox === wanted;
 }
 
 /** Every write path calls this before building a request. */
 export function assertWriteCompany(company: string): void {
     if (!isWriteCompany(company)) {
-        const { companies, sandbox } = loadSettings();
+        const { sandbox } = loadSettings();
         throw new Error(
             sandbox !== null
                 ? `Refusing to write: EBMS_SANDBOX restricts writes to ${sandbox}, and this call names "${company}". Reads still work.`
-                : `Refusing to write: company "${company}" is not configured on this server (configured: ${companies.join(", ")}).`,
+                : `Refusing to write: company "${company}" is not available on this server (available: ${describeCompanies()}).`,
         );
     }
 }

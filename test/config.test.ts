@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertWriteCompany, configure, connectionFor, isWriteCompany, loadSettings, resolveCompany } from "../src/config.js";
+import { assertWriteCompany, availableCompanies, configure, connectionFor, isWriteCompany, loadSettings, resolveCompany } from "../src/config.js";
 
 const base = { EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p" };
 
@@ -16,17 +16,17 @@ test("every listed company may be read and written", () => {
     configure({ ...base, EBMS_COMPANIES: "sbx,live" });
     assert.equal(isWriteCompany("live"), true);
     assert.equal(isWriteCompany("sbx"), true);
-    assert.throws(() => assertWriteCompany("prod"), /not configured/);
+    assert.throws(() => assertWriteCompany("prod"), /not available/);
 });
 
 test("EBMS_SANDBOX restricts writes to one company while testing, and makes it readable", () => {
     configure({ ...base, EBMS_COMPANIES: "live", EBMS_SANDBOX: "sbx" });
-    assert.deepEqual(loadSettings().companies, ["LIVE", "SBX"]);
+    assert.deepEqual(availableCompanies().map((c) => c.id), ["LIVE", "SBX"]);
     assert.equal(isWriteCompany("sbx"), true);
     assert.equal(isWriteCompany("live"), false);
     assert.throws(() => assertWriteCompany("live"), /restricts writes to SBX/);
     configure({ ...base, EBMS_SANDBOX: "test" });
-    assert.deepEqual(loadSettings().companies, ["TEST"]);
+    assert.deepEqual(availableCompanies().map((c) => c.id), ["TEST"]);
     assert.equal(resolveCompany(undefined), "TEST");
 });
 
@@ -34,7 +34,7 @@ test("several companies: the company must be named, and only listed ones resolve
     configure({ ...base, EBMS_COMPANIES: "sbx, LIVE" });
     assert.throws(() => resolveCompany(undefined), /Name the company/);
     assert.equal(resolveCompany("live"), "LIVE");
-    assert.throws(() => resolveCompany("prod"), /not configured/);
+    assert.throws(() => resolveCompany("prod"), /not available/);
 });
 
 test("the sandbox is one company, not a list", () => {
@@ -44,7 +44,7 @@ test("the sandbox is one company, not a list", () => {
 
 test("the legacy single-company variable still works", () => {
     configure({ ...base, EBMS_COMPANY_ID: "sbx" });
-    assert.deepEqual(loadSettings().companies, ["SBX"]);
+    assert.deepEqual(availableCompanies().map((c) => c.id), ["SBX"]);
 });
 
 test("per-company credentials override the defaults and never leak into the URL", () => {

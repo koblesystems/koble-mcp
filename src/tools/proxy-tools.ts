@@ -12,14 +12,19 @@
  *   - paths that are not a plain entity path
  */
 import { z } from "zod/v4";
-import { assertWriteCompany, loadSettings, resolveCompany } from "../config.js";
+import { assertWriteCompany, availableCompanies, isWriteCompany, loadSettings, resolveCompany, setDiscoveredCompanies, setDiscoveryError } from "../config.js";
 import { odataString, request } from "../ebms/client.js";
+import { discoverCompanies } from "../ebms/companies.js";
 import { DOCUMENT_ENTITIES, entityOf, externalIdOf, findProcessKeys, isDeniedCommand, validateName, validatePath } from "../guards.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
 const companyField = (required: boolean) => {
-    const base = z.string().describe(required ? "Company ID. Required on every write." : "Company ID. May be omitted only when the server is configured for one company.");
+    const base = z.string().describe(
+        required
+            ? "Company, by ID or name as ebms_companies lists them. Required on every write."
+            : "Company, by ID or name as ebms_companies lists them. May be omitted only when one company is available.",
+    );
     return required ? base.min(1) : base.optional();
 };
 
@@ -37,6 +42,35 @@ export function buildQuery(options: { select?: string | undefined; filter?: stri
 }
 
 export function registerProxyTools(register: ToolRegistrar): void {
+    register(
+        "ebms_companies",
+        {
+            description:
+                "List the companies (datasets) this server can reach on its EBMS serial number, with name, ID, version and whether writes are allowed. Needs no credentials. Call it when the user names a company you haven't seen, or before the first write of a session, so the company is confirmed by name. Nothing marks a company as live or a test copy; ask if unsure.",
+            inputSchema: z.object({}),
+        },
+        async () => {
+            try {
+                try {
+                    setDiscoveredCompanies(await discoverCompanies());
+                } catch (error) {
+                    setDiscoveryError(error instanceof Error ? error.message : String(error));
+                }
+                const { sandbox, configured } = loadSettings();
+                const companies = availableCompanies().map((info) => ({ ...info, writable: isWriteCompany(info.id) }));
+                return jsonResult({
+                    companies,
+                    note: [
+                        configured ? `EBMS_COMPANIES limits this server to: ${configured.join(", ")}.` : "Every company the serial reaches is available.",
+                        sandbox ? `Testing mode: writes go only to ${sandbox}.` : "Every available company may be written to; name it on every write.",
+                    ].join(" "),
+                });
+            } catch (error) {
+                return errorResult(error);
+            }
+        },
+    );
+
     register(
         "ebms_get",
         {

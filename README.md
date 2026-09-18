@@ -11,6 +11,7 @@ It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for
 
 | Tool | What it does | Refuses |
 |---|---|---|
+| `ebms_companies` | Lists the companies the serial reaches — ID, name, version, and whether writes are allowed. Needs no credentials. | — |
 | `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | a path that is not an entity path |
 | `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV` whose `EXTERNALID` already exists; malformed paths |
 | `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); denied commands (`Send`, `RecordPayment`, `PrintReport`, `Sign` by default); `PROCESS` in the body |
@@ -32,7 +33,7 @@ One server can serve several companies on the same serial number.
 EBMS_SERIAL_NUMBER=...
 EBMS_USERNAME=...
 EBMS_PASSWORD=...
-EBMS_COMPANIES=sbx,live          # every listed company may be read and written
+EBMS_COMPANIES=sbx,live          # optional: narrow to these IDs; unset = every company the serial reaches
 EBMS_SANDBOX=sbx                 # optional, while testing: writes go only here
 EBMS_COF_USERNAME=...            # optional per-company credentials
 EBMS_COF_PASSWORD=...
@@ -40,7 +41,12 @@ EBMS_DENIED_COMMANDS=Send,RecordPayment,PrintReport,Sign
 EBMS_LOG_FILE=./logs/requests.jsonl   # optional; method, path, company, status, ms — never bodies
 ```
 
-Listing a company authorises both reading and writing it. `EBMS_SANDBOX` is for testing:
+Users rarely know a company's internal ID, so the server discovers the companies itself: at
+startup it asks the serial's unauthenticated company-list endpoint, and `ebms_companies`
+shows the result with names. Every `company` argument accepts the ID or the name
+("Sample Coffee Co"). `EBMS_COMPANIES` is only needed to narrow that list.
+
+Every available company may be read and written. `EBMS_SANDBOX` is for testing:
 when set, writes go only to that one company, which is readable by implication and need not
 be repeated in the list. With one company configured, `company` may be omitted on reads; on
 writes and commands it is always required, and with several companies it is required

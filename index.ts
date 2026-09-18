@@ -8,17 +8,19 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import type { z } from "zod/v4";
-import { loadSettings } from "./src/config.js";
+import { describeCompanies, loadSettings, setDiscoveredCompanies, setDiscoveryError } from "./src/config.js";
+import { discoverCompanies } from "./src/ebms/companies.js";
 import { registerProxyTools } from "./src/tools/proxy-tools.js";
 import type { McpToolResult, ToolDefinition } from "./src/tools/types.js";
 
 function describeSetup(): string {
     try {
-        const { companies, sandbox, deniedCommands } = loadSettings();
+        const { sandbox, deniedCommands } = loadSettings();
+        const companies = describeCompanies();
         return [
-            `Companies: ${companies.join(", ")}.`,
-            sandbox ? `Testing mode: writes go only to ${sandbox}.` : "Every listed company may be read and written; name the company on every write.",
-            companies.length > 1 ? "Name the company on every call." : "",
+            companies ? `Companies: ${companies}.` : "No companies known yet; call ebms_companies.",
+            sandbox ? `Testing mode: writes go only to ${sandbox}.` : "Every available company may be read and written; name the company (ID or name) on every write.",
+            companies.includes(",") ? "Name the company on every call." : "",
             `Denied commands: ${deniedCommands.join(", ")}.`,
         ]
             .filter(Boolean)
@@ -26,6 +28,13 @@ function describeSetup(): string {
     } catch (error) {
         return `Not configured: ${error instanceof Error ? error.message : String(error)}`;
     }
+}
+
+try {
+    setDiscoveredCompanies(await discoverCompanies());
+} catch (error) {
+    setDiscoveryError(error instanceof Error ? error.message : String(error));
+    console.error(`koble-mcp: could not list companies for this serial (${error instanceof Error ? error.message : String(error)}); using EBMS_COMPANIES if set.`);
 }
 
 const server = new McpServer(
