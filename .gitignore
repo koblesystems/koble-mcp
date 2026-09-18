@@ -1,0 +1,13 @@
+node_modules/
+.env
+
+# compiled output (in-place build)
+/index.js
+/index.js.map
+src/**/*.js
+src/**/*.js.map
+test/**/*.js
+test/**/*.js.map
+
+# request log, if EBMS_LOG_FILE points here
+/logs/

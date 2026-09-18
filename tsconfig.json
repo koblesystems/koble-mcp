@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "target": "esnext",
+    "types": ["node"],
+    "rootDir": ".",
+    "outDir": ".",
+    "sourceMap": true,
+    "declaration": false,
+    "declarationMap": false,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "strict": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "noUncheckedSideEffectImports": true,
+    "moduleDetection": "force",
+    "skipLibCheck": true
+  },
+  "include": ["index.ts", "src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules"]
+}

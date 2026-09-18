@@ -1,0 +1,23 @@
+{
+  "name": "koble-mcp",
+  "version": "0.1.0",
+  "description": "Thin MCP server over the EBMS (Koble) OData API: it owns authentication, the company allowlist and a few hard guards, and nothing else. Procedure and judgement live in skills.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.js",
+    "check": "npm run build && npm test",
+    "start": "node index.js"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0-beta.4",
+    "zod": "^4.4.3"
+  }
+}
