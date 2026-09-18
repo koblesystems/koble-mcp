@@ -1,7 +1,7 @@
 /**
  * koble-mcp — a thin MCP server over the EBMS (Koble) OData API.
  *
- * It owns authentication, the company allowlist and a few hard guards. Everything else —
+ * It owns authentication, the list of companies it may use and a few hard guards. Everything else —
  * which entity, which fields, chunking, resuming, diffing, confirming — lives in skills.
  * Transport is stdio, so stdout belongs to JSON-RPC: log with console.error only.
  */
@@ -14,10 +14,10 @@ import type { McpToolResult, ToolDefinition } from "./src/tools/types.js";
 
 function describeSetup(): string {
     try {
-        const { companies, writeCompanies, deniedCommands } = loadSettings();
+        const { companies, sandbox, deniedCommands } = loadSettings();
         return [
-            `Companies readable: ${companies.join(", ")}.`,
-            writeCompanies.length > 0 ? `Writes allowed only in: ${writeCompanies.join(", ")}.` : "Writes are disabled for every company.",
+            `Companies: ${companies.join(", ")}.`,
+            sandbox ? `Testing mode: writes go only to ${sandbox}.` : "Every listed company may be read and written; name the company on every write.",
             companies.length > 1 ? "Name the company on every call." : "",
             `Denied commands: ${deniedCommands.join(", ")}.`,
         ]

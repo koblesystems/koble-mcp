@@ -4,7 +4,7 @@
  * Each one resolves the company, applies the guards, sends one request, and returns what
  * EBMS said. No procedure lives here: chunking, resuming, diffing, confirming and reading
  * back are the skills' job. What the server refuses on its own:
- *   - any write or command outside the write allowlist
+ *   - any write or command to a company that is not configured (or, in testing, not the sandbox)
  *   - any body carrying PROCESS, at any depth
  *   - a POST of a document whose EXTERNALID already exists (a duplicate order is the
  *     costly mistake, and this is the one check a model under time pressure skips)
@@ -19,7 +19,7 @@ import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
 const companyField = (required: boolean) => {
-    const base = z.string().describe(required ? "Company ID, e.g. sbx. Required on every write." : "Company ID. May be omitted only when the server is configured for one company.");
+    const base = z.string().describe(required ? "Company ID. Required on every write." : "Company ID. May be omitted only when the server is configured for one company.");
     return required ? base.min(1) : base.optional();
 };
 
@@ -80,7 +80,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
         "ebms_write",
         {
             description:
-                "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one. Refused outside the write allowlist, and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists. A 2xx is not proof: EBMS silently ignores unknown @ids and unwritable fields, so read the record back afterwards. If the result says uncertain, read back before resending — a resent create or add duplicates.",
+                "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one. Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists. A 2xx is not proof: EBMS silently ignores unknown @ids and unwritable fields, so read the record back afterwards. If the result says uncertain, read back before resending — a resent create or add duplicates.",
             inputSchema: z.object({
                 company: companyField(true),
                 method: z.enum(["POST", "PATCH", "DELETE"]),
@@ -128,7 +128,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
         "ebms_command",
         {
             description:
-                "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>. Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}. Pass the dialog's fields for one that has a dialog (ChangeCustomer). Refused outside the write allowlist and for denied commands (Send, RecordPayment by default). Commands return little; read the record back afterwards.",
+                "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>. Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}. Pass the dialog's fields for one that has a dialog (ChangeCustomer). Refused for a company that is not configured (or not the sandbox, while testing) and for denied commands (Send, RecordPayment by default). Commands return little; read the record back afterwards.",
             inputSchema: z.object({
                 company: companyField(true),
                 entity: z.string().min(1).describe("e.g. ARINV"),

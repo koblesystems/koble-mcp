@@ -14,21 +14,26 @@ const envSchema = z.object({
     EBMS_COMPANIES: z.string().optional(),
     /** The single-company form ebms-mcp used; still honoured. */
     EBMS_COMPANY_ID: z.string().optional(),
-    /** Comma-separated company IDs this server may write to. Default: sbx, the demo dataset. */
-    EBMS_WRITE_COMPANIES: z.string().optional(),
+    /**
+     * Optional, for testing: when set, writes go only to this one company. Readable by
+     * implication, so it need not be repeated in EBMS_COMPANIES. Leave it unset in real use,
+     * where every listed company may be written to.
+     */
+    EBMS_SANDBOX: z.string().optional(),
     /** Bound actions ebms_command refuses, comma-separated. */
     EBMS_DENIED_COMMANDS: z.string().optional(),
     /** JSON-lines request log. Method, path, company, status and duration only. */
     EBMS_LOG_FILE: z.string().optional(),
 });
 
-export const DEFAULT_WRITE_COMPANIES = ["sbx"];
 export const DEFAULT_DENIED_COMMANDS = ["Send", "RecordPayment", "PrintReport", "Sign"];
 
 export interface Settings {
     serial: string;
+    /** Every listed company may be read and written. */
     companies: string[];
-    writeCompanies: string[];
+    /** When set, the only company writes may go to. */
+    sandbox: string | null;
     deniedCommands: string[];
     logFile: string | undefined;
 }
@@ -68,13 +73,15 @@ export function loadSettings(): Settings {
         throw new Error(`koble-mcp: missing or invalid environment variables: ${missing}`);
     }
     const values = parsed.data;
-    const companies = splitList(values.EBMS_COMPANIES ?? values.EBMS_COMPANY_ID).map(normalizeCompany);
-    if (companies.length === 0) throw new Error("koble-mcp: EBMS_COMPANIES is empty; name at least one company ID.");
-    const writeCompanies = (values.EBMS_WRITE_COMPANIES === undefined ? DEFAULT_WRITE_COMPANIES : splitList(values.EBMS_WRITE_COMPANIES)).map(normalizeCompany);
+    const listed = splitList(values.EBMS_COMPANIES ?? values.EBMS_COMPANY_ID).map(normalizeCompany);
+    const sandbox = values.EBMS_SANDBOX?.trim() ? normalizeCompany(values.EBMS_SANDBOX) : null;
+    if (sandbox !== null && sandbox.includes(",")) throw new Error("koble-mcp: EBMS_SANDBOX names one company, the only one writes may go to while testing.");
+    const companies = sandbox !== null && !listed.includes(sandbox) ? [...listed, sandbox] : listed;
+    if (companies.length === 0) throw new Error("koble-mcp: no companies configured. Set EBMS_COMPANIES to the company IDs this server may use.");
     settings = {
         serial: values.EBMS_SERIAL_NUMBER,
         companies,
-        writeCompanies: writeCompanies.filter((company) => companies.includes(company)),
+        sandbox,
         deniedCommands: values.EBMS_DENIED_COMMANDS === undefined ? DEFAULT_DENIED_COMMANDS : splitList(values.EBMS_DENIED_COMMANDS),
         logFile: values.EBMS_LOG_FILE,
     };
@@ -101,16 +108,19 @@ export function resolveCompany(company: string | undefined): string {
 }
 
 export function isWriteCompany(company: string): boolean {
-    return loadSettings().writeCompanies.includes(normalizeCompany(company));
+    const { companies, sandbox } = loadSettings();
+    const wanted = normalizeCompany(company);
+    return sandbox === null ? companies.includes(wanted) : sandbox === wanted;
 }
 
 /** Every write path calls this before building a request. */
 export function assertWriteCompany(company: string): void {
     if (!isWriteCompany(company)) {
-        const { writeCompanies } = loadSettings();
+        const { companies, sandbox } = loadSettings();
         throw new Error(
-            `Refusing to write: company "${company}" is not in the write allowlist [${writeCompanies.join(", ")}]. ` +
-                "Reads still work. Add it to EBMS_WRITE_COMPANIES only if it is a sandbox.",
+            sandbox !== null
+                ? `Refusing to write: EBMS_SANDBOX restricts writes to ${sandbox}, and this call names "${company}". Reads still work.`
+                : `Refusing to write: company "${company}" is not configured on this server (configured: ${companies.join(", ")}).`,
         );
     }
 }

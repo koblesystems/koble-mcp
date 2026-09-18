@@ -37,17 +37,17 @@ globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 const fresh = (env: Record<string, string> = {}) => {
-    configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p", EBMS_COMPANIES: "sbx,live", ...env });
+    configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p", EBMS_COMPANIES: "sbx,live", EBMS_SANDBOX: "sbx", ...env });
     resetAuth();
     sent = [];
     script = [];
 };
 
-test("a write outside the allowlist is refused before any request is sent", async () => {
+test("in testing mode a write outside the sandbox is refused before any request is sent", async () => {
     fresh();
     const r = await call("ebms_write", { company: "live", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
     assert.equal(r.isError, true);
-    assert.match(String((r.error as { message: string }).message), /not in the write allowlist/);
+    assert.match(String((r.error as { message: string }).message), /restricts writes to SBX/);
     assert.equal(sent.length, 0);
 });
 
@@ -115,7 +115,7 @@ test("a command without a body sends no body at all, and denied commands never g
     assert.equal(sent.length, 1);
 });
 
-test("reads work on a non-write company, report truncation, and warn without a select", async () => {
+test("reads work on a company outside the sandbox, report truncation, and warn without a select", async () => {
     fresh();
     script.push(() => json(200, { "@odata.count": 120, value: [{ AUTOID: "1" }] }));
     const r = await call("ebms_get", { company: "live", path: "ARINV", filter: "STATUS eq 'U'", top: 1 });

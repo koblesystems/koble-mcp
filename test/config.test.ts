@@ -4,12 +4,30 @@ import { assertWriteCompany, configure, connectionFor, isWriteCompany, loadSetti
 
 const base = { EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p" };
 
-test("one company: it may be omitted, and sbx is the default write company", () => {
+test("one company: it may be omitted, and it may be written to", () => {
     configure({ ...base, EBMS_COMPANIES: "sbx" });
     assert.equal(resolveCompany(undefined), "SBX");
     assert.equal(resolveCompany("Sbx"), "SBX");
-    assert.deepEqual(loadSettings().writeCompanies, ["SBX"]);
+    assert.equal(loadSettings().sandbox, null);
     assert.doesNotThrow(() => assertWriteCompany("sbx"));
+});
+
+test("every listed company may be read and written", () => {
+    configure({ ...base, EBMS_COMPANIES: "sbx,live" });
+    assert.equal(isWriteCompany("live"), true);
+    assert.equal(isWriteCompany("sbx"), true);
+    assert.throws(() => assertWriteCompany("prod"), /not configured/);
+});
+
+test("EBMS_SANDBOX restricts writes to one company while testing, and makes it readable", () => {
+    configure({ ...base, EBMS_COMPANIES: "live", EBMS_SANDBOX: "sbx" });
+    assert.deepEqual(loadSettings().companies, ["LIVE", "SBX"]);
+    assert.equal(isWriteCompany("sbx"), true);
+    assert.equal(isWriteCompany("live"), false);
+    assert.throws(() => assertWriteCompany("live"), /restricts writes to SBX/);
+    configure({ ...base, EBMS_SANDBOX: "test" });
+    assert.deepEqual(loadSettings().companies, ["TEST"]);
+    assert.equal(resolveCompany(undefined), "TEST");
 });
 
 test("several companies: the company must be named, and only listed ones resolve", () => {
@@ -19,17 +37,9 @@ test("several companies: the company must be named, and only listed ones resolve
     assert.throws(() => resolveCompany("prod"), /not configured/);
 });
 
-test("writes are refused outside the allowlist, even for a readable company", () => {
-    configure({ ...base, EBMS_COMPANIES: "sbx,live" });
-    assert.equal(isWriteCompany("live"), false);
-    assert.throws(() => assertWriteCompany("live"), /not in the write allowlist/);
-    assert.equal(isWriteCompany("sbx"), true);
-});
-
-test("a write company that is not readable is dropped from the allowlist", () => {
-    configure({ ...base, EBMS_COMPANIES: "live", EBMS_WRITE_COMPANIES: "sbx" });
-    assert.deepEqual(loadSettings().writeCompanies, []);
-    assert.throws(() => assertWriteCompany("live"), /allowlist \[\]/);
+test("the sandbox is one company, not a list", () => {
+    configure({ ...base, EBMS_SANDBOX: "sbx,live" });
+    assert.throws(() => loadSettings(), /names one company/);
 });
 
 test("the legacy single-company variable still works", () => {
