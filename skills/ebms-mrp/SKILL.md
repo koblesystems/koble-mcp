@@ -142,7 +142,8 @@ Tell the planner what to do with it:
   the last day of the time frame. There is at most one order per item per day.
 - **Receipts with no expected date** are counted on the last day of the time frame.
 - **What is on order after the time frame** is not counted, but it is shown.
-- **Made or bought:** an item is manufactured if it has ever been the finished good of a batch.
+- **Made or bought:** an item is manufactured if it has ever been the finished good of a batch,
+  ordinary or serialized.
   Made items are exploded through their components, level by level. Kits and configure-to-order
   items that have never been on a batch are not planned as batches.
 - **Only stocked products and stocked lines are pooled.** Drop-ship, sync and associated lines are

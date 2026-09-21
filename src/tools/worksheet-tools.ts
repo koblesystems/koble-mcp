@@ -11,7 +11,7 @@ import { odataString } from "../ebms/client.js";
 import { draftBatches, type BatchComponent } from "../mrp/batches.js";
 import { draftPurchaseOrders, readSheet, type ApprovedLine, type SheetReading } from "../mrp/csv.js";
 import { loadWorksheet } from "../mrp/files.js";
-import { readAll, readByIds } from "../mrp/snapshot.js";
+import { BATCH_LINES, readAll, readByIds } from "../mrp/snapshot.js";
 import { baseUnitOf, fromBaseUnits, toBaseUnits, type UnitRow } from "../mrp/units.js";
 import type { McpToolResult, ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
@@ -177,7 +177,7 @@ export function registerWorksheetTools(register: ToolRegistrar): void {
                 const units = (await readByIds(company, "INVENUNT", "ID", [...items, ...bom.map((row) => text(row["COMP_ID"]))], "ID,UNIT,MULTIPLIER,MULTIPLY")) as unknown as UnitRow[];
                 // Oldest first, so the last one written for a product is where it was made most recently.
                 const lastWarehouse: Record<string, string> = {};
-                const madeBefore = await readByIds(company, "APINVDET", "INVEN", items, "INVEN,WAREHOUSE,INV_DATE", "DOC_TYPE eq 'M'");
+                const madeBefore = await readByIds(company, "APINVDET", "INVEN", items, "INVEN,WAREHOUSE,INV_DATE", BATCH_LINES);
                 for (const row of madeBefore.sort((a, b) => text(a["INV_DATE"]).localeCompare(text(b["INV_DATE"])))) {
                     if (text(row["WAREHOUSE"])) lastWarehouse[text(row["INVEN"])] = text(row["WAREHOUSE"]);
                 }

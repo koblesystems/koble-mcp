@@ -107,6 +107,9 @@ export interface Snapshot {
     timings: Record<string, number>;
 }
 
+/** Finished-good lines of a manufacturing batch: M, or B when the batch is serialized. */
+export const BATCH_LINES = "(DOC_TYPE eq 'M' or DOC_TYPE eq 'B')";
+
 /** PURC_METH: 0 Stocked, 1 Drop Ship, 2 Sync Quantities, 3 Replenishment, 4 Associated. Only stocked lines are pooled. */
 const isStockedLine = (row: Row): boolean => {
     const label = text(row["PURC_M_VIS"]).toLowerCase();
@@ -148,7 +151,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
         }),
     );
     const bomRows = await timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
-    const madeRows = await timed("made", () => readAll(company, "APINVDET", { $filter: "DOC_TYPE eq 'M'", $select: "INVEN" }));
+    const madeRows = await timed("made", () => readAll(company, "APINVDET", { $filter: BATCH_LINES, $select: "INVEN" }));
     const lineRows = await timed("sales", () =>
         readAll(company, "ARINVDET", { $filter: `${types} and STATUS eq 'SalesOrder'`, $select: "INVOICE,INVEN,QUAN,SHIP,SHIP_DATE,DOC_TYPE,PURC_M_VIS,PAR_TIME,TIMESTAMP" }),
     );
