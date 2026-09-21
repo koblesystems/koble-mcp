@@ -81,9 +81,19 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
 - **Quoted AUTOID first.** Unique and unambiguous.
 - The natural key, quoted. Invoice numbers are `EbmsLeftPad` and may be space-padded, which
   makes natural keys fragile.
-- Composite keys. `APINV` is keyed by vendor **and** invoice number. Both the OData form
-  `ID='AMERET',INVOICE='1234'` and EBMS's own pipe convention `'AMERET|1234'` appear in
-  the wild, while `ARINV` by contrast is keyed by the invoice number alone.
+- **`APINV` is keyed by `INVOICE` alone, like `ARINV`** — and its `INVOICE` is the whole
+  string EBMS assigned, `PO#110`, not the `PO_NO` `110`. Verified 2026-09-21 on SBX:
+
+  | Path form | Result |
+  |---|---|
+  | `APINV('PQ4RZT81HKVW2C00')` — quoted AUTOID | works |
+  | `APINV('PO#110')` — quoted INVOICE | works (the `#` is encoded for you) |
+  | `APINV('182')` — the PO_NO | **422 Key not found** |
+  | `APINV(ID='PARTSDIR',INVOICE='PO#110')` — composite | **404** |
+  | `APINV('PARTSDIR\|PO#110')` — EBMS's pipe convention | **422 Key not found** |
+
+  The composite and pipe forms appear in EBMS's own documentation and in other clients, but
+  this build takes neither. Find a PO by `PO_NO` with a filter, then address it by AUTOID.
 
 ## Values EBMS accepts but shouldn't
 

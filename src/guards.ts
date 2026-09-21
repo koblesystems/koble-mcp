@@ -138,4 +138,4 @@ export function externalIdOf(body: unknown): string | undefined {
 }
 
 /** Entities that carry an EXTERNALID and where a duplicate create is the costly mistake. */
-export const DOCUMENT_ENTITIES = ["ARINV", "APINV", "INMFG"];
+export const DOCUMENT_ENTITIES = ["ARINV", "APINV", "INMFG", "TASK"];

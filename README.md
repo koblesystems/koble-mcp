@@ -13,7 +13,7 @@ It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for
 |---|---|---|
 | `ebms_companies` | Lists the companies the serial reaches — ID, name, version, and whether writes are allowed. Needs no credentials. | — |
 | `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | anything but `ENTITY` or `ENTITY('key')`; a key containing `/ \ ? %` or `..` |
-| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV` whose `EXTERNALID` already exists; the same path rules |
+| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV`/`INMFG`/`TASK` whose `EXTERNALID` already exists; the same path rules |
 | `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); any action that is not on the allow-list (`MarkAllAsShipped`, `RecalculateAllPrices`, `CalculateFreight`, `ChangeCustomer` by default); `PROCESS` in the body |
 
 Every result names the company it ran against. Every failure carries `uncertain` and says
@@ -117,7 +117,7 @@ component is sent from `INVENDET`; and a consumed line's `M_QUAN_VIS` is the amo
 finished good, which EBMS multiplies by the batch size. Drafts mark nothing as made or consumed,
 state each line's unit, take the warehouse the planner gives or the one the product was last made
 in, and carry an `EXTERNALID` of the run plus the worksheet line so a batch cannot be created
-twice (`INMFG` is covered by the duplicate guard alongside `ARINV` and `APINV`).
+twice (`INMFG` is covered by the duplicate guard alongside `ARINV`, `APINV` and `TASK`).
 
 **The worksheet.** `mrp_plan` writes a CSV (to `KOBLE_OUTPUT_DIR`, or `Documents/Koble MRP`) with
 every planned item: its status, the recommendation (`EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`, `OK`),
@@ -208,9 +208,19 @@ you will test against. Nothing here needs a Mac.
    ```
    Restart Claude Desktop. Ask Claude "which EBMS companies can you see?" — it should list them by
    name. You do not need to know a company ID; the server discovers them from the serial number.
-3. **Install the skills** in `skills/`: `ebms-mrp`, `ebms-mrp-purchase-orders` and `ebms-mrp-batches`. In Claude
-   Desktop, zip each folder and add it under Settings → Capabilities → Skills. In Claude Code, copy
-   the folders into `~/.claude/skills/`.
+3. **Install the skills** in `skills/`. In Claude Desktop, zip each folder and add it under
+   Settings → Capabilities → Skills. In Claude Code, copy the folders into `~/.claude/skills/`.
+
+   | Skill | For |
+   |---|---|
+   | `ebms-api` | The foundation: how to call the tools, OData syntax, and this install's quirks. Install it with any of the others. |
+   | `ebms-sales-orders` | Building, changing and shipping sales orders |
+   | `ebms-purchase-orders` | Raising and changing purchase orders by hand, and receiving |
+   | `ebms-products` | Creating and editing products, units, vendor records |
+   | `ebms-tasks` | Tasks and work orders: raising, assigning, phases, time |
+   | `ebms-mrp` | Planning what to buy and make (read-only) |
+   | `ebms-mrp-purchase-orders` | Creating purchase orders from an approved MRP worksheet |
+   | `ebms-mrp-batches` | Creating manufacturing batches from an approved MRP worksheet |
 4. **Try it.** "Run MRP for the next 30 days." Claude should ask you to confirm the time frame and
    the company, take half a minute or more, and give you the path of a worksheet CSV in
    `Documents/Koble MRP`.

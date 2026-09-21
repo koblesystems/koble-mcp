@@ -72,6 +72,20 @@ test("a POST whose EXTERNALID already exists is refused, and the existing record
     assert.match(decodeURIComponent((sent[0]?.url ?? "").replace(/\+/g, " ")), /\$filter=EXTERNALID eq 'mcp-1'/);
 });
 
+test("the duplicate check covers every document entity, and nothing else", async () => {
+    for (const entity of ["ARINV", "APINV", "INMFG", "TASK"]) {
+        fresh();
+        script.push(() => json(200, { value: [{ AUTOID: "X1", EXTERNALID: "mcp-1" }] }));
+        const r = await call("ebms_write", { company: "sbx", method: "POST", path: entity, body: { EXTERNALID: "mcp-1" } });
+        assert.equal(r.refused, true, entity);
+        assert.equal(sent.length, 1, `${entity}: checked, nothing sent`);
+    }
+    fresh();
+    script.push(() => json(201, { AUTOID: "V1" }));
+    await call("ebms_write", { company: "sbx", method: "POST", path: "APVENDOR", body: { ID: "V", EXTERNALID: "mcp-1" }, verify: false });
+    assert.deepEqual(sent.map((s) => s.method), ["POST"], "an entity off the list is not pre-checked");
+});
+
 test("a POST with a new EXTERNALID checks first, then creates", async () => {
     fresh();
     script.push(() => json(200, { value: [] }), () => json(201, { AUTOID: "O2", INVOICE: "1194" }));
