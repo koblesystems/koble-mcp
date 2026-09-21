@@ -4,7 +4,7 @@
  * (INVENDOR), and those items' units (INVENUNT) so stock quantities become order quantities.
  */
 import { odataString } from "../ebms/client.js";
-import { TYPE_ORDER, type RunManifest, type SheetRow } from "./csv.js";
+import { TYPE_ORDER, checkCode, type RunManifest, type SheetRow } from "./csv.js";
 import type { Plan } from "./engine.js";
 import { readAll, type Snapshot } from "./snapshot.js";
 import { baseUnitOf, fromBaseUnits, type UnitRow } from "./units.js";
@@ -41,6 +41,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
 
     const base = { Run: run, Company: company };
     const later = new Map(plan.beyondHorizon.filter((row) => row.supplies.length > 0).map((row) => [row.item, row.supplies.map((supply) => `${supply.ref}: ${supply.qty} on ${supply.date}`).join("; ")]));
+    const laterDemand = new Map(plan.beyondHorizon.filter((row) => row.demandQty > 0).map((row) => [row.item, `${row.demandQty} from ${row.firstDemandDate}`]));
     const itemPlan = new Map(plan.items.map((item) => [item.item, item]));
     const figures = (id: string): SheetRow => {
         const product = snapshot.products.get(id);
@@ -56,6 +57,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             "Reorder Increment": product?.increment || "",
             "EBMS Qty To Order": product?.ebmsQtyToOrder || "",
             "On Order After Time Frame": later.get(id) ?? "",
+            "Demand After Time Frame": laterDemand.get(id) ?? "",
             "Demand In Time Frame": round2(demand),
             "Supply In Time Frame": round2(supply),
             "Projected Balance": itemPlan.get(id)?.endingBalance ?? "",
@@ -87,7 +89,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             "Est Cost": vendor.cost === null ? "" : round2(vendor.cost * converted.qty),
             Approve: "",
             Because: because,
-            Notes: [converted.warning ? "Check the unit before ordering." : "", later.has(order.item) ? "Already on order just after the time frame — consider moving that order up instead of buying more." : ""].filter(Boolean).join(" "),
+            Notes: [converted.warning ? "Check the unit before ordering." : "", later.has(order.item) ? "Already on order after the time frame (see On Order After Time Frame) — consider moving that order up instead of buying more." : ""].filter(Boolean).join(" "),
         });
     }
     for (const exception of plan.exceptions) {
@@ -111,6 +113,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
     rows.forEach((row, index) => {
         const line = `L${String(index + 1).padStart(4, "0")}`;
         row.Line = line;
+        row.Check = checkCode(run, line, String(row.Item ?? ""));
         manifest.lines[line] = {
             type: String(row.Type ?? ""),
             item: String(row.Item ?? ""),

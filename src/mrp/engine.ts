@@ -215,7 +215,7 @@ interface Receipt extends Supply {
     effective: string;
 }
 
-function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: readonly Supply[], today: string, out: { orders: PlannedOrder[]; exceptions: PlanException[] }): ItemPlan & { planned: PlannedOrder[] } {
+function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: readonly Supply[], today: string, laterShortfall: number, out: { orders: PlannedOrder[]; exceptions: PlanException[] }): ItemPlan & { planned: PlannedOrder[] } {
     const safety = item.safetyStock ?? 0;
     const target = Math.max(safety, item.orderUpTo ?? 0);
     const action = item.make ? "make" : "buy";
@@ -243,7 +243,8 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
     };
 
     let balance = round(item.onHand);
-    const days = [...new Set([...demands.map((d) => d.due), ...receipts.map((r) => r.due)])].sort(cmp);
+    const startsShort = round(item.onHand) < 0;
+    const days = [...new Set([...(startsShort ? [today] : []), ...demands.map((d) => d.due), ...receipts.map((r) => r.due)])].sort(cmp);
     for (const date of days) {
         for (const receipt of receipts) {
             if (receipt.due !== date || receipt.used) continue;
@@ -251,7 +252,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             balance = round(balance + receipt.qty);
             timeline.push({ date, change: receipt.qty, balance, what: `${receipt.kind} ${receipt.ref}` });
         }
-        const pegs: Peg[] = [];
+        let pegs: Peg[] = startsShort && date === today ? [{ ref: "0 (on hand is negative)", kind: "minimum", qty: round(-item.onHand), date }] : [];
         for (const demand of demands) {
             if (demand.due !== date) continue;
             const before = balance;
@@ -268,7 +269,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             next.effective = date;
             balance = round(balance + next.qty);
             timeline.push({ date, change: next.qty, balance, what: `${next.kind} ${next.ref} (${next.dateAssumed ? "no expected date; needed now" : `expedited from ${next.due}`})` });
-            const why = pegs.map((peg) => `${peg.kind} ${peg.ref}`).join(", ");
+            const why = pegs.map((peg) => `${peg.kind} ${peg.ref}`).join(", ") || "a negative on-hand balance";
             out.exceptions.push({
                 type: "expedite", item: item.id, ref: next.ref, qty: next.qty, from: next.due, to: date, ...(next.dateAssumed ? { dateAssumed: true } : {}),
                 message: next.dateAssumed
@@ -277,6 +278,10 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             });
         }
         if (balance < 0) {
+            // What receipts pulled in has covered comes off the earliest reasons first, so the order's
+            // reasons add up to the shortage it actually covers.
+            let uncovered = round(-balance);
+            pegs = [...pegs].reverse().map((peg) => { const qty = round(Math.min(peg.qty, uncovered)); uncovered = round(uncovered - qty); return { ...peg, qty }; }).filter((peg) => peg.qty > 0).reverse();
             const qty = lotSize(round(target - balance), item);
             balance = round(balance + qty);
             timeline.push({ date, change: qty, balance, what: `planned ${action}` });
@@ -324,9 +329,11 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
                 for (const demand of demands) if (demand.due === date) running = round(running - demand.qty);
                 if (running < 0) return false;
             }
-            return running >= safety;
+            // Demand dated after the time frame, beyond what is already on order for then, will need this stock too.
+            return running >= safety + laterShortfall;
         };
         for (const receipt of [...receipts].reverse()) {
+            if (receipt.effective !== receipt.due) continue; // pulled in to cover a shortage: needed by definition
             if (!survives(new Set([...spare, receipt]))) continue;
             spare.add(receipt);
             out.exceptions.push({ type: "not-needed", item: item.id, ref: receipt.ref, qty: receipt.qty, from: receipt.due, message: `${receipt.kind} ${receipt.ref}: ${receipt.qty} of ${item.id} is not needed by anything in the plan; consider deferring or cancelling it.` });
@@ -388,7 +395,8 @@ export function runMrp(input: { today: string; through?: string | undefined; ite
     const order = [...byId.values()].sort((a, b) => (levels.get(a.id) ?? 0) - (levels.get(b.id) ?? 0) || cmp(a.id, b.id));
     const items: ItemPlan[] = [];
     for (const item of order) {
-        const plan = planItem(item, demands.get(item.id) ?? [], supplies.get(item.id) ?? [], input.today, out);
+        const afterFrame = beyond.get(item.id);
+        const plan = planItem(item, demands.get(item.id) ?? [], supplies.get(item.id) ?? [], input.today, afterFrame ? Math.max(0, round(afterFrame.demandQty - afterFrame.supplyQty)) : 0, out);
         items.push({ item: plan.item, level: levels.get(item.id) ?? 0, timeline: plan.timeline, endingBalance: plan.endingBalance });
         if (!item.make) continue;
         for (const planned of plan.planned) {

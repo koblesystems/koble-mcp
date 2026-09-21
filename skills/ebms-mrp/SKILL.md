@@ -50,7 +50,7 @@ Lead with the file, then what matters most. Keep it short; the detail is in the 
    just late or undated. Give the document, the item, and the dates.
 3. **Stock-outs to buy**, grouped by vendor, soonest first. Say how many lines per vendor and
    name the biggest few. Call out any with **no primary vendor** — those cannot be ordered until
-   someone picks one. If the result has `alreadyOnOrderJustAfterTimeFrame`, say which of these
+   someone picks one. If the result has `alreadyOnOrderAfterTimeFrame`, say which of these
    items already have an order arriving shortly after the time frame: moving that order up may be
    better than buying more, and the planner should decide.
 4. **What to make**, and for each what it pulls in below it. If a made item is *also purchased*,

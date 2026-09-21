@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * The planner's worksheet: one CSV with the status of every planned item and a recommendation
  * where there is one. It is written by code and read back by code, so the numbers a person
@@ -7,14 +9,24 @@
  * what EBMS and the plan said at the time of the run.
  */
 
+/**
+ * A short code that ties a row to its run: changing the Run, Line or product of a row, or
+ * typing a row in by hand, breaks it. It starts with a letter so a spreadsheet leaves it alone.
+ * It is a guard against accidents and against a worksheet being re-pointed at another run; it
+ * is not a secret.
+ */
+export function checkCode(run: string, line: string, item: string): string {
+    return "k" + createHash("sha256").update(`${run}|${line}|${item}`).digest("hex").slice(0, 8);
+}
+
 /** The byte-order mark Excel needs to read UTF-8. Written as a code so no invisible character sits in the source. */
 export const BOM = String.fromCharCode(0xfeff);
 
 export const COLUMNS = [
-    "Run", "Company", "Line", "Type", "Item", "Description", "Status", "Recommendation", "Needed By",
+    "Run", "Company", "Line", "Check", "Type", "Item", "Description", "Status", "Recommendation", "Needed By",
     "Recommended Qty (stock unit)", "Vendor", "Vendor Part No", "Purchase Unit", "Order Qty", "Unit Cost", "Est Cost", "Approve",
     "On Hand", "Available", "Minimum", "Maximum", "Reorder Increment", "EBMS Qty To Order", "Demand In Time Frame", "Supply In Time Frame", "Projected Balance",
-    "On Order After Time Frame", "Document", "Because", "Notes",
+    "On Order After Time Frame", "Demand After Time Frame", "Document", "Because", "Notes",
 ] as const;
 
 export type Column = (typeof COLUMNS)[number];
@@ -91,6 +103,11 @@ export interface ApprovedLine {
     unitCost: number | null;
     neededBy: string;
     partNo: string;
+    /**
+     * Set when the planner chose another vendor: the unit Order Qty was written in. The quantity
+     * is converted from it into the new vendor's unit, so 2 cases never becomes 2 each.
+     */
+    originalUnit?: string;
     /** What the planner changed from the run's recommendation. */
     changes: string[];
 }
@@ -135,7 +152,11 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
     const problems: string[] = [];
     const notes: string[] = [];
     const first = rows[0] ?? {};
-    const missing = ["Run", "Company", "Line", "Type", "Item", "Vendor", "Order Qty", "Approve"].filter((name) => rows.length > 0 && !(name in first));
+    const header = text.replace(new RegExp("^" + BOM), "").split(/\r?\n/, 1)[0] ?? "";
+    if (rows.length > 0 && Object.keys(first).length === 1 && header.includes(";")) {
+        return { run: "", company: "", fromManifest: false, approved: [], problems: ["The file is separated by semicolons, which is how some spreadsheet settings save CSV. Save it again as comma-separated CSV (in Excel: \"CSV UTF-8 (comma delimited)\")."], notes, counts: { rows: rows.length, buyRows: 0, approved: 0, notApproved: 0 } };
+    }
+    const missing = ["Run", "Company", "Line", "Check", "Type", "Item", "Vendor", "Order Qty", "Approve"].filter((name) => rows.length > 0 && !(name in first));
     if (rows.length === 0) problems.push("The file has no rows.");
     if (missing.length > 0) problems.push(`The file is missing column(s): ${missing.join(", ")}. It does not look like an MRP worksheet.`);
     const runs = new Set(rows.map((row) => row["Run"] ?? ""));
@@ -173,6 +194,13 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
         if (seenLines.has(line)) { problems.push(`Line ${at}: worksheet line ${line} appears twice; the second copy was ignored.`); return; }
         seenLines.add(line);
         if (manifest && !known) { problems.push(`Line ${at}: worksheet line ${line} is not part of run ${manifest.run}. Rows cannot be added by hand; run the plan again.`); return; }
+        // The row must carry the code it was written with. With the run record that ties it to the
+        // run's own product; without it, to the Run, Line and Item cells exactly as they were written.
+        const expected = known ? checkCode(manifest?.run ?? "", line, known.item) : checkCode(row["Run"] ?? "", line, (row["Item"] ?? "").trim());
+        if ((row["Check"] ?? "").trim() !== expected) {
+            problems.push(`Line ${at}: this row does not match the run it claims to belong to — its Run, Line, Check${known ? "" : " or Item"} cell was changed${known ? "" : " (or a spreadsheet reformatted the product ID)"}, or the row was typed in. It was not ordered. Use the worksheet as it was written, on the computer that ran the plan.`);
+            return;
+        }
 
         const changes: string[] = [];
         const item = known?.item ?? (row["Item"] ?? "").trim();
@@ -193,7 +221,7 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
         let neededBy = known?.neededBy ?? "";
         if (!known) {
             const parsed = parseDate(row["Needed By"] ?? "");
-            if (parsed === null && (row["Needed By"] ?? "").trim() !== "") notes.push(`Line ${at}: Needed By "${row["Needed By"]}" is not a date this can read, so the purchase-order line will have no expected date.`);
+            if (parsed === null && (row["Needed By"] ?? "").trim() !== "") notes.push(`Line ${at}: Needed By "${row["Needed By"]}" is not a date this can read, so it cannot be compared with the date EBMS expects the goods.`);
             neededBy = parsed ?? "";
         }
         const costCell = parseQuantity((row["Unit Cost"] ?? "").replace(/[$]/g, ""));
@@ -204,6 +232,7 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
             unitCost: known ? (vendorChanged ? null : known.unitCost) : costCell,
             neededBy,
             partNo: known ? (vendorChanged ? "" : known.partNo) : (row["Vendor Part No"] ?? "").trim(),
+            ...(known && vendorChanged ? { originalUnit: known.purchaseUnit } : {}),
         });
     });
     if (!manifest && rows.length > 0 && missing.length === 0) notes.push("The run's own record was not found, so every value was taken from the file. Check the products, units and costs on each draft: a spreadsheet may have changed them.");
@@ -223,6 +252,11 @@ export interface PurchaseOrderDraft {
     body: Record<string, unknown>;
 }
 
+/** EXTERNALID is 50 characters: the vendor is always kept whole, and the run is what gets shortened. */
+export function externalIdFor(run: string, vendor: string): string {
+    return `${run.slice(0, Math.max(1, 50 - vendor.length - 1))}-${vendor}`.slice(0, 50);
+}
+
 /** One purchase order per vendor. The EXTERNALID ties it to the run, so a worksheet handed in twice cannot order twice. */
 export function draftPurchaseOrders(reading: SheetReading): PurchaseOrderDraft[] {
     const byVendor = new Map<string, ApprovedLine[]>();
@@ -231,14 +265,15 @@ export function draftPurchaseOrders(reading: SheetReading): PurchaseOrderDraft[]
         const costed = lines.every((line) => line.unitCost !== null);
         return {
             vendor,
-            externalId: `${reading.run}-${vendor}`.slice(0, 50),
+            externalId: externalIdFor(reading.run, vendor),
             lines,
-            neededBy: Object.fromEntries(lines.filter((line) => line.neededBy).map((line) => [line.item, line.neededBy])),
+            // The EARLIEST need per product: a later line for the same product must not hide it.
+            neededBy: lines.filter((line) => line.neededBy).reduce<Record<string, string>>((all, line) => ({ ...all, [line.item]: all[line.item] !== undefined && (all[line.item] as string) < line.neededBy ? (all[line.item] as string) : line.neededBy }), {}),
             changes: lines.flatMap((line) => line.changes.map((change) => `${line.item}: ${change}`)),
             estCost: costed ? Math.round(lines.reduce((sum, line) => sum + line.qty * (line.unitCost ?? 0), 0) * 100) / 100 : null,
             body: {
                 ID: vendor,
-                EXTERNALID: `${reading.run}-${vendor}`.slice(0, 50),
+                EXTERNALID: externalIdFor(reading.run, vendor),
                 Details: lines.map((line) => ({
                     INVEN: line.item,
                     O_QUAN_VIS: line.qty,

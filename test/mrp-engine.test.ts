@@ -189,7 +189,9 @@ test("the plan never depends on the order rows arrive in", () => {
         assert.equal(perDay.size, a.plannedOrders.length, "one order per item per day");
         assert.ok(a.plannedOrders.every((o) => o.qty > 0), "no order of zero");
         assert.ok((a.items[0]?.endingBalance ?? -1) >= (item.safetyStock ?? 0), "ends at or above the minimum");
-        assert.ok((a.items[0]?.timeline ?? []).every((row, i, all) => i === all.length - 1 || all[i + 1]?.date !== row.date || true));
+        for (const order of a.plannedOrders) assert.ok(order.pegs.reduce((n, peg) => n + peg.qty, 0) <= order.qty + 1e-6, "the reasons never add up to more than the order");
+        const expedited = new Set(a.exceptions.filter((e) => e.type === "expedite").map((e) => e.ref));
+        assert.ok(a.exceptions.filter((e) => e.type === "not-needed").every((e) => !expedited.has(e.ref)), "nothing is both pulled in and called spare");
     }
 });
 
@@ -244,4 +246,26 @@ test("restoring the minimum with a lead time that has run out is flagged like an
     const plan = runMrp({ today, items: [{ id: "A", onHand: 2, safetyStock: 10, leadTimeDays: 21 }], demands: [], supplies: [] });
     assert.equal(plan.plannedOrders[0]?.pastDue, true);
     assert.equal(plan.exceptions.filter((e) => e.type === "past-due-release").length, 1);
+});
+
+test("a receipt is not called spare when demand just after the time frame needs it", () => {
+    const items: ItemParams[] = [{ id: "A", onHand: 0 }];
+    const supplies = [po("A", 50, "2026-10-15", "PO77")];
+    const needed = runMrp({ today, through: "2026-10-21", items, demands: [sales("A", 50, "2026-10-26", "SO-later")], supplies });
+    assert.deepEqual(needed.exceptions.filter((e) => e.type === "not-needed"), []);
+    const covered = runMrp({ today, through: "2026-10-21", items, demands: [sales("A", 50, "2026-10-26", "SO-later")], supplies: [...supplies, po("A", 50, "2026-10-25", "PO78")] });
+    assert.deepEqual(covered.exceptions.filter((e) => e.type === "not-needed").map((e) => e.ref), ["PO77"], "later demand already covered by a later receipt leaves this one spare");
+});
+
+test("a receipt pulled in to cover a shortage is never also called spare, and an order's reasons match what it covers", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0 }], demands: [sales("A", 3, "2026-09-25", "SO-1")], supplies: [po("A", 1, "2026-10-01", "PO-R1"), po("A", 100, "2026-10-10", "PO-R2")] });
+    assert.deepEqual(plan.exceptions.filter((e) => e.type === "expedite").map((e) => e.ref), ["PO-R1", "PO-R2"]);
+    assert.deepEqual(plan.exceptions.filter((e) => e.type === "not-needed"), []);
+    const partly = runMrp({ today, items: [{ id: "B", onHand: 0 }], demands: [sales("B", 10, "2026-09-25", "SO-9")], supplies: [po("B", 8, "2026-10-01", "PO-8")] });
+    assert.deepEqual(partly.plannedOrders.map((o) => [o.qty, o.pegs.map((p) => p.qty)]), [[2, [2]]]);
+});
+
+test("a negative on-hand balance is a shortage today, with a reason", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: -4 }], demands: [sales("A", 1, "2026-10-20", "SO-1")], supplies: [] });
+    assert.deepEqual(plan.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}: ${o.pegs.map((p) => p.ref).join()}`), ["4 by 2026-09-18: 0 (on hand is negative)", "1 by 2026-10-20: SO-1"]);
 });

@@ -1,9 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BOM, COLUMNS, draftPurchaseOrders, parseCsv, parseDate, parseQuantity, readSheet, toCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
+import { BOM, COLUMNS, checkCode, draftPurchaseOrders, externalIdFor, parseCsv, parseDate, parseQuantity, readSheet, toCsv as writeCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
 import { baseUnitOf, fromBaseUnits, type UnitRow } from "../src/mrp/units.js";
 
 const RUN = "mrp-sbx-20260921-140533";
+/** Rows are stamped the way the worksheet writer stamps them, unless a test sets Check itself. */
+const stamp = (row: SheetRow): SheetRow => (row.Check !== undefined ? row : { ...row, Check: checkCode(String(row.Run ?? ""), String(row.Line ?? ""), String(row.Item ?? "")) });
+const toCsv = (rows: readonly SheetRow[]): string => writeCsv(rows.map(stamp));
 const base: SheetRow = { Run: RUN, Company: "SBX" };
 const rows: SheetRow[] = [
     { ...base, Line: "L0001", Type: "BUY", Item: "SADDLE", Description: 'Bike Saddle, 10" "pro"', Vendor: "BIKEPARTS", "Purchase Unit": "Each", "Order Qty": 48, "Unit Cost": 22.5, "Needed By": "2026-09-25", Approve: "", Because: "sales 1069: 12; sales 1070: 30" },
@@ -47,8 +50,8 @@ test("only approved BUY rows become purchase-order lines, one order per vendor, 
 test("what a spreadsheet does to the file does not reach the purchase order when the run record is there", () => {
     // Excel: the date became 10/5/2026, the 14-digit product ID became 3.94E+13, a leading zero vanished.
     const excel = toCsv([
-        { ...base, Line: "L0002", Type: "BUY", Item: "1.23457E+13", Vendor: "PACKCO", "Purchase Unit": "", "Order Qty": 3, "Needed By": "10/5/2026", Approve: "Y" },
-        { ...base, Line: "L0004", Type: "BUY", Item: "12345", Vendor: "acme", "Purchase Unit": "Case", "Unit Cost": 999, "Order Qty": 5, "Needed By": "10/1/2026", Approve: "Y" },
+        { ...base, Line: "L0002", Check: checkCode(RUN, "L0002", "12345678901234"), Type: "BUY", Item: "1.23457E+13", Vendor: "PACKCO", "Purchase Unit": "", "Order Qty": 3, "Needed By": "10/5/2026", Approve: "Y" },
+        { ...base, Line: "L0004", Check: checkCode(RUN, "L0004", "0012345"), Type: "BUY", Item: "12345", Vendor: "acme", "Purchase Unit": "Case", "Unit Cost": 999, "Order Qty": 5, "Needed By": "10/1/2026", Approve: "Y" },
     ]);
     const reading = readSheet(excel, manifest);
     assert.deepEqual(reading.problems, []);
@@ -60,6 +63,7 @@ test("what a spreadsheet does to the file does not reach the purchase order when
     assert.equal(zero?.item, "0012345", "the leading zero comes from the run, not the cell");
     assert.equal(zero?.vendor, "ACME");
     assert.equal(zero?.unit, null, "a vendor the planner chose may sell in another unit: looked up again");
+    assert.equal(zero?.originalUnit, "EA", "and the quantity is remembered as being in the unit the row showed");
     assert.equal(zero?.unitCost, null, "an edited Unit Cost cell is not trusted");
     assert.deepEqual(zero?.changes, ["vendor set to ACME"]);
     assert.equal(reading.notes.filter((n) => /spreadsheets often reformat/.test(n)).length, 2);
@@ -74,7 +78,7 @@ test("without the run record the file is read strictly and says so", () => {
         { ...base, Line: "L0003", Type: "BUY", Item: "LID", Vendor: "PACKCO", "Order Qty": 1, "Needed By": "next week", Approve: "Y" },
     ]));
     assert.equal(reading.approved[0]?.neededBy, "2026-10-05");
-    assert.match(reading.problems.join("\n"), /spreadsheet turned the product ID into a number/);
+    assert.match(reading.problems.join("\n"), /spreadsheet turned the product ID into a number|does not match the run/);
     assert.match(reading.notes.join("\n"), /"next week" is not a date/);
     assert.match(reading.notes.join("\n"), /run's own record was not found/);
 });
@@ -112,9 +116,19 @@ test("the cells that tie the file to its run cannot be blanked or changed to ord
     const blank = readSheet(toCsv([{ ...rows[0], Run: "", Approve: "Y" }]));
     assert.equal(blank.approved.length, 0);
     assert.match(blank.problems.join("\n"), /blank Run or Company/);
-    const edited = readSheet(toCsv([{ ...rows[0], Run: "mrp-sbx-20260921-999999", Approve: "Y" }]), manifest);
+    // Run changed on every row, consistently, to something with no record: the row's code no longer fits.
+    const original = stamp({ ...rows[0], Approve: "Y" } as SheetRow);
+    const edited = readSheet(writeCsv([{ ...original, Run: "mrp-sbx-20260921-999999" }]));
     assert.equal(edited.approved.length, 0);
-    assert.match(edited.problems.join("\n"), /The Run cell must not be changed/);
+    assert.match(edited.problems.join("\n"), /does not match the run it claims to belong to/);
+    // Run changed to ANOTHER run that exists: its record maps L0001 to another product, and the code does not fit that either.
+    const other: RunManifest = { ...manifest, run: "mrp-sbx-20260920-090000", lines: { L0001: { ...(manifest.lines["L0001"] as RunManifest["lines"][string]), item: "BOLT" } } };
+    const repointed = readSheet(writeCsv([{ ...original, Run: other.run }]), other);
+    assert.equal(repointed.approved.length, 0);
+    assert.match(repointed.problems.join("\n"), /does not match the run it claims to belong to/);
+    // A row typed in by hand, with no run record to catch it, has no valid code.
+    const typed = readSheet(writeCsv([{ ...base, Line: "L0777", Check: "k00000000", Type: "BUY", Item: "SNEAKED", Vendor: "ACME", "Order Qty": 9, Approve: "Y" }]));
+    assert.equal(typed.approved.length, 0);
     const added = readSheet(toCsv([{ ...base, Line: "L9999", Type: "BUY", Item: "SNEAKED", Vendor: "ACME", "Order Qty": 9, Approve: "Y" }]), manifest);
     assert.match(added.problems.join("\n"), /L9999 is not part of run/);
 });
@@ -129,4 +143,13 @@ test("stock units convert into the vendor's unit, whole cases rounded up; the st
     assert.equal(baseUnitOf("BAG", units), "EA");
     assert.equal(baseUnitOf("JERSEY", units), "", "a blank-named stock unit, not the broken EA x0");
     assert.equal(baseUnitOf("NOUNITS", units), null);
+});
+
+test("a semicolon-separated save is named for what it is; the vendor survives a long run ID; the earliest need wins", () => {
+    const semi = toCsv([{ ...rows[0], Approve: "Y" }]).replace(/,/g, ";");
+    assert.match(readSheet(semi).problems.join("\n"), /separated by semicolons/);
+    assert.equal(externalIdFor("mrp-acompanywithaverylongidentifier-20260921-140533", "BIKEPARTS"), "mrp-acompanywithaverylongidentifier-2026-BIKEPARTS");
+    assert.equal(externalIdFor("mrp-acompanywithaverylongidentifier-20260921-140533", "BIKEPARTS").length, 50);
+    const two = readSheet(toCsv([{ ...rows[0], Approve: "Y", "Needed By": "2026-10-20" }, { ...rows[0], Line: "L0008", Approve: "Y", "Needed By": "2026-09-25" }]));
+    assert.deepEqual(draftPurchaseOrders(two)[0]?.neededBy, { SADDLE: "2026-09-25" });
 });

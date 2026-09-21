@@ -14,7 +14,7 @@ import { z } from "zod/v4";
 import { assertWriteCompany, resolveCompany } from "../config.js";
 import { odataString } from "../ebms/client.js";
 import { draftPurchaseOrders, parseCsv, readSheet, toCsv, type RunManifest } from "../mrp/csv.js";
-import { baseUnitOf, type UnitRow } from "../mrp/units.js";
+import { baseUnitOf, fromBaseUnits, toBaseUnits, type UnitRow } from "../mrp/units.js";
 import { readAll } from "../mrp/snapshot.js";
 import { buildWorksheet, runId } from "../mrp/worksheet.js";
 import { addDays, runMrp, type PlannedOrder } from "../mrp/engine.js";
@@ -113,7 +113,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     await writeFile(join(dir, "runs", `${run}.json`), JSON.stringify(sheet.manifest, null, 1), "utf8");
                     const byType: Record<string, number> = {};
                     for (const row of sheet.rows) byType[String(row.Type)] = (byType[String(row.Type)] ?? 0) + 1;
-                    worksheet = { path: file, run, rows: sheet.rows.length, byType, editableColumns: ["Order Qty", "Approve", "Notes"], warnings: sheet.warnings };
+                    worksheet = { path: file, run, rows: sheet.rows.length, byType, editableColumns: ["Order Qty", "Approve", "Vendor", "Notes"], warnings: sheet.warnings };
                 }
 
                 return jsonResult({
@@ -130,7 +130,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     ...(important.more ? { exceptionsNotShown: important.more } : {}),
                     ...(late.length > 0 ? { pastDueDemand: `${late.length} open demand lines were already due before today (oldest ${oldest}); they are planned as due now.` } : {}),
                     ...((byType["assumed-date"] ?? 0) > 0 ? { assumedDates: `${byType["assumed-date"]} incoming receipts have no expected date in EBMS. They are counted on the last day of the time frame, so they cannot hide a shortage: where one is needed sooner, the plan asks you to confirm it by that date.` } : {}),
-                    ...(alreadyOnOrder.shown.length > 0 ? { alreadyOnOrderJustAfterTimeFrame: alreadyOnOrder.shown, alreadyOnOrderNote: "These items are recommended to BUY but already have receipts dated after the time frame. Tell the user: moving that order up may be better than buying more." } : {}),
+                    ...(alreadyOnOrder.shown.length > 0 ? { alreadyOnOrderAfterTimeFrame: alreadyOnOrder.shown, alreadyOnOrderNote: "These items are recommended to BUY but already have receipts dated after the time frame (dates shown; some may be far off). Tell the user: moving that order up may be better than buying more." } : {}),
                     demandAfterTimeFrame: beyond.shown,
                     leftOut: snapshot.skipped,
                     warnings: snapshot.warnings,
@@ -213,17 +213,32 @@ export function registerMrpTools(register: ToolRegistrar): void {
                         vendorRows.push(...(await readAll(company, "INVENDOR", { $filter: filter, $select: "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO" })));
                         unitRows.push(...((await readAll(company, "INVENUNT", { $filter: filter, $select: "ID,UNIT,MULTIPLIER,MULTIPLY" })) as unknown as UnitRow[]));
                     }
+                    const dropped = new Set<typeof open[number]>();
                     for (const line of open) {
                         const theirs = vendorRows.find((row) => String(row["ID"] ?? "").trim() === line.item && String(row["VENDOR_ID"] ?? "").trim().toUpperCase() === line.vendor);
+                        const newUnit = theirs ? String(theirs["UNIT_MEAS"] ?? "").trim() : baseUnitOf(line.item, unitRows);
+                        if (line.originalUnit !== undefined) {
+                            // The planner chose another vendor. Order Qty was written in the ORIGINAL vendor's unit,
+                            // so it goes through stock units into the new vendor's unit: 2 cases of 24 is 48 each.
+                            const stock = toBaseUnits(line.item, line.qty, line.originalUnit, unitRows);
+                            const converted = fromBaseUnits(line.item, stock.qty, newUnit ?? "", unitRows);
+                            if (stock.warning || converted.warning || newUnit === null) {
+                                problems.push(`Line ${line.row}: ${line.item} was moved to vendor ${line.vendor}, but its quantity (${line.qty} ${line.originalUnit || "stock units"}) cannot be converted with confidence${newUnit === null ? " because the product has no units set up" : ""}: ${[stock.warning, converted.warning].filter(Boolean).join(" ") || "no stock unit found."} It was not ordered; order it in EBMS.`);
+                                dropped.add(line);
+                                continue;
+                            }
+                            if (converted.qty !== line.qty || (newUnit ?? "") !== line.originalUnit) line.changes.push(`${line.qty} ${line.originalUnit || "(stock unit)"} = ${stock.qty} in stock units, ordered from ${line.vendor} as ${converted.qty} ${newUnit || "(stock unit)"}`);
+                            line.qty = converted.qty;
+                        }
+                        line.unit = newUnit;
                         if (theirs) {
-                            line.unit = String(theirs["UNIT_MEAS"] ?? "").trim();
                             if (line.unitCost === null && typeof theirs["COST"] === "number" && theirs["COST"] > 0) line.unitCost = theirs["COST"];
                             line.partNo = line.partNo || String(theirs["PART_NO"] ?? "").trim();
                         } else {
-                            line.unit = baseUnitOf(line.item, unitRows);
-                            line.changes.push(`${line.vendor} has no vendor record for this product, so it is ordered in the stock unit${line.unit ? ` (${line.unit})` : ""} with no cost — check the quantity means what you intend`);
+                            line.changes.push(`${line.vendor} has no vendor record for this product, so it is ordered in the stock unit${line.unit ? ` (${line.unit})` : ""} with no cost`);
                         }
                     }
+                    for (const line of dropped) usable.splice(usable.indexOf(line), 1);
                 }
                 const drafts = draftPurchaseOrders({ ...reading, approved: usable });
                 const existing = new Map<string, Record<string, unknown>>();
