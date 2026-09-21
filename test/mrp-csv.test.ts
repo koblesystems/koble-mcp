@@ -87,7 +87,8 @@ test("rows that were approved but cannot be ordered are named, not dropped", () 
     const reading = readSheet(toCsv([
         { ...base, Line: "L1", Type: "BUY", Item: "A", Vendor: "(no primary vendor)", "Order Qty": 5, Approve: "Y" },
         { ...base, Line: "L2", Type: "BUY", Item: "B", Vendor: "ACME", "Order Qty": 0, Approve: "Y" },
-        { ...base, Line: "L3", Type: "MAKE", Item: "C", Approve: "Y" },
+        { ...base, Line: "L3", Type: "NOT NEEDED", Item: "C", Approve: "Y" },
+        { ...base, Line: "L6", Type: "MAKE", Item: "F", "Order Qty": 4, Approve: "Y" },
         { ...base, Line: "L4", Type: "BUY", Item: "D", Vendor: "ACME", "Order Qty": 2, Approve: "Yes please" },
         { ...base, Line: "L5", Type: "BUY", Item: "E", Vendor: "ACME", "Order Qty": 2, Approve: "Y" },
         { ...base, Line: "L5", Type: "BUY", Item: "E", Vendor: "ACME", "Order Qty": 2, Approve: "Y" },
@@ -96,7 +97,9 @@ test("rows that were approved but cannot be ordered are named, not dropped", () 
     const all = reading.problems.join("\n");
     assert.match(all, /A is approved but has no vendor/);
     assert.match(all, /B is approved but Order Qty "0"/);
-    assert.match(all, /C is marked approved but is a MAKE row/);
+    assert.match(all, /C is marked approved but is a NOT NEEDED row/);
+    assert.doesNotMatch(all, /\bF is marked approved/, "an approved MAKE row is the batch tool's job, not a mistake");
+    assert.deepEqual(readSheet(toCsv([{ ...base, Line: "L6", Type: "MAKE", Item: "F", "Order Qty": 4, Approve: "Y" }]), null, "MAKE").approved.map((l) => `${l.item} ${l.qty}`), ["F 4"]);
     assert.match(all, /Approve says "Yes please"/);
     assert.match(all, /worksheet line L5 appears twice/);
     assert.match(readSheet("Name,Qty\r\nx,1\r\n").problems.join("\n"), /does not look like an MRP worksheet/);

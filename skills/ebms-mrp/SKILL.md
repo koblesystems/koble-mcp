@@ -1,6 +1,6 @@
 ---
 name: ebms-mrp
-description: Run material requirements planning (MRP) for an EBMS / Koble company and give the planner a worksheet — what to buy, what to make, which incoming orders to expedite or cancel, and why — for a time frame they choose. Use whenever someone asks what they need to order or make, what they are short of, whether they can fill open orders, what to reorder, to "run MRP", to plan purchasing or production, to check coverage for the next weeks, or whether they can build a quantity of a finished good. Needs the koble-mcp server (tools mrp_plan and mrp_item_view). To turn the approved worksheet into purchase orders, use the ebms-mrp-purchase-orders skill afterwards.
+description: Run material requirements planning (MRP) for an EBMS / Koble company and give the planner a worksheet — what to buy, what to make, which incoming orders to expedite or cancel, and why — for a time frame they choose. Use whenever someone asks what they need to order or make, what they are short of, whether they can fill open orders, what to reorder, to "run MRP", to plan purchasing or production, to check coverage for the next weeks, or whether they can build a quantity of a finished good. Needs the koble-mcp server (tools mrp_plan and mrp_item_view). To act on the approved worksheet afterwards, use the ebms-mrp-purchase-orders skill for BUY rows and the ebms-mrp-batches skill for MAKE rows.
 ---
 
 # EBMS material requirements planning
@@ -102,7 +102,7 @@ Tell the planner what to do with it:
 
 - Open it in a spreadsheet. Rows are in reading order: `EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`,
   `OK`.
-- On the `BUY` rows they want ordered, put **Y** in **Approve**. They may change **Order Qty**
+- On the `BUY` rows they want ordered (and the `MAKE` rows they want manufactured), put **Y** in **Approve**. They may change **Order Qty**
   (it is in the purchase unit shown beside it; plain numbers like `12` or `1.5`) and fill in or
   change **Vendor**. **Notes** is theirs. Leave every other column alone — especially **Run** and
   **Line** and **Check**, which tie each row to this run. Rows cannot be added by hand, and a row
@@ -116,7 +116,7 @@ Tell the planner what to do with it:
   `ebms-mrp-purchase-orders` skill turns the approved rows into purchase orders, one per vendor,
   and asks before creating each.
 
-`MAKE` rows are not turned into batches by any tool yet; the planner creates those in EBMS.
+`MAKE` rows work the same way: a **Y** in **Approve** (and an adjusted **Order Qty** if they wish), and the `ebms-mrp-batches` skill turns them into pending manufacturing batches, one per row, asking before each. A `MAKE` row whose Notes say the product is not classified Track Count cannot be created through EBMS's API; that one is made in EBMS.
 
 ## How the plan works, for when you are asked
 
@@ -137,5 +137,5 @@ Tell the planner what to do with it:
   items that have never been on a batch are not planned as batches.
 - **Only stocked products and stocked lines are pooled.** Drop-ship, sync and associated lines are
   supplied by their own purchase orders.
-- **Not covered yet:** planning per warehouse, warehouse transfers, vendor lead times from EBMS,
-  and creating manufacturing batches.
+- **Not covered yet:** planning per warehouse, warehouse transfers, and vendor lead times from
+  EBMS.

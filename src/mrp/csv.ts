@@ -146,8 +146,12 @@ export function parseDate(text: string): string | null {
     return Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || Number(m) > 12 || Number(d) > 31 ? null : iso;
 }
 
-/** Picks out the approved BUY rows and says what is wrong with any that cannot be ordered. */
-export function readSheet(text: string, manifest: RunManifest | null = null): SheetReading {
+/**
+ * Picks out the approved rows of one kind — BUY rows for purchase orders, MAKE rows for
+ * manufacturing batches — and says what is wrong with any that cannot be acted on. A planner may
+ * approve both kinds on one worksheet; each tool takes its own and leaves the other alone.
+ */
+export function readSheet(text: string, manifest: RunManifest | null = null, want: "BUY" | "MAKE" = "BUY"): SheetReading {
     const rows = parseCsv(text);
     const problems: string[] = [];
     const notes: string[] = [];
@@ -181,10 +185,12 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
         const mark = (row["Approve"] ?? "").trim();
         const line = (row["Line"] ?? "").trim();
         const known = manifest?.lines[line];
-        const isBuy = (known?.type ?? type) === "BUY";
-        if (!YES.test(mark) && !NO.test(mark)) { problems.push(`Line ${at}: Approve says "${mark}". Use Y to order the row or leave it blank.`); return; }
+        const rowType = known?.type ?? type;
+        const isBuy = rowType === want;
+        if (!YES.test(mark) && !NO.test(mark)) { problems.push(`Line ${at}: Approve says "${mark}". Use Y to approve the row or leave it blank.`); return; }
         if (!isBuy) {
-            if (YES.test(mark)) problems.push(`Line ${at}: ${row["Item"]} is marked approved but is a ${known?.type ?? row["Type"]} row; only BUY rows become purchase orders.`);
+            // The other actionable kind is somebody else's job, not a mistake.
+            if (YES.test(mark) && rowType !== "BUY" && rowType !== "MAKE") problems.push(`Line ${at}: ${row["Item"]} is marked approved but is a ${rowType} row; only BUY rows become purchase orders and MAKE rows become batches.`);
             return;
         }
         buyRows += 1;
@@ -213,9 +219,9 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
         if (known && known.orderQty !== null && Math.abs(known.orderQty - qty) > 1e-9) changes.push(`quantity ${known.orderQty} → ${qty}`);
 
         const typed = (row["Vendor"] ?? "").trim().toUpperCase();
-        const vendor = typed && !typed.startsWith("(") ? typed : (known?.vendor ?? "").toUpperCase();
-        if (!vendor || vendor.startsWith("(")) { problems.push(`Line ${at}: ${item} is approved but has no vendor. Put a vendor ID in the Vendor column.`); return; }
-        const vendorChanged = known !== undefined && vendor !== known.vendor.toUpperCase();
+        const vendor = want === "MAKE" ? "" : typed && !typed.startsWith("(") ? typed : (known?.vendor ?? "").toUpperCase();
+        if (want === "BUY" && (!vendor || vendor.startsWith("("))) { problems.push(`Line ${at}: ${item} is approved but has no vendor. Put a vendor ID in the Vendor column.`); return; }
+        const vendorChanged = want === "BUY" && known !== undefined && vendor !== known.vendor.toUpperCase();
         if (vendorChanged) changes.push(known.vendor.startsWith("(") || !known.vendor ? `vendor set to ${vendor}` : `vendor ${known.vendor} → ${vendor}`);
 
         let neededBy = known?.neededBy ?? "";

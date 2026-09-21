@@ -3,7 +3,7 @@
 A thin MCP server over the EBMS (Koble Systems) OData API. It owns **authentication, the
 list of companies it may use, and a few hard guards**, and nothing else. Which entity to touch, which
 fields to select, how to chunk a large order, when to read back, when to ask — all of that
-lives in skills. The two that ship here, in `skills/`, are `ebms-mrp` and `ebms-mrp-purchase-orders`.
+lives in skills. The three that ship here, in `skills/`, are `ebms-mrp`, `ebms-mrp-purchase-orders` and `ebms-mrp-batches`.
 
 It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for comparison.
 
@@ -82,6 +82,7 @@ arithmetic over hundreds of rows that has to be exact.
 | `mrp_plan` | What to buy and make, by when, and why — for a time frame and a scope (everything, particular vendors, or particular products) that the user gives. It will not assume either. The worksheet comes back attached to the result, so it can be handed to the user in the conversation. |
 | `mrp_item_view` | Everything needed to build N of one finished good, down every BOM level, against what is available. |
 | `po_from_csv` | Reads the planner's approved worksheet and drafts one purchase order per vendor. Creates nothing; the drafts go through `ebms_write`. |
+| `batches_from_csv` | Reads the approved `MAKE` rows and drafts one pending manufacturing batch per row, with every component from the bill of materials. Creates nothing. |
 
 What is read, and how it is netted (worked out against SBX with someone who knows the database):
 
@@ -108,6 +109,15 @@ What is read, and how it is netted (worked out against SBX with someone who know
   worksheet, and beside any item the plan says to buy.
 - **Lead time** — kept per product vendor in EBMS (the `LEAD_DAYS` column, according to Koble) but not published through the API,
   so orders carry a needed-by date. `leadTimeDays` / `leadTimes` supply it when the user knows.
+
+**Manufacturing batches.** What creating test batches in EBMS showed, and the drafts are built on:
+the finished good must be a Track Count product (anything else is refused); EBMS does **not** add
+consumed materials itself when a batch arrives through the API, as its own screens do, so every
+component is sent from `INVENDET`; and a consumed line's `M_QUAN_VIS` is the amount for one
+finished good, which EBMS multiplies by the batch size. Drafts mark nothing as made or consumed,
+state each line's unit, take the warehouse the planner gives or the one the product was last made
+in, and carry an `EXTERNALID` of the run plus the worksheet line so a batch cannot be created
+twice (`INMFG` is covered by the duplicate guard alongside `ARINV` and `APINV`).
 
 **The worksheet.** `mrp_plan` writes a CSV (to `KOBLE_OUTPUT_DIR`, or `Documents/Koble MRP`) with
 every planned item: its status, the recommendation (`EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`, `OK`),
@@ -198,16 +208,16 @@ you will test against. Nothing here needs a Mac.
    ```
    Restart Claude Desktop. Ask Claude "which EBMS companies can you see?" — it should list them by
    name. You do not need to know a company ID; the server discovers them from the serial number.
-3. **Install the skills** in `skills/`: `ebms-mrp` and `ebms-mrp-purchase-orders`. In Claude
+3. **Install the skills** in `skills/`: `ebms-mrp`, `ebms-mrp-purchase-orders` and `ebms-mrp-batches`. In Claude
    Desktop, zip each folder and add it under Settings → Capabilities → Skills. In Claude Code, copy
    the folders into `~/.claude/skills/`.
 4. **Try it.** "Run MRP for the next 30 days." Claude should ask you to confirm the time frame and
    the company, take half a minute or more, and give you the path of a worksheet CSV in
    `Documents/Koble MRP`.
 
-**What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view` and `po_from_csv` never write
-to EBMS. Purchase orders are only created by the second skill, one at a time, after you say yes to
-each. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
+**What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view`, `po_from_csv` and
+`batches_from_csv` never write to EBMS. Purchase orders and batches are only created by the second
+and third skills, one at a time, after you say yes to each. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
 this server builds itself, and a request that would land anywhere else is refused before it is
 sent. Leave it set while testing. The `PROCESS` field is refused in every request body, and
 `ebms_command` runs only a short list of actions, none of which posts, pays or sends.
@@ -217,8 +227,7 @@ products planned that should not be (or the reverse); units that come out wrong;
 leaves out that matters in your business; how long a run takes on real data; and whether the
 worksheet is something a buyer would actually use. The `Because` column and `mrp_item_view` are
 there so you can check any number. Known gaps: no vendor lead times (EBMS does not publish them
-through its API yet), no per-warehouse planning, no warehouse transfers, and `MAKE` rows stop at
-the worksheet — nothing creates manufacturing batches.
+through its API yet), no per-warehouse planning, no warehouse transfers, and batches are created pending only — lots, serial numbers, recording production and processing stay in EBMS.
 
 ## Setup
 

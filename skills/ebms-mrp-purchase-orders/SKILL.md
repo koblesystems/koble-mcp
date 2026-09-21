@@ -107,7 +107,8 @@ Read the result before moving on:
 Summarise: which purchase orders were created (number, vendor, lines, total), which were
 skipped and why, which approved rows could not be ordered, and what is left on the worksheet
 unapproved. Remind them that `EXPEDITE` and `NOT NEEDED` rows are changes to existing purchase
-orders that they make in EBMS, and `MAKE` rows are batches they create in EBMS.
+orders that they make in EBMS. Approved `MAKE` rows on the same worksheet are not touched here:
+the `ebms-mrp-batches` skill turns those into manufacturing batches.
 
 Do not offer to receive, process or pay the purchase orders.
 

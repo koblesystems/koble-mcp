@@ -20,7 +20,7 @@ export function runId(company: string, now = new Date()): string {
 
 export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan, include: (item: string, type: string) => boolean = () => true): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
     const warnings: string[] = [];
-    const buyIds = [...new Set(plan.plannedOrders.filter((order) => order.action === "buy" && include(order.item, "BUY")).map((order) => order.item))];
+    const buyIds = [...new Set(plan.plannedOrders.filter((order) => include(order.item, order.action === "buy" ? "BUY" : "MAKE")).map((order) => order.item))];
     const vendorRows: Array<Record<string, unknown>> = [];
     const unitRows: UnitRow[] = [];
     for (let i = 0; i < buyIds.length; i += 15) {
@@ -71,7 +71,21 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         const stockOut = order.pegs.some((peg) => peg.kind !== "minimum");
         const because = order.pegs.map((peg) => `${peg.kind} ${peg.ref}: ${peg.qty}`).join("; ");
         if (order.action === "make") {
-            rows.push({ ...base, Type: "MAKE", Item: order.item, ...figures(order.item), Status: stockOut ? "Stock-out" : "Below minimum", Recommendation: `Make ${order.qty} by ${order.receiptDate}`, "Needed By": order.receiptDate, "Recommended Qty (stock unit)": order.qty, Because: because, Notes: snapshot.products.get(order.item)?.vendor ? "Also purchased; could be bought instead" : "" });
+            const product = snapshot.products.get(order.item);
+            // EBMS only accepts a Track Count product (classification 2) as a batch's finished good through its API.
+            const makeable = product?.classification === 2;
+            rows.push({
+                ...base, Type: "MAKE", Item: order.item, ...figures(order.item),
+                Status: stockOut ? "Stock-out" : "Below minimum",
+                Recommendation: `Make ${order.qty} by ${order.receiptDate}`,
+                "Needed By": order.receiptDate,
+                "Recommended Qty (stock unit)": order.qty,
+                "Purchase Unit": baseUnitOf(order.item, unitRows) ?? "",
+                "Order Qty": order.qty,
+                Approve: "",
+                Because: because,
+                Notes: [makeable ? "" : "Cannot be created as a batch through EBMS's API: the product is not classified Track Count. Create it in EBMS.", product?.vendor ? "Also purchased; could be bought instead." : ""].filter(Boolean).join(" "),
+            });
             continue;
         }
         const vendor = vendorFor(order.item);

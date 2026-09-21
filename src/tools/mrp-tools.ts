@@ -13,6 +13,7 @@ import { dirname, join, resolve } from "node:path";
 import { z } from "zod/v4";
 import { assertWriteCompany, resolveCompany } from "../config.js";
 import { odataString } from "../ebms/client.js";
+import { draftBatches, type BatchComponent } from "../mrp/batches.js";
 import { draftPurchaseOrders, parseCsv, readSheet, toCsv, type RunManifest } from "../mrp/csv.js";
 import { baseUnitOf, fromBaseUnits, toBaseUnits, type UnitRow } from "../mrp/units.js";
 import { readAll } from "../mrp/snapshot.js";
@@ -32,6 +33,30 @@ const today = (): string => {
 const isRealDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 /** Where worksheets go: KOBLE_OUTPUT_DIR, or "Koble MRP" in the user's Documents folder. */
 const outputDir = (given: string | undefined): string => resolve(given?.trim() || process.env["KOBLE_OUTPUT_DIR"] || join(homedir(), "Documents", "Koble MRP"));
+/** The worksheet's text and the run record that goes with it: beside the file, or in the usual output folder. */
+async function loadWorksheet(args: { path?: string | undefined; csv?: string | undefined }): Promise<{ text: string; manifest: RunManifest | null }> {
+    const text = args.csv ?? (await readFile(resolve(args.path as string), "utf8"));
+    const runInFile = parseCsv(text).map((row) => row["Run"] ?? "").find(Boolean) ?? "";
+    if (!/^mrp-[a-z0-9_-]+-\d{8}-\d{4,6}$/i.test(runInFile)) return { text, manifest: null };
+    const places = [...(args.path ? [join(dirname(resolve(args.path)), "runs")] : []), join(outputDir(undefined), "runs")];
+    for (const place of places) {
+        const candidate = join(place, `${runInFile}.json`);
+        if (existsSync(candidate)) return { text, manifest: JSON.parse(await readFile(candidate, "utf8")) as RunManifest };
+    }
+    return { text, manifest: null };
+}
+
+/** Reads rows for many IDs, fifteen to a request. */
+async function readByIds(company: string, entity: string, field: string, ids: readonly string[], select: string, extra = ""): Promise<Array<Record<string, unknown>>> {
+    const rows: Array<Record<string, unknown>> = [];
+    const unique = [...new Set(ids.filter(Boolean))];
+    for (let i = 0; i < unique.length; i += 15) {
+        const filter = unique.slice(i, i + 15).map((id) => `${field} eq ${odataString(id)}`).join(" or ");
+        rows.push(...(await readAll(company, entity, { $filter: extra ? `${extra} and (${filter})` : filter, $select: select })));
+    }
+    return rows;
+}
+
 const cap = <T>(list: readonly T[], max: number): { shown: T[]; more: number } => ({ shown: list.slice(0, max), more: Math.max(0, list.length - max) });
 
 const common = {
@@ -218,17 +243,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     cannotWrite = error instanceof Error ? error.message : String(error);
                 }
                 if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path, or its CSV text." });
-                const textIn = args.csv ?? (await readFile(resolve(args.path as string), "utf8"));
-                // Find the run's own record: beside the file, or in the usual output folder.
-                const runInFile = parseCsv(textIn).map((row) => row["Run"] ?? "").find(Boolean) ?? "";
-                let manifest: RunManifest | null = null;
-                if (/^mrp-[a-z0-9_-]+-\d{8}-\d{4,6}$/i.test(runInFile)) {
-                    const places = [...(args.path ? [join(dirname(resolve(args.path)), "runs")] : []), join(outputDir(undefined), "runs")];
-                    for (const place of places) {
-                        const candidate = join(place, `${runInFile}.json`);
-                        if (existsSync(candidate)) { manifest = JSON.parse(await readFile(candidate, "utf8")) as RunManifest; break; }
-                    }
-                }
+                const { text: textIn, manifest } = await loadWorksheet(args);
                 const reading = readSheet(textIn, manifest);
                 const problems = [...reading.problems];
                 if (cannotWrite) problems.push(`These drafts cannot be created from this server as it is set up: ${cannotWrite}`);
@@ -318,6 +333,84 @@ export function registerMrpTools(register: ToolRegistrar): void {
                         write: existing.has(draft.externalId) ? "This purchase order already exists for this run; do not create it again." : { tool: "ebms_write", method: "POST", path: "APINV", body: draft.body, readBack: { record: "INVOICE,ID,TOTAL", lines: "UNIT_MEAS,UNIT_VIS,ETA_DATE" } },
                     })),
                     next: "Nothing was created. Show each draft — vendor, lines, quantities, units, cost — and get a clear yes for each purchase order. Then call ebms_write with that draft's body exactly as given, and report the PO number and the verification. EBMS sets each line's expected date (ETA_DATE) itself from the vendor's lead time: compare it with the draft's neededBy and tell the user about any line expected later than it is needed, or with no expected date at all. If a verification is not ok, stop and tell the user before doing the next one.",
+                });
+            } catch (error) {
+                return errorResult(error);
+            }
+        },
+    );
+
+    register(
+        "batches_from_csv",
+        {
+            description:
+                "Turn approved MAKE rows of an MRP worksheet into manufacturing-batch drafts, read-only. For each approved row it checks that EBMS will accept the product as a finished good (it must be classified Track Count), takes every component from the product's bill of materials with its quantity per one finished good (EBMS does NOT add consumed materials itself when a batch arrives through the API), picks the warehouse (the one given, else where the product was last made), and returns the exact body to POST to INMFG with ebms_write. It creates nothing. Nothing in a draft is marked as made or consumed and PROCESS is never sent: finishing and processing a batch is done by a person in EBMS. Each draft's EXTERNALID comes from the run and the worksheet line, so the same worksheet cannot create a batch twice. Show each draft and get a clear yes before writing it.",
+            inputSchema: z.object({
+                company: z.string().min(1).describe("Required. Company, by ID or name. Must match the worksheet's company."),
+                path: z.string().optional().describe("Path of the worksheet CSV on this computer. Give this or csv."),
+                csv: z.string().optional().describe("The worksheet's CSV text, exactly as the user attached or pasted it."),
+                warehouse: z.string().optional().describe("Warehouse ID for every batch. ASK the user if they have more than one warehouse; when omitted, each product's batch goes where that product was last made."),
+            }),
+        },
+        async (args) => {
+            try {
+                const company = resolveCompany(args.company);
+                let cannotWrite: string | null = null;
+                try {
+                    assertWriteCompany(company);
+                } catch (error) {
+                    cannotWrite = error instanceof Error ? error.message : String(error);
+                }
+                if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path, or its CSV text." });
+                const { text, manifest } = await loadWorksheet(args);
+                const reading = readSheet(text, manifest, "MAKE");
+                const problems = [...reading.problems];
+                if (cannotWrite) problems.push(`These drafts cannot be created from this server as it is set up: ${cannotWrite}`);
+                if (reading.company && reading.company !== company) problems.push(`The worksheet is for company ${reading.company}, but this call names ${company}. Nothing was drafted.`);
+                if (problems.some((p) => p.includes("does not look like") || p.includes("but this call names") || p.includes("mixes") || p.includes("semicolons"))) return jsonResult({ company, problems, drafts: [] });
+
+                const items = [...new Set(reading.approved.map((line) => line.item))];
+                const products = await readByIds(company, "INVENTRY", "ID", items, "ID,C_TYPE,INACTIVE");
+                const classification: Record<string, number> = {};
+                for (const row of products) if (row["INACTIVE"] !== true) classification[String(row["ID"] ?? "").trim()] = typeof row["C_TYPE"] === "number" ? row["C_TYPE"] : -1;
+                const bom = await readByIds(company, "INVENDET", "ID", items, "ID,COMP_ID,QUAN,CATEGORY");
+                const components: Record<string, BatchComponent[]> = {};
+                for (const row of bom) (components[String(row["ID"] ?? "").trim()] ??= []).push({ item: String(row["COMP_ID"] ?? "").trim(), qtyPer: typeof row["QUAN"] === "number" ? row["QUAN"] : 0, category: String(row["CATEGORY"] ?? "") });
+                const unitIds = [...items, ...bom.map((row) => String(row["COMP_ID"] ?? "").trim())];
+                const units = (await readByIds(company, "INVENUNT", "ID", unitIds, "ID,UNIT,MULTIPLIER,MULTIPLY")) as unknown as UnitRow[];
+                const made = await readByIds(company, "APINVDET", "INVEN", items, "INVEN,WAREHOUSE,INV_DATE", "DOC_TYPE eq 'M'");
+                const lastWarehouse: Record<string, string> = {};
+                for (const row of [...made].sort((a, b) => String(a["INV_DATE"] ?? "").localeCompare(String(b["INV_DATE"] ?? "")))) {
+                    const wh = String(row["WAREHOUSE"] ?? "").trim();
+                    if (wh) lastWarehouse[String(row["INVEN"] ?? "").trim()] = wh;
+                }
+
+                const { drafts, problems: batchProblems } = draftBatches(reading.approved, { run: reading.run, classification, components, units, lastWarehouse, warehouse: args.warehouse?.trim() || undefined });
+                problems.push(...batchProblems);
+                const existing = new Map<string, Record<string, unknown>>();
+                for (const draft of drafts) {
+                    const rows = await readAll(company, "INMFG", { $filter: `EXTERNALID eq ${odataString(draft.externalId)}`, $select: "AUTOID,BATCH,EXTERNALID" });
+                    if (rows[0]) existing.set(draft.externalId, rows[0]);
+                }
+                return jsonResult({
+                    company,
+                    run: reading.run,
+                    counts: { rows: reading.counts.rows, makeRows: reading.counts.buyRows, approved: reading.counts.approved, notApproved: reading.counts.notApproved },
+                    runRecordFound: reading.fromManifest,
+                    problems,
+                    notes: reading.notes,
+                    drafts: drafts.map((draft) => ({
+                        item: draft.item,
+                        make: `${draft.qty}${draft.unit ? ` ${draft.unit}` : ""}`,
+                        warehouse: draft.warehouse,
+                        neededBy: draft.neededBy,
+                        consumes: draft.components.map((part) => `${part.item}: ${part.perUnit} each, ${part.total}${part.unit ? ` ${part.unit}` : ""} in all`),
+                        changedByPlanner: draft.changes,
+                        notes: draft.notes,
+                        alreadyCreated: existing.get(draft.externalId),
+                        write: existing.has(draft.externalId) ? "This batch already exists for this run; do not create it again." : { tool: "ebms_write", method: "POST", path: "INMFG", body: draft.body, readBack: { record: "BATCH,STAT,WAREHOUSE", lines: "UNIT_MEAS" } },
+                    })),
+                    next: "Nothing was created. Show each draft — product, quantity and unit, warehouse, and everything it will consume with the totals — and get a clear yes for each batch. Then call ebms_write with that draft's body exactly as given and report the batch number (record BATCH in the verification rows) and the verification. The batch is left Pending with nothing made or consumed; completing and processing it is done in EBMS. If a verification is not ok, stop and tell the user before doing the next one.",
                 });
             } catch (error) {
                 return errorResult(error);
