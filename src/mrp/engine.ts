@@ -19,8 +19,11 @@ export type SupplyKind = "purchase" | "batch";
 export interface ItemParams {
     id: string;
     onHand: number;
-    /** Days from release to receipt. */
-    leadTimeDays: number;
+    /**
+     * Days from release to receipt. EBMS does not publish lead time through its API yet, so
+     * this is usually absent: the order then carries only a needed-by date, and says so.
+     */
+    leadTimeDays?: number;
     /** The level the projected balance must not fall below (EBMS's MIN_INVEN). */
     safetyStock?: number;
     /** When set, an order brings the balance up to this level (EBMS's MAX_INVEN) instead of just back to the minimum. */
@@ -71,6 +74,8 @@ export interface PlannedOrder {
     releaseDate: string;
     /** The release date has already passed; the receipt date cannot be met by lead time. */
     pastDue: boolean;
+    /** False when no lead time was supplied: releaseDate then simply equals receiptDate. */
+    leadTimeKnown: boolean;
     pegs: Peg[];
 }
 
@@ -100,10 +105,21 @@ export interface ItemPlan {
     endingBalance: number;
 }
 
+/** Demand and supply dated after the horizon: counted for the reader, left out of the netting. */
+export interface BeyondHorizon {
+    item: string;
+    demandQty: number;
+    supplyQty: number;
+    firstDemandDate: string | null;
+}
+
 export interface Plan {
+    /** The last date the plan covers, or null when everything on file was planned. */
+    through: string | null;
     plannedOrders: PlannedOrder[];
     exceptions: PlanException[];
     items: ItemPlan[];
+    beyondHorizon: BeyondHorizon[];
 }
 
 const round = (value: number): number => Math.round(value * 10_000) / 10_000;
@@ -196,21 +212,23 @@ function planItem(item: ItemParams, demands: Demand[], supplies: Supply[], today
             const target = Math.max(safety, item.orderUpTo ?? 0);
             const shortfall = round(safety - balance);
             const qty = lotSize(round(target - balance), item);
-            const releaseDate = addDays(event.date, -item.leadTimeDays);
+            const leadTimeKnown = item.leadTimeDays !== undefined;
+            const releaseDate = addDays(event.date, -(item.leadTimeDays ?? 0));
             const order: PlannedOrder = {
                 item: item.id,
                 action: item.make ? "make" : "buy",
                 qty,
                 receiptDate: event.date,
                 releaseDate,
-                pastDue: releaseDate < today,
+                pastDue: leadTimeKnown && releaseDate < today,
+                leadTimeKnown,
                 pegs: [{ ref: demand.ref, kind: demand.kind, qty: Math.min(demand.qty, shortfall), date: event.date }],
             };
             planned.push(order);
             balance = round(balance + qty);
             timeline.push({ date: event.date, change: qty, balance, what: `planned ${order.action}` });
             if (order.pastDue) {
-                out.exceptions.push({ type: "past-due-release", item: item.id, ref: demand.ref, qty, from: releaseDate, to: event.date, message: `To have ${qty} by ${event.date} this should have been released ${releaseDate} (lead time ${item.leadTimeDays} days).` });
+                out.exceptions.push({ type: "past-due-release", item: item.id, ref: demand.ref, qty, from: releaseDate, to: event.date, message: `To have ${qty} by ${event.date} this should have been released ${releaseDate} (lead time ${item.leadTimeDays ?? 0} days).` });
             }
         } else {
             // Covered from stock, a receipt, or an earlier lot's surplus: peg it there if a lot is carrying it.
@@ -244,8 +262,29 @@ function planItem(item: ItemParams, demands: Demand[], supplies: Supply[], today
     return { item: item.id, level: 0, timeline, endingBalance: balance, planned };
 }
 
-export function runMrp(input: { today: string; items: readonly ItemParams[]; demands: readonly Demand[]; supplies: readonly Supply[] }): Plan {
+/**
+ * `through` is the planner's time frame: "buy and make what is needed to cover everything due
+ * on or before this date". Demand and supply dated after it are left out of the netting and
+ * summarised instead. Past-due demand is always inside the time frame. Minimum levels are
+ * held for the whole time frame, not just at its end.
+ */
+export function runMrp(input: { today: string; through?: string | undefined; items: readonly ItemParams[]; demands: readonly Demand[]; supplies: readonly Supply[] }): Plan {
     const out = { orders: [] as PlannedOrder[], exceptions: [] as PlanException[] };
+    const through = input.through ?? null;
+    const inside = (date: string): boolean => through === null || date <= through;
+    const beyond = new Map<string, BeyondHorizon>();
+    const noteBeyond = (item: string): BeyondHorizon => {
+        let row = beyond.get(item);
+        if (!row) beyond.set(item, (row = { item, demandQty: 0, supplyQty: 0, firstDemandDate: null }));
+        return row;
+    };
+    for (const demand of input.demands) {
+        if (inside(demand.date)) continue;
+        const row = noteBeyond(demand.item);
+        row.demandQty = round(row.demandQty + demand.qty);
+        row.firstDemandDate = row.firstDemandDate === null || demand.date < row.firstDemandDate ? demand.date : row.firstDemandDate;
+    }
+    for (const supply of input.supplies) if (!inside(supply.date)) noteBeyond(supply.item).supplyQty = round(noteBeyond(supply.item).supplyQty + supply.qty);
     const byId = new Map(input.items.map((item) => [item.id, item]));
     const { levels, cycles } = lowLevelCodes(input.items);
     for (const cycle of cycles) out.exceptions.push({ type: "bom-cycle", item: cycle[0] ?? "", ref: cycle.join(" → "), message: `Bill of materials loops: ${cycle.join(" → ")}. The loop was planned once and not followed further.` });
@@ -253,8 +292,8 @@ export function runMrp(input: { today: string; items: readonly ItemParams[]; dem
     const demands = new Map<string, Demand[]>();
     const supplies = new Map<string, Supply[]>();
     const push = <T>(map: Map<string, T[]>, key: string, value: T): void => void map.set(key, [...(map.get(key) ?? []), value]);
-    for (const demand of input.demands) push(demands, demand.item, demand);
-    for (const supply of input.supplies) push(supplies, supply.item, supply);
+    for (const demand of input.demands) if (inside(demand.date)) push(demands, demand.item, demand);
+    for (const supply of input.supplies) if (inside(supply.date)) push(supplies, supply.item, supply);
 
     const known = new Set(byId.keys());
     for (const id of new Set([...demands.keys(), ...supplies.keys()])) {
@@ -275,5 +314,5 @@ export function runMrp(input: { today: string; items: readonly ItemParams[]; dem
             }
         }
     }
-    return { plannedOrders: out.orders, exceptions: out.exceptions, items };
+    return { through, plannedOrders: out.orders, exceptions: out.exceptions, items, beyondHorizon: [...beyond.values()].sort((a, b) => a.item.localeCompare(b.item)) };
 }

@@ -37,7 +37,7 @@ test("the point of time-phasing: enough is on order in total, but it arrives aft
 
 test("a shortage with nothing to pull in becomes a planned order, released one lead time earlier and pegged to its cause", () => {
     const plan = runMrp({ today, items: [{ id: "A", onHand: 2, leadTimeDays: 14 }], demands: [sales("A", 10, "2026-11-01", "SO-1193")], supplies: [] });
-    assert.deepEqual(plan.plannedOrders, [{ item: "A", action: "buy", qty: 8, receiptDate: "2026-11-01", releaseDate: "2026-10-18", pastDue: false, pegs: [{ ref: "SO-1193", kind: "sales", qty: 8, date: "2026-11-01" }] }]);
+    assert.deepEqual(plan.plannedOrders, [{ item: "A", action: "buy", qty: 8, receiptDate: "2026-11-01", releaseDate: "2026-10-18", pastDue: false, leadTimeKnown: true, pegs: [{ ref: "SO-1193", kind: "sales", qty: 8, date: "2026-11-01" }] }]);
 });
 
 test("when the lead time has already run out, the order is flagged past due rather than hidden", () => {
@@ -108,4 +108,30 @@ test("a receipt nothing needs is reported, and one with an assumed date says so"
 test("demand or supply for an item with no parameters is reported, not silently dropped", () => {
     const plan = runMrp({ today, items: [], demands: [sales("GHOST", 1, "2026-10-01")], supplies: [] });
     assert.deepEqual(plan.exceptions.map((e) => e.type), ["unknown-item"]);
+});
+
+test("the time frame: only demand due on or before it is bought for, and the rest is counted, not planned", () => {
+    const items: ItemParams[] = [{ id: "A", onHand: 0 }];
+    const demands = [sales("A", 5, "2026-09-30", "SO-1"), sales("A", 8, "2026-10-20", "SO-2"), sales("A", 40, "2027-01-15", "SO-3")];
+    const month = runMrp({ today, through: "2026-10-31", items, demands, supplies: [po("A", 100, "2027-02-01", "PO-late")] });
+    assert.deepEqual(month.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}`), ["5 by 2026-09-30", "8 by 2026-10-20"]);
+    assert.deepEqual(month.beyondHorizon, [{ item: "A", demandQty: 40, supplyQty: 100, firstDemandDate: "2027-01-15" }]);
+    assert.equal(month.exceptions.length, 0, "a PO outside the time frame is not called unneeded or expedited");
+    const week = runMrp({ today, through: "2026-09-25", items, demands, supplies: [] });
+    assert.deepEqual(week.plannedOrders, []);
+    assert.equal(week.beyondHorizon[0]?.demandQty, 53);
+});
+
+test("without a lead time an order says when it is needed and admits it does not know when to release", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0 }], demands: [sales("A", 3, "2026-09-20")], supplies: [] });
+    const [order] = plan.plannedOrders;
+    assert.equal(order?.leadTimeKnown, false);
+    assert.equal(order?.releaseDate, order?.receiptDate);
+    assert.equal(order?.pastDue, false);
+    assert.equal(plan.exceptions.filter((e) => e.type === "past-due-release").length, 0);
+});
+
+test("past-due demand is inside every time frame", () => {
+    const plan = runMrp({ today, through: "2026-09-19", items: [{ id: "A", onHand: 0 }], demands: [sales("A", 2, "2026-07-24", "SO-old")], supplies: [] });
+    assert.equal(plan.plannedOrders[0]?.qty, 2);
 });
