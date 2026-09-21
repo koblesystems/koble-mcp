@@ -53,14 +53,29 @@ test("demand dated in the past is planned as due today and reported", () => {
     assert.ok(plan.exceptions.some((e) => e.type === "past-due-demand" && e.ref === "SO-1173"));
 });
 
-test("EBMS's own numbers are the one-bucket case: minimum, order-up-to and reorder increment", () => {
-    const at = (item: ItemParams, demands: Demand[] = [], supplies: Supply[] = []) => runMrp({ today, items: [item], demands, supplies }).plannedOrders.map((o) => o.qty);
-    // Below the minimum with nothing on order: EBMS trips on on-hand alone, so the check is a zero-quantity "demand" today.
-    const probe = (id: string): Demand => ({ item: id, qty: 0.0001, date: today, kind: "forecast", ref: "min check" });
-    assert.deepEqual(at({ id: "GRAVELBIKE-01", onHand: 1, leadTimeDays: 0, safetyStock: 10, orderMultiple: 5 }, [probe("GRAVELBIKE-01")]), [10]); // QUAN2ORDER 10
-    assert.deepEqual(at({ id: "FRAMESET-ALU", onHand: 5, leadTimeDays: 0, safetyStock: 10 }, [probe("FRAMESET-ALU")]).map(Math.round), [5]); // QUAN2ORDER 5
-    assert.deepEqual(at({ id: "SHIFTERS", onHand: 0, leadTimeDays: 0, safetyStock: 10, orderUpTo: 20 }, [probe("SHIFTERS")], [po("SHIFTERS", 20, today)]), []); // 20 on order: QUAN2ORDER 0
-    assert.deepEqual(at({ id: "GRAVEL2", onHand: 1, leadTimeDays: 0, safetyStock: 2, orderUpTo: 5 }, [probe("GRAVEL2")]).map(Math.round), [4]); // up to the maximum
+test("EBMS's own numbers are the one-bucket case: minimum, order-up-to and reorder increment, with no demand at all", () => {
+    const at = (item: ItemParams, supplies: Supply[] = []) => runMrp({ today, items: [item], demands: [], supplies }).plannedOrders.map((o) => o.qty);
+    assert.deepEqual(at({ id: "GRAVELBIKE-01", onHand: 1, safetyStock: 10, orderMultiple: 5 }), [10]); // QUAN2ORDER 10
+    assert.deepEqual(at({ id: "FRAMESET-ALU", onHand: 5, safetyStock: 10 }), [5]); // QUAN2ORDER 5
+    assert.deepEqual(at({ id: "SHIFTERS", onHand: 0, safetyStock: 10, orderUpTo: 20 }, [po("SHIFTERS", 20, "2026-10-05")]), []); // 20 on order: QUAN2ORDER 0
+    assert.deepEqual(at({ id: "FLATBAR", onHand: -1, safetyStock: 20 }, [po("FLATBAR", 20, "2026-10-05")]), [1]); // net 19: QUAN2ORDER 1
+    assert.deepEqual(at({ id: "GRAVEL2", onHand: 1, safetyStock: 2, orderUpTo: 5 }), [4]); // up to the maximum
+});
+
+test("a dip under the minimum that a scheduled receipt repairs is not news; a stock-out is", () => {
+    const item: ItemParams = { id: "A", onHand: 12, safetyStock: 10 };
+    const dip = runMrp({ today, items: [item], demands: [sales("A", 5, "2026-09-25")], supplies: [po("A", 20, "2026-09-29")] });
+    assert.deepEqual([dip.plannedOrders, dip.exceptions], [[], []]);
+    const out = runMrp({ today, items: [item], demands: [sales("A", 15, "2026-09-25")], supplies: [po("A", 20, "2026-09-29")] });
+    assert.deepEqual(out.exceptions.map((e) => e.type), ["expedite"]);
+});
+
+test("still under the minimum at the end of the time frame: restore it, dated from when it went under for good", () => {
+    const plan = runMrp({ today, through: "2026-10-31", items: [{ id: "A", onHand: 12, safetyStock: 10, orderMultiple: 6 }], demands: [sales("A", 4, "2026-09-25", "SO-1"), sales("A", 3, "2026-10-10", "SO-2")], supplies: [] });
+    assert.equal(plan.plannedOrders.length, 1);
+    assert.equal(plan.plannedOrders[0]?.qty, 6); // 5 -> up to 10 needs 5, rounded to 6
+    assert.equal(plan.plannedOrders[0]?.receiptDate, "2026-09-25");
+    assert.equal(plan.plannedOrders[0]?.pegs[0]?.kind, "minimum");
 });
 
 test("planned production explodes into dated demand on its components, lowest level last", () => {
@@ -134,4 +149,12 @@ test("without a lead time an order says when it is needed and admits it does not
 test("past-due demand is inside every time frame", () => {
     const plan = runMrp({ today, through: "2026-09-19", items: [{ id: "A", onHand: 0 }], demands: [sales("A", 2, "2026-07-24", "SO-old")], supplies: [] });
     assert.equal(plan.plannedOrders[0]?.qty, 2);
+});
+
+test("several shortages on one day make one order, with every reason attached", () => {
+    const plan = runMrp({ today, items: [{ id: "BAG", onHand: 0, orderMultiple: 10 }], demands: [sales("BAG", 5, "2026-10-01", "SO-1"), sales("BAG", 5, "2026-10-01", "SO-2"), sales("BAG", 25, "2026-10-01", "SO-3")], supplies: [] });
+    assert.equal(plan.plannedOrders.length, 1);
+    assert.equal(plan.plannedOrders[0]?.qty, 40); // 35 needed, in tens
+    assert.deepEqual(plan.plannedOrders[0]?.pegs.map((p) => p.ref), ["SO-1", "SO-2", "SO-3"]);
+    assert.equal(plan.items[0]?.endingBalance, 5);
 });

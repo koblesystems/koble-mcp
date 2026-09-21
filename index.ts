@@ -10,6 +10,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import type { z } from "zod/v4";
 import { describeCompanies, loadSettings, setDiscoveredCompanies, setDiscoveryError } from "./src/config.js";
 import { discoverCompanies } from "./src/ebms/companies.js";
+import { registerMrpTools } from "./src/tools/mrp-tools.js";
 import { registerProxyTools } from "./src/tools/proxy-tools.js";
 import type { McpToolResult, ToolDefinition } from "./src/tools/types.js";
 
@@ -52,6 +53,7 @@ function register<S extends z.ZodType>(name: string, definition: ToolDefinition<
 }
 
 registerProxyTools(register);
+registerMrpTools(register);
 
 async function main(): Promise<void> {
     await server.connect(new StdioServerTransport());

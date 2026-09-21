@@ -57,6 +57,41 @@ and tells the caller not to resend. `verify: false` switches it off.
 The write result no longer echoes EBMS's whole record (about a hundred fields); it returns
 the record's `AUTOID`, `INVOICE` and `ID` plus the verification.
 
+## Planning (MRP)
+
+Two read-only tools sit beside the proxy, for the same reason write verification does: it is
+arithmetic over hundreds of rows that has to be exact.
+
+| Tool | What it answers |
+|---|---|
+| `mrp_plan` | What to buy and make, by when, and why — for everything due within a time frame the user gives. |
+| `mrp_item_view` | Everything needed to build N of one finished good, down every BOM level, against what is available. |
+
+What is read, and how it is netted (worked out against SBX with someone who knows the database):
+
+- **Demand** — open sales (`S`) and job (`J`) lines from `ARINVDET`, `QUAN − SHIP` in base units,
+  dated by the line's `SHIP_DATE`. A line with a materials list underneath is skipped in favour
+  of its children. Open batches' consumables (`INMFG` → `ARINVDETs`) are demand too.
+- **Supply** — open purchase lines through `APINV` → `Details` (`O_QUAN_VIS − SHIP_VIS`), and
+  open batches' finished goods (`INMFG` → `FinishedDetails`, where `SHIP_VIS` is the quantity
+  made so far). These are in the line's unit and are converted to base units from `INVENUNT`.
+- **Parameters** — `T_ON_HAND`, `MIN_INVEN` (floor), `MAX_INVEN` (order up to), `ORDER_AMT`
+  (reorder increment), `PRI_VENDOR`, `PURC_METH` from `INVENTRY`. Only stocked products and
+  stocked lines are pooled; drop-ship, sync and associated lines belong to their own orders.
+- **Made or bought** — an item is manufactured if it has ever been a batch's finished good;
+  `alsoMade` and `buyInstead` override that for a run. Made items explode through `INVENDET`,
+  level by level, so a made component of a made item is planned too.
+- **Two rules for shortage** — a projected stock-out pulls in a later receipt (an expedite
+  message) or plans a dated order; being under the minimum only matters if it is still under at
+  the end of the time frame, which with every date collapsed to today is EBMS's own
+  `QUAN2ORDER`.
+- **Lead time** — EBMS keeps it (`INVENDOR.LEAD_DAYS`) but does not publish it through the API,
+  so orders carry a needed-by date. `leadTimeDays` / `leadTimes` supply it when the user knows.
+
+The engine (`src/mrp/engine.ts`), the finished-good view (`src/mrp/tree.ts`) and unit conversion
+(`src/mrp/units.ts`) are pure and unit-tested; `src/mrp/snapshot.ts` does the reads. A 60-day
+plan of SBX takes about 30 s, nearly all of it EBMS answering six reads one after another.
+
 ## Companies
 
 One server can serve several companies on the same serial number.

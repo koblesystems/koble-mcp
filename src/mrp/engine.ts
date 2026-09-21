@@ -5,15 +5,18 @@
  * For each item, lowest bill-of-material level last:
  *   1. lay its demand and scheduled supply on a timeline;
  *   2. walk the timeline keeping a projected balance;
- *   3. where the balance would fall below safety stock, first pull in a later scheduled
- *      receipt (an "expedite" message), then plan a new order, sized by the lot rules and
- *      released one lead time earlier;
+ *   3. where the balance would go negative — a real stock-out — first pull in a later
+ *      scheduled receipt (an "expedite" message), then plan a new order, sized by the lot
+ *      rules and released one lead time earlier;
+ *   3b. being under the minimum is only acted on if the item is still under it at the end of
+ *      the time frame; a dip that a scheduled receipt repairs is not news. With every date
+ *      collapsed to today this is exactly EBMS's own QUAN2ORDER;
  *   4. planned orders for a made item become dated demand on its components;
  *   5. scheduled receipts the plan never needs are reported ("not needed").
  * Every planned order remembers the demands that caused it, so any number can be explained.
  */
 
-export type DemandKind = "sales" | "job" | "batch" | "dependent" | "forecast";
+export type DemandKind = "sales" | "job" | "batch" | "dependent" | "forecast" | "minimum";
 export type SupplyKind = "purchase" | "batch";
 
 export interface ItemParams {
@@ -199,8 +202,8 @@ function planItem(item: ItemParams, demands: Demand[], supplies: Supply[], today
         balance = round(balance - demand.qty);
         timeline.push({ date: event.date, change: -demand.qty, balance, what: `${demand.kind} ${demand.ref}` });
 
-        // Pull in later scheduled receipts before planning anything new.
-        while (balance < safety) {
+        // A real stock-out: pull in later scheduled receipts before planning anything new.
+        while (balance < 0) {
             const next = pending.find((s) => !s.used && s.date > event.date);
             if (!next) break;
             next.used = true;
@@ -208,9 +211,21 @@ function planItem(item: ItemParams, demands: Demand[], supplies: Supply[], today
             timeline.push({ date: event.date, change: next.qty, balance, what: `${next.kind} ${next.ref} (expedited from ${next.date})` });
             out.exceptions.push({ type: "expedite", item: item.id, ref: next.ref, qty: next.qty, from: next.date, to: event.date, message: `${next.kind} ${next.ref} for ${next.qty} is due ${next.date} but is needed ${event.date} for ${demand.kind} ${demand.ref}.` });
         }
-        if (balance < safety) {
+        const sameDay = planned.length > 0 && planned[planned.length - 1]?.receiptDate === event.date ? planned[planned.length - 1] : undefined;
+        if (balance < 0 && sameDay) {
+            // One order per item per day: grow the one already planned for this date.
+            // Take the order back out, size it again for the whole day's need, and put it back.
             const target = Math.max(safety, item.orderUpTo ?? 0);
-            const shortfall = round(safety - balance);
+            const without = round(balance - sameDay.qty);
+            const resized = lotSize(round(target - without), item);
+            const extra = round(resized - sameDay.qty);
+            sameDay.pegs.push({ ref: demand.ref, kind: demand.kind, qty: Math.min(demand.qty, round(-balance)), date: event.date });
+            sameDay.qty = resized;
+            balance = round(without + resized);
+            timeline.push({ date: event.date, change: extra, balance, what: `planned ${sameDay.action} (added to the same day's order)` });
+        } else if (balance < 0) {
+            const target = Math.max(safety, item.orderUpTo ?? 0);
+            const shortfall = round(-balance);
             const qty = lotSize(round(target - balance), item);
             const leadTimeKnown = item.leadTimeDays !== undefined;
             const releaseDate = addDays(event.date, -(item.leadTimeDays ?? 0));
@@ -234,11 +249,28 @@ function planItem(item: ItemParams, demands: Demand[], supplies: Supply[], today
             // Covered from stock, a receipt, or an earlier lot's surplus: peg it there if a lot is carrying it.
             const carrier = [...planned].reverse().find((order) => order.pegs.reduce((n, peg) => n + peg.qty, 0) < order.qty);
             if (carrier && timeline.some((row) => row.what.startsWith("planned"))) {
+                // How much of this demand was served by the lot's surplus rather than by real stock.
                 const room = round(carrier.qty - carrier.pegs.reduce((n, peg) => n + peg.qty, 0));
-                const stockBefore = round(balance + demand.qty - room);
-                if (stockBefore < safety) carrier.pegs.push({ ref: demand.ref, kind: demand.kind, qty: Math.min(demand.qty, room), date: event.date });
+                const ownStock = Math.max(0, round(balance + demand.qty - room));
+                const fromLot = round(Math.min(room, demand.qty - Math.min(demand.qty, ownStock)));
+                if (fromLot > 0) carrier.pegs.push({ ref: demand.ref, kind: demand.kind, qty: fromLot, date: event.date });
             }
         }
+    }
+
+    // Still under the minimum when the time frame ends: restore it, needed from the start of
+    // the final stretch below the minimum.
+    if (balance < safety) {
+        let since = timeline.length - 1;
+        while (since > 0 && (timeline[since - 1]?.balance ?? 0) < safety) since -= 1;
+        const neededBy = timeline[since]?.date ?? today;
+        const target = Math.max(safety, item.orderUpTo ?? 0);
+        const qty = lotSize(round(target - balance), item);
+        const leadTimeKnown = item.leadTimeDays !== undefined;
+        const releaseDate = addDays(neededBy, -(item.leadTimeDays ?? 0));
+        planned.push({ item: item.id, action: item.make ? "make" : "buy", qty, receiptDate: neededBy, releaseDate, pastDue: leadTimeKnown && releaseDate < today, leadTimeKnown, pegs: [{ ref: safety > 0 ? String(safety) : "0 — on hand is negative", kind: "minimum", qty: round(safety - balance), date: neededBy }] });
+        balance = round(balance + qty);
+        timeline.push({ date: neededBy, change: qty, balance, what: `planned ${item.make ? "make" : "buy"} (restore minimum)` });
     }
 
     // A receipt the plan gets through without is reported, latest first, so the message is
@@ -253,8 +285,9 @@ function planItem(item: ItemParams, demands: Demand[], supplies: Supply[], today
             if (row.date >= supply.date || mine) lowest = Math.min(lowest, running);
         }
         const plannedAfter = planned.some((order) => order.receiptDate >= supply.date);
-        if (lowest >= safety && !plannedAfter && demands.length + supplies.length > 0) {
-            out.exceptions.push({ type: "not-needed", item: item.id, ref: supply.ref, qty: supply.qty, from: supply.date, message: `${supply.kind} ${supply.ref} for ${supply.qty} is not needed by anything in the plan; consider deferring or cancelling it.` });
+        const endWithout = round(running);
+        if (lowest >= 0 && endWithout >= safety && !plannedAfter && demands.length + supplies.length > 0) {
+            out.exceptions.push({ type: "not-needed", item: item.id, ref: supply.ref, qty: supply.qty, from: supply.date, message: `${supply.kind} ${supply.ref}: ${supply.qty} of ${item.id} is not needed by anything in the plan; consider deferring or cancelling it.` });
         }
     }
 
