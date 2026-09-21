@@ -36,3 +36,23 @@ export function toBaseUnits(item: string, qty: number, unit: string | null | und
     }
     return { qty: round(larger ? qty * row.MULTIPLIER : qty / row.MULTIPLIER) };
 }
+
+/**
+ * The other direction, for writing an order in the vendor's unit: stock units → that unit.
+ * A unit larger than the base (a case) is rounded UP to a whole one, because nobody orders
+ * 1.2 cases; anything else is rounded up to two decimals.
+ */
+export function fromBaseUnits(item: string, baseQty: number, unit: string | null | undefined, rows: readonly UnitRow[]): Conversion {
+    const wanted = norm(unit);
+    const mine = rows.filter((row) => norm(row.ID) === norm(item));
+    const up2 = (value: number): number => Math.ceil(round(value) * 100 - 1e-6) / 100;
+    if (wanted === "" || mine.length === 0) return { qty: up2(baseQty) };
+    const row = mine.find((candidate) => norm(candidate.UNIT) === wanted);
+    if (!row) return { qty: up2(baseQty), warning: `${item}: vendor unit "${unit}" is not one of its units; the stock-unit quantity was used.` };
+    const larger = norm(row.MULTIPLY) === "larger";
+    if (row.MULTIPLIER === 0) {
+        if (larger) return { qty: up2(baseQty), warning: `${item}: unit "${unit}" has a multiplier of 0; the stock-unit quantity was used. Fix the unit on the product before ordering in it.` };
+        return { qty: up2(baseQty) };
+    }
+    return { qty: larger ? Math.ceil(round(baseQty / row.MULTIPLIER) - 1e-6) : up2(baseQty * row.MULTIPLIER) };
+}

@@ -66,6 +66,7 @@ arithmetic over hundreds of rows that has to be exact.
 |---|---|
 | `mrp_plan` | What to buy and make, by when, and why — for everything due within a time frame the user gives. |
 | `mrp_item_view` | Everything needed to build N of one finished good, down every BOM level, against what is available. |
+| `po_from_csv` | Reads the planner's approved worksheet and drafts one purchase order per vendor. Creates nothing; the drafts go through `ebms_write`. |
 
 What is read, and how it is netted (worked out against SBX with someone who knows the database):
 
@@ -87,6 +88,15 @@ What is read, and how it is netted (worked out against SBX with someone who know
   `QUAN2ORDER`.
 - **Lead time** — EBMS keeps it (`INVENDOR.LEAD_DAYS`) but does not publish it through the API,
   so orders carry a needed-by date. `leadTimeDays` / `leadTimes` supply it when the user knows.
+
+**The worksheet.** `mrp_plan` writes a CSV (to `KOBLE_OUTPUT_DIR`, or `Documents/Koble MRP`) with
+every planned item: its status, the recommendation (`EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`, `OK`),
+the numbers behind it, and for purchases the vendor, part number, purchase unit, order quantity in
+that unit and cost from `INVENDOR`. A planner edits three columns — `Order Qty`, `Approve`, `Notes`
+— in a spreadsheet and hands it back. `po_from_csv` checks each approved row against EBMS, names
+any it cannot order (no vendor, zero quantity, inactive product), and drafts one purchase order per
+vendor whose `EXTERNALID` is the run plus the vendor, so the same worksheet cannot order twice.
+The file is written and read by code so the numbers a person approves are the numbers ordered.
 
 The engine (`src/mrp/engine.ts`), the finished-good view (`src/mrp/tree.ts`) and unit conversion
 (`src/mrp/units.ts`) are pure and unit-tested; `src/mrp/snapshot.ts` does the reads. A 60-day

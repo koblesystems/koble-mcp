@@ -6,8 +6,15 @@
  * many tokens to get a worse answer. They write nothing. Turning a planned order into a
  * purchase order is a separate, confirmed step through ebms_write, guided by a skill.
  */
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { z } from "zod/v4";
-import { resolveCompany } from "../config.js";
+import { assertWriteCompany, resolveCompany } from "../config.js";
+import { odataString } from "../ebms/client.js";
+import { draftPurchaseOrders, readSheet, toCsv } from "../mrp/csv.js";
+import { readAll } from "../mrp/snapshot.js";
+import { buildWorksheet, runId } from "../mrp/worksheet.js";
 import { addDays, runMrp, type PlannedOrder } from "../mrp/engine.js";
 import { takeSnapshot } from "../mrp/snapshot.js";
 import { buildTree, renderTree } from "../mrp/tree.js";
@@ -15,6 +22,8 @@ import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
 const today = (): string => new Date().toISOString().slice(0, 10);
+/** Where worksheets go: KOBLE_OUTPUT_DIR, or "Koble MRP" in the user's Documents folder. */
+const outputDir = (given: string | undefined): string => resolve(given?.trim() || process.env["KOBLE_OUTPUT_DIR"] || join(homedir(), "Documents", "Koble MRP"));
 const cap = <T>(list: readonly T[], max: number): { shown: T[]; more: number } => ({ shown: list.slice(0, max), more: Math.max(0, list.length - max) });
 
 const common = {
@@ -38,7 +47,9 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 leadTimes: z.record(z.string(), z.number().int().min(0).max(365)).optional().describe("Lead time in days per product ID, overriding leadTimeDays."),
                 vendor: z.string().optional().describe("Show only purchases whose primary vendor is this vendor ID. Planning still covers everything, because demand flows between items."),
                 items: z.array(z.string()).optional().describe("Show only these product IDs."),
-                maxRows: z.number().int().min(5).max(500).optional().describe("Rows per section, default 60. The rest is counted."),
+                maxRows: z.number().int().min(5).max(500).optional().describe("Rows per section in this result, default 25. The worksheet always has every row."),
+                worksheet: z.boolean().optional().describe("Default true: write the planner's worksheet (CSV) and return its path. It lists every planned item with its status and recommendation; the planner edits Order Qty, Approve and Notes, and po_from_csv turns the approved rows into purchase orders."),
+                saveTo: z.string().optional().describe("Folder for the worksheet. Default: KOBLE_OUTPUT_DIR, or 'Koble MRP' in the user's Documents."),
             }),
         },
         async (args) => {
@@ -65,7 +76,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                         because: order.pegs.slice(0, 3).map((peg) => `${peg.kind} ${peg.ref}: ${peg.qty} on ${peg.date}`),
                     };
                 };
-                const max = args.maxRows ?? 60;
+                const max = args.maxRows ?? 25;
                 const orders = plan.plannedOrders.filter(show).sort((a, b) => a.receiptDate.localeCompare(b.receiptDate) || a.item.localeCompare(b.item));
                 const buys = cap(orders.filter((o) => o.action === "buy").map(describe), max);
                 const makes = cap(orders.filter((o) => o.action === "make").map(describe), max);
@@ -78,8 +89,22 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 const oldest = late.map((e) => e.from ?? "").filter(Boolean).sort()[0];
                 const beyond = cap(plan.beyondHorizon.filter((b) => b.demandQty > 0 && (wanted === null || wanted.has(b.item))), 20);
 
+                let worksheet: Record<string, unknown> | undefined;
+                if (args.worksheet ?? true) {
+                    const run = runId(company);
+                    const sheet = await buildWorksheet(company, run, snapshot, plan);
+                    const dir = outputDir(args.saveTo);
+                    await mkdir(dir, { recursive: true });
+                    const file = join(dir, `${run} through ${through}.csv`);
+                    await writeFile(file, toCsv(sheet.rows), "utf8");
+                    const byType: Record<string, number> = {};
+                    for (const row of sheet.rows) byType[String(row.Type)] = (byType[String(row.Type)] ?? 0) + 1;
+                    worksheet = { path: file, run, rows: sheet.rows.length, byType, editableColumns: ["Order Qty", "Approve", "Notes"], warnings: sheet.warnings };
+                }
+
                 return jsonResult({
                     company,
+                    ...(worksheet ? { worksheet } : {}),
                     timeFrame: { from: now, through },
                     leadTimes: args.leadTimeDays === undefined && !args.leadTimes ? "unknown — EBMS does not publish them; orders show when stock is needed, not when to order" : "as supplied by the user",
                     counts: { productsPlanned: snapshot.items.length, demandLines: snapshot.demands.length, supplyLines: snapshot.supplies.length, toBuy: orders.filter((o) => o.action === "buy").length, toMake: orders.filter((o) => o.action === "make").length, exceptions: byType },
@@ -95,7 +120,76 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     leftOut: snapshot.skipped,
                     warnings: snapshot.warnings,
                     ms: { ...snapshot.timings, total: Date.now() - started },
-                    next: "Nothing was written. Walk the user through expedites and stock-outs first, then the buys by vendor. Use mrp_item_view to explain one finished good. Creating a purchase order is a separate, confirmed ebms_write.",
+                    next: "Nothing was written to EBMS. Give the user the worksheet path and a short summary: expedites and stock-outs first, then buys by vendor. They review it in a spreadsheet, set Approve to Y (and adjust Order Qty) on the BUY rows they want, save it as CSV, and hand it back; po_from_csv then drafts the purchase orders. Use mrp_item_view to explain one finished good.",
+                });
+            } catch (error) {
+                return errorResult(error);
+            }
+        },
+    );
+
+    register(
+        "po_from_csv",
+        {
+            description:
+                "Turn an approved MRP worksheet into purchase-order drafts, read-only. Reads the CSV mrp_plan wrote (after the planner set Approve to Y and adjusted Order Qty on BUY rows), checks every vendor and product against EBMS, groups the approved rows into one purchase order per vendor, and returns for each the exact body to POST to APINV with ebms_write. It creates nothing itself. Each draft carries an EXTERNALID made from the run and the vendor, so a worksheet handed in twice cannot order twice — ebms_write refuses the duplicate. Show the drafts and get a clear yes per purchase order before writing.",
+            inputSchema: z.object({
+                company: z.string().min(1).describe("Required. Company, by ID or name. Must match the worksheet's company."),
+                path: z.string().optional().describe("Path of the worksheet CSV on this computer. Give this or csv."),
+                csv: z.string().optional().describe("The worksheet's CSV text, when the user pasted or attached it instead."),
+            }),
+        },
+        async (args) => {
+            try {
+                const company = resolveCompany(args.company);
+                assertWriteCompany(company);
+                if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path, or its CSV text." });
+                const textIn = args.csv ?? (await readFile(resolve(args.path as string), "utf8"));
+                const reading = readSheet(textIn);
+                const problems = [...reading.problems];
+                if (reading.company && reading.company !== company) problems.push(`The worksheet is for company ${reading.company}, but this call names ${company}. Nothing was drafted.`);
+                if (problems.some((p) => p.includes("does not look like") || p.includes("but this call names") || p.includes("mixes"))) return jsonResult({ company, problems, drafts: [] });
+
+                // Check vendors and products against EBMS before anything is drafted.
+                const check = async (entity: string, ids: string[], select: string): Promise<Map<string, Record<string, unknown>>> => {
+                    const found = new Map<string, Record<string, unknown>>();
+                    for (let i = 0; i < ids.length; i += 15) {
+                        const filter = ids.slice(i, i + 15).map((id) => `ID eq ${odataString(id)}`).join(" or ");
+                        for (const row of await readAll(company, entity, { $filter: filter, $select: select })) found.set(String(row["ID"] ?? "").trim().toUpperCase(), row);
+                    }
+                    return found;
+                };
+                const vendors = await check("APVENDOR", [...new Set(reading.approved.map((line) => line.vendor))], "ID,F_NAME,L_NAME,INACTIVE");
+                const products = await check("INVENTRY", [...new Set(reading.approved.map((line) => line.item))], "ID,DESCR_1,INACTIVE");
+                const usable = reading.approved.filter((line) => {
+                    const vendor = vendors.get(line.vendor.toUpperCase());
+                    const product = products.get(line.item.toUpperCase());
+                    if (!vendor) { problems.push(`Line ${line.row}: vendor "${line.vendor}" is not in EBMS.`); return false; }
+                    if (vendor["INACTIVE"] === true) { problems.push(`Line ${line.row}: vendor ${line.vendor} is inactive.`); return false; }
+                    if (!product) { problems.push(`Line ${line.row}: product "${line.item}" is not in EBMS.`); return false; }
+                    if (product["INACTIVE"] === true) { problems.push(`Line ${line.row}: product ${line.item} is inactive.`); return false; }
+                    return true;
+                });
+                const drafts = draftPurchaseOrders({ ...reading, approved: usable });
+                const existing = new Map<string, Record<string, unknown>>();
+                for (const draft of drafts) {
+                    const rows = await readAll(company, "APINV", { $filter: `EXTERNALID eq ${odataString(draft.externalId)}`, $select: "AUTOID,INVOICE,EXTERNALID" });
+                    if (rows[0]) existing.set(draft.externalId, rows[0]);
+                }
+                return jsonResult({
+                    company,
+                    run: reading.run,
+                    counts: reading.counts,
+                    problems,
+                    drafts: drafts.map((draft) => ({
+                        vendor: draft.vendor,
+                        vendorName: `${String(vendors.get(draft.vendor)?.["F_NAME"] ?? "").trim()} ${String(vendors.get(draft.vendor)?.["L_NAME"] ?? "").trim()}`.trim(),
+                        lines: draft.lines.length,
+                        estCost: draft.estCost,
+                        alreadyCreated: existing.has(draft.externalId) ? existing.get(draft.externalId) : undefined,
+                        write: existing.has(draft.externalId) ? "This purchase order already exists for this run; do not create it again." : { tool: "ebms_write", method: "POST", path: "APINV", body: draft.body, readBack: { record: "INVOICE,ID,TOTAL", lines: "UNIT_MEAS,UNIT_VIS,ETA_DATE" } },
+                    })),
+                    next: "Nothing was created. Show each draft — vendor, lines, quantities, units, cost — and get a clear yes for each purchase order. Then call ebms_write with that draft's body exactly as given, and report the PO number and the verification. If a verification is not ok, stop and tell the user before doing the next one.",
                 });
             } catch (error) {
                 return errorResult(error);
