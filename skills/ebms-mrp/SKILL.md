@@ -1,0 +1,112 @@
+---
+name: ebms-mrp
+description: Run material requirements planning (MRP) for an EBMS / Koble company and give the planner a worksheet — what to buy, what to make, which incoming orders to expedite or cancel, and why — for a time frame they choose. Use whenever someone asks what they need to order or make, what they are short of, whether they can fill open orders, what to reorder, to "run MRP", to plan purchasing or production, to check coverage for the next weeks, or whether they can build a quantity of a finished good. Needs the koble-mcp server (tools mrp_plan and mrp_item_view). To turn the approved worksheet into purchase orders, use the ebms-mrp-purchase-orders skill afterwards.
+---
+
+# EBMS material requirements planning
+
+The arithmetic is done by the `koble-mcp` server: `mrp_plan` reads EBMS, nets demand against
+supply day by day through the bill of materials, and writes a worksheet. Your job is the part
+that needs judgement: getting the right question from the planner, reading the result with
+them, and explaining any number they doubt. **Nothing in this skill writes to EBMS.**
+
+If the tools `mrp_plan` and `mrp_item_view` are not available, say the koble-mcp server is not
+connected and stop. Do not try to reproduce the plan by reading tables yourself.
+
+## 1. Ask before you run
+
+Ask these, in one message, and wait for the answers. Do not assume any of them.
+
+1. **The time frame.** "How far ahead should this cover?" — a date, or a number of days. This is
+   the one input the plan cannot guess: it means *buy and make what is needed for everything due
+   on or before this date*. Offer a starting point if they are unsure: roughly their longest
+   vendor lead time plus how often they place orders. `mrp_plan` refuses to run without it.
+2. **The company**, if more than one is available. Confirm it by name (`ebms_companies`).
+3. **Scope**, only if they raise it: one vendor (`vendor`), or particular products (`items`). The
+   plan always calculates everything, because demand flows between items; these only filter what
+   is shown.
+4. **Lead times**, only if they have them. EBMS does not publish vendor lead times through its
+   API, so by default the plan says when stock is *needed*, not when to *order*. If the planner
+   gives a number ("assume three weeks", or per product), pass `leadTimeDays` / `leadTimes` and
+   the plan adds release dates and flags anything already too late. Never invent one.
+
+Leave `includeJobs` on unless they say job transfers should not count as demand.
+
+## 2. Run it
+
+Call `mrp_plan` with the company and the time frame. It takes about half a minute on a small
+company and longer on a large one; say so before you call it.
+
+It returns a summary and the path of the **worksheet**, a CSV saved on the user's computer
+(in `Documents/Koble MRP` unless they chose a folder with `saveTo`).
+
+## 3. Report, in this order
+
+Lead with the file, then what matters most. Keep it short; the detail is in the worksheet.
+
+1. **Where the worksheet is**, how many rows, and how many of each type.
+2. **Expedites** — incoming purchase orders or batches that arrive after the stock is needed.
+   These are the urgent ones: the supply exists, it is just late. Give the document, the item,
+   and the dates.
+3. **Stock-outs to buy**, grouped by vendor, soonest first. Say how many lines per vendor and
+   name the biggest few. Call out any with **no primary vendor** — those cannot be ordered until
+   someone picks one.
+4. **What to make**, and for each what it pulls in below it. If a made item is *also purchased*,
+   say so: the planner may prefer to buy it this time (`buyInstead`).
+5. **Not needed** — open purchase orders nothing in the plan requires. Present these as
+   questions to review, not instructions to cancel; the plan cannot see reasons outside EBMS.
+6. **What the plan left out, and why** (`leftOut`), in a sentence: drop-ship and associated
+   lines belong to their own orders, service items are not materials, fully shipped or received
+   lines carry nothing. Mention any `warnings` in full — they are usually a product set up
+   wrongly (a unit that does not belong to the product, for instance) and someone should fix it.
+7. **Caveats that change how to read it:** if lead times are unknown, say the dates are
+   needed-by dates. If many demand lines were already past due, say the plan treats them as due
+   now. If incoming receipts have no expected date, say their document date was assumed.
+
+Do not paste the whole plan into the chat. Do not recalculate quantities yourself.
+
+## 4. Explain a number
+
+When the planner asks "why 48?" or "can we actually build those?":
+
+- Every planned row has a **Because** column: the orders, batches, minimum or parent batch that
+  caused it. Read it out.
+- For a finished good, call `mrp_item_view` with the product and quantity. It shows everything
+  needed down every level of the bill of materials against what is available
+  (on hand + incoming − on order), what is covered from stock, what must be made and what must
+  be bought. Show the tree as it comes.
+- If they think an item that has never been on a batch should be treated as manufactured, run
+  again with `alsoMade`. If a made item should be bought this time, use `buyInstead`.
+
+## 5. Hand over the worksheet
+
+Tell the planner what to do with it:
+
+- Open it in a spreadsheet. Rows are in reading order: `EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`,
+  `OK`.
+- On the `BUY` rows they want ordered, put **Y** in **Approve**. They may change **Order Qty**
+  (it is in the vendor's purchase unit, shown beside it) and fill in **Vendor** where it says
+  there is none. **Notes** is theirs. Leave every other column alone.
+- Save it as CSV and come back with it. The `ebms-mrp-purchase-orders` skill turns the approved
+  rows into purchase orders, one per vendor, and asks before creating each.
+
+`MAKE` rows are not turned into batches by any tool yet; the planner creates those in EBMS.
+
+## How the plan works, for when you are asked
+
+- **Demand:** open sales-order and job lines (ordered minus shipped), and the unused consumables
+  of open manufacturing batches. A sales line with a materials list counts its components, not
+  the parent line.
+- **Supply:** open purchase-order lines (ordered minus received) and the unmade output of open
+  batches, converted into each product's stock unit.
+- **Starting point:** on hand. Minimum, maximum and reorder increment come from the product.
+- **Two rules:** a projected stock-out pulls in a later receipt (an expedite) or plans a dated
+  order. Being under the minimum only produces an order if the item is still under it at the end
+  of the time frame — the same logic as EBMS's own "quantity to order", but aware of dates.
+- **Made or bought:** an item is manufactured if it has ever been the finished good of a batch.
+  Made items are exploded through their components, level by level. Kits and configure-to-order
+  items that have never been on a batch are not planned as batches.
+- **Only stocked products and stocked lines are pooled.** Drop-ship, sync and associated lines are
+  supplied by their own purchase orders.
+- **Not covered yet:** planning per warehouse, warehouse transfers, vendor lead times from EBMS,
+  and creating manufacturing batches.

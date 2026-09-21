@@ -134,6 +134,55 @@ write to it, so the skills' rule of showing the exact request and getting a yes 
 write is what protects it — together with the guards below, which are the mistakes a
 confirmation step does not catch.
 
+## Getting started (for someone testing this)
+
+You need Node 22 or newer, Claude Desktop (or Claude Code), and an EBMS login for the company
+you will test against. Nothing here needs a Mac.
+
+1. **Get the code and build it.**
+   ```bash
+   git clone https://github.com/dsbowman/koble-mcp.git
+   cd koble-mcp
+   npm install
+   npm run check        # builds, then runs the tests; none of them touch the network
+   ```
+2. **Register the server** in Claude Desktop: Settings → Developer → Edit Config, and add this
+   under `mcpServers` (the file is strict JSON — no comments, no trailing commas). Use the full
+   path to `index.js` on your machine; on Windows double the backslashes.
+   ```json
+   "koble-mcp": {
+     "command": "node",
+     "args": ["/full/path/to/koble-mcp/index.js"],
+     "env": {
+       "EBMS_SERIAL_NUMBER": "your serial number",
+       "EBMS_USERNAME": "your EBMS user",
+       "EBMS_PASSWORD": "your EBMS password",
+       "EBMS_SANDBOX": "ID of a test company, if you have one"
+     }
+   }
+   ```
+   Restart Claude Desktop. Ask Claude "which EBMS companies can you see?" — it should list them by
+   name. You do not need to know a company ID; the server discovers them from the serial number.
+3. **Install the skills** in `skills/`: `ebms-mrp` and `ebms-mrp-purchase-orders`. In Claude
+   Desktop, zip each folder and add it under Settings → Capabilities → Skills. In Claude Code, copy
+   the folders into `~/.claude/skills/`.
+4. **Try it.** "Run MRP for the next 30 days." Claude should ask you to confirm the time frame and
+   the company, take half a minute or more, and give you the path of a worksheet CSV in
+   `Documents/Koble MRP`.
+
+**What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view` and `po_from_csv` never write
+to EBMS. Purchase orders are only created by the second skill, one at a time, after you say yes to
+each. With `EBMS_SANDBOX` set, writes can only go to that company, whatever anyone asks; leave it
+set while testing. `PROCESS` is refused everywhere.
+
+**What to look for, and tell us.** Numbers that disagree with what you know to be true, and why;
+products planned that should not be (or the reverse); units that come out wrong; anything the plan
+leaves out that matters in your business; how long a run takes on real data; and whether the
+worksheet is something a buyer would actually use. The `Because` column and `mrp_item_view` are
+there so you can check any number. Known gaps: no vendor lead times (EBMS does not publish them
+through its API yet), no per-warehouse planning, no warehouse transfers, and `MAKE` rows stop at
+the worksheet — nothing creates manufacturing batches.
+
 ## Setup
 
 ```bash
