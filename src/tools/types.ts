@@ -50,6 +50,7 @@ export function errorResult(error: unknown, extra: Record<string, unknown> = {})
             isError: true,
         };
     }
+    // Anything that is not an EbmsError was raised by this server before a request went out.
     const message = error instanceof Error ? error.message : String(error);
-    return { content: [{ type: "text", text: JSON.stringify({ error: { message }, refused: true, ...extra }, null, 2) }], isError: true };
+    return { content: [{ type: "text", text: JSON.stringify({ error: { message }, refused: true, uncertain: false, advice: "This server refused the request; nothing was sent to EBMS.", ...extra }, null, 2) }], isError: true };
 }

@@ -120,6 +120,22 @@ function wrapFetchError(error: unknown, what: string): EbmsError {
     return new EbmsError(`${what} failed before a response arrived (${message})`, 0, { kind: "network" });
 }
 
+/**
+ * The last line of defence for the company boundary: whatever path was built, the finished
+ * URL must still be inside this company's OData root, with no fragment. `new URL` resolves
+ * dot segments the same way fetch does, so a path that climbs out is caught here.
+ */
+export function safeUrl(baseUrl: string, path: string): string {
+    const root = new URL(`${baseUrl}/`);
+    const url = new URL(`${baseUrl}/${path}`);
+    const inside = url.origin === root.origin && url.pathname.startsWith(root.pathname) && url.pathname.length > root.pathname.length;
+    const rest = url.pathname.slice(root.pathname.length);
+    if (!inside || rest.includes("//") || rest.includes("\\") || url.hash !== "" || url.username !== "" || url.password !== "") {
+        throw new EbmsError("Refused: the request would leave this company's OData root. Nothing was sent.", 0, { kind: "refused" });
+    }
+    return url.toString();
+}
+
 export interface RequestResult {
     status: number;
     body: unknown;
@@ -153,9 +169,18 @@ export async function request(company: string, method: string, path: string, bod
         const init: RequestInit = { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
         if (body !== undefined) init.body = JSON.stringify(body);
         try {
-            return await fetch(`${conn.baseUrl}/${path}`, init);
+            return await fetch(safeUrl(conn.baseUrl, path), init);
         } catch (error) {
+            if (error instanceof EbmsError) throw error;
             throw wrapFetchError(error, `${method} ${path.split("?")[0]}`);
+        }
+    };
+    /** A response whose body breaks off is as unknown as one that never arrived. */
+    const bodyOf = async (response: Response): Promise<unknown> => {
+        try {
+            return await readBody(response);
+        } catch (error) {
+            throw wrapFetchError(error, `${method} ${path.split("?")[0]} (reading the response)`);
         }
     };
 
@@ -165,15 +190,16 @@ export async function request(company: string, method: string, path: string, bod
             authFor(conn.company).token = null;
             response = await attempt(true);
         }
-        const parsed = await readBody(response);
+        const parsed = await bodyOf(response);
         if (!response.ok) {
             const error = errorFromBody(parsed, response.status);
             if (error) throw error;
             const text = typeof parsed === "object" && parsed !== null ? JSON.stringify(parsed) : String(parsed);
             throw new EbmsError(`${method} ${path.split("?")[0]} failed`, response.status, { detail: text.slice(0, 500) });
         }
+        // A 2xx carrying an error message: EBMS may or may not have saved, so it is not a refusal.
         const embedded = errorFromBody(parsed, response.status);
-        if (embedded) throw embedded;
+        if (embedded) throw new EbmsError(embedded.message, response.status, { kind: "embedded", detail: embedded.detail, solution: embedded.solution });
         const result = { status: response.status, body: parsed, warnings: warningsFromBody(parsed, response.status), ms: Date.now() - started };
         await log({ company: conn.company, method, path: path.split("?")[0], status: response.status, ms: result.ms });
         return result;

@@ -103,15 +103,17 @@ test("a 2xx with warnings succeeds and carries them", async () => {
     assert.deepEqual(r.warnings, ["Warning: Over credit limit"]);
 });
 
-test("a command without a body sends no body at all, and denied commands never go out", async () => {
+test("a command without a body sends no body at all, and actions off the allow-list never go out", async () => {
     fresh();
     script.push(() => json(200, null));
     const ok = await call("ebms_command", { company: "sbx", entity: "ARINV", key: "X", command: "MarkAllAsShipped" });
     assert.equal(ok.status, 200);
     assert.equal(sent[0]?.body, undefined);
     assert.match(sent[0]?.url ?? "", /ARINV\('X'\)\/Model\.Entities\.MarkAllAsShipped$/);
-    const denied = await call("ebms_command", { company: "sbx", entity: "ARINV", key: "X", command: "send" });
-    assert.match(String((denied.error as { message: string }).message), /denied-command list/);
+    for (const command of ["Send", "ProcessScanner", "Post"]) {
+        const denied = await call("ebms_command", { company: "sbx", entity: "ARINV", key: "X", command });
+        assert.match(String((denied.error as { message: string }).message), /not one of the actions this server runs/, command);
+    }
     assert.equal(sent.length, 1);
 });
 
@@ -153,4 +155,54 @@ test("a failed read is never described as a write that was or wasn't saved", asy
     script.push(() => json(504, null));
     const write = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
     assert.match(String(write.advice), /Read the record back/);
+});
+
+test("a crafted path or key cannot reach another company or another action", async () => {
+    fresh();
+    const write = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('/../../../LIVE/OData/ARINV(%27K%27)?x=')", body: { MEMO: "x" }, verify: false });
+    assert.equal(write.refused, true);
+    const command = await call("ebms_command", { company: "sbx", entity: "ARINV", key: "K%27)/Model.Entities.Send#", command: "MarkAllAsShipped" });
+    assert.equal(command.refused, true);
+    const read = await call("ebms_get", { company: "sbx", path: "ARINV('/../../../LIVE/OData/ARINV?x=')", select: "AUTOID" });
+    assert.equal(read.refused, true);
+    assert.equal(sent.length, 0, "nothing went on the wire");
+});
+
+test("a key with a hash or a space goes out encoded, inside the company", async () => {
+    fresh();
+    script.push(() => json(200, { AUTOID: "X" }));
+    await call("ebms_get", { company: "sbx", path: "INVENTRY('PO#110 A')", select: "ID" });
+    assert.match(sent[0]?.url ?? "", /\/MyEbms\/SBX\/OData\/INVENTRY\('PO%23110%20A'\)\?/);
+});
+
+test("a write whose response breaks off mid-body is uncertain, never refused", async () => {
+    fresh();
+    script.push(() => new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode('{"AUTOID":')); controller.error(new TypeError("terminated")); } }), { status: 200 }));
+    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
+    assert.equal(r.uncertain, true);
+    assert.match(String(r.advice), /Read the record back/);
+});
+
+test("a 2xx that carries an error message is uncertain too", async () => {
+    fresh();
+    script.push(() => json(200, { Messages: [{ Severity: "Error", TextBriefDescription: "Saving has been aborted" }] }));
+    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
+    assert.equal(r.uncertain, true);
+});
+
+test("when the check before a write fails, the result says nothing was sent", async () => {
+    fresh();
+    script.push(() => json(503, null));
+    const r = await call("ebms_write", { company: "sbx", method: "POST", path: "ARINV", body: { ID: "SMIJOH", EXTERNALID: "x-1", Details: [] } });
+    assert.equal(r.refused, true);
+    assert.equal(r.uncertain, false);
+    assert.match(String(r.reason), /was NOT sent/);
+    assert.deepEqual(sent.map((x) => x.method), ["GET"]);
+});
+
+test("every refusal has the same shape", async () => {
+    fresh();
+    const r = await call("ebms_write", { company: "live", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" } });
+    assert.equal(r.uncertain, false);
+    assert.match(String(r.advice), /nothing was sent/);
 });

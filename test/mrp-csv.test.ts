@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { COLUMNS, draftPurchaseOrders, parseCsv, readSheet, toCsv, type SheetRow } from "../src/mrp/csv.js";
+import { BOM, COLUMNS, draftPurchaseOrders, parseCsv, readSheet, toCsv, type SheetRow } from "../src/mrp/csv.js";
 import { fromBaseUnits, type UnitRow } from "../src/mrp/units.js";
 
 const base: SheetRow = { Run: "mrp-sbx-20260921-1405", Company: "SBX" };
@@ -12,7 +12,7 @@ const rows: SheetRow[] = [
 
 test("the worksheet survives a round trip through CSV, awkward text included", () => {
     const text = toCsv(rows);
-    assert.ok(text.startsWith("﻿" + COLUMNS.join(",")));
+    assert.ok(text.startsWith(BOM + COLUMNS.join(",")));
     const back = parseCsv(text);
     assert.equal(back.length, 3);
     assert.equal(back[0]?.["Description"], 'Bike Saddle, 10" "pro"');

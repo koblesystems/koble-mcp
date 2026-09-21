@@ -8,8 +8,8 @@
  *   - any body carrying PROCESS, at any depth
  *   - a POST of a document whose EXTERNALID already exists (a duplicate order is the
  *     costly mistake, and this is the one check a model under time pressure skips)
- *   - a denied command (Send, RecordPayment, ... — see EBMS_DENIED_COMMANDS)
- *   - paths that are not a plain entity path
+ *   - any bound action not on the allow-list (EBMS_ALLOWED_COMMANDS)
+ *   - paths that are not a plain entity path; keys are validated and percent-encoded
  */
 import { z } from "zod/v4";
 import { assertWriteCompany, availableCompanies, isWriteCompany, loadSettings, resolveCompany, setDiscoveredCompanies, setDiscoveryError } from "../config.js";
@@ -17,7 +17,7 @@ import { odataString, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { readBefore, verifyDelete, verifyWrite, type Before } from "../verify-run.js";
 import type { Verification } from "../verify.js";
-import { DOCUMENT_ENTITIES, entityOf, externalIdOf, findProcessKeys, isDeniedCommand, validateName, validatePath } from "../guards.js";
+import { DOCUMENT_ENTITIES, encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, validateName, validatePath } from "../guards.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
@@ -147,22 +147,35 @@ export function registerProxyTools(register: ToolRegistrar): void {
                     throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}. Posting or unposting a document is done by a person in EBMS, not through this server.`);
                 }
                 const externalId = args.method === "POST" ? externalIdOf(args.body) : undefined;
-                const entity = entityOf(path);
+                const entity = entityOf(args.path);
+                const notSent = (error: unknown, doing: string) =>
+                    jsonResult({ company, method: args.method, path, refused: true, uncertain: false, reason: `${doing} failed (${error instanceof Error ? error.message : String(error)}), so the write was NOT sent. Nothing changed in EBMS. It is safe to try again.` });
                 if (externalId !== undefined && DOCUMENT_ENTITIES.includes(entity)) {
+                    try {
                     const check = await request(company, "GET", `${entity}${buildQuery({ filter: `EXTERNALID eq ${odataString(externalId)}`, select: "AUTOID,INVOICE,EXTERNALID", top: 2 })}`);
                     const existing = (check.body as { value?: unknown[] } | null)?.value ?? [];
                     if (existing.length > 0) {
                         return jsonResult({
                             company,
                             refused: true,
+                            uncertain: false,
                             reason: `An ${entity} record with EXTERNALID ${externalId} already exists. Nothing was sent. Read it and continue from it instead of creating another.`,
                             existing,
                         });
                     }
+                    } catch (error) {
+                        return notSent(error, "The check for an existing record with this EXTERNALID");
+                    }
                 }
                 const wantVerify = args.verify ?? true;
                 let before: Before | null = null;
-                if (wantVerify && args.method === "PATCH") before = await readBefore(company, path, args.body);
+                if (wantVerify && args.method === "PATCH") {
+                    try {
+                        before = await readBefore(company, path, args.body);
+                    } catch (error) {
+                        return notSent(error, "Reading the record before the write");
+                    }
+                }
 
                 const result = await request(company, args.method, path, args.body);
                 const created = (result.body ?? {}) as Record<string, unknown>;
@@ -206,7 +219,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
         "ebms_command",
         {
             description:
-                "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>. Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}. Pass the dialog's fields for one that has a dialog (ChangeCustomer). Refused for a company that is not configured (or not the sandbox, while testing) and for denied commands (Send, RecordPayment by default). Commands return little; read the record back afterwards.",
+                "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>. Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}. Pass the dialog's fields for one that has a dialog (ChangeCustomer). Refused for a company that is not configured (or not the sandbox, while testing), and for any action that is not on the server's short allow-list — nothing that posts, processes, pays or sends. Commands return little; read the record back afterwards.",
             inputSchema: z.object({
                 company: companyField(true),
                 entity: z.string().min(1).describe("Required. The entity, e.g. ARINV"),
@@ -221,12 +234,12 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 assertWriteCompany(company);
                 const entity = validateName(args.entity, "Entity");
                 const command = validateName(args.command, "Command");
-                if (isDeniedCommand(command, loadSettings().deniedCommands)) {
-                    throw new Error(`Refused: ${command} is on this server's denied-command list (${loadSettings().deniedCommands.join(", ")}). Do it in EBMS.`);
+                if (!isAllowedCommand(command, loadSettings().allowedCommands)) {
+                    throw new Error(`Refused: ${command} is not one of the actions this server runs (${loadSettings().allowedCommands.join(", ")}). Anything that posts, processes, pays or sends is done by a person in EBMS.`);
                 }
                 const processKeys = findProcessKeys(args.body);
                 if (processKeys.length > 0) throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}.`);
-                const path = `${entity}(${odataString(args.key)})/Model.Entities.${command}`;
+                const path = `${entity}(${encodeKey(args.key)})/Model.Entities.${command}`;
                 const result = await request(company, "POST", path, args.body);
                 return jsonResult({ company, command, path, status: result.status, response: result.body, warnings: result.warnings, ms: result.ms, next: "Read the record back to see what changed." });
             } catch (error) {

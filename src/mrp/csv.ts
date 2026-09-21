@@ -7,6 +7,9 @@
  * what EBMS and the plan said at the time of the run.
  */
 
+/** The byte-order mark Excel needs to read UTF-8. Written as a code so no invisible character sits in the source. */
+export const BOM = String.fromCharCode(0xfeff);
+
 export const COLUMNS = [
     "Run", "Company", "Type", "Item", "Description", "Status", "Recommendation", "Needed By",
     "Recommended Qty (stock unit)", "Vendor", "Vendor Part No", "Purchase Unit", "Order Qty", "Unit Cost", "Est Cost", "Approve",
@@ -31,7 +34,7 @@ const cell = (value: string | number | undefined): string => {
 export function toCsv(rows: readonly SheetRow[]): string {
     const lines = [COLUMNS.join(","), ...rows.map((row) => COLUMNS.map((column) => cell(row[column])).join(","))];
     // A byte-order mark makes Excel read UTF-8 correctly; CRLF is what it expects.
-    return "﻿" + lines.join("\r\n") + "\r\n";
+    return BOM + lines.join("\r\n") + "\r\n";
 }
 
 /** RFC 4180 parsing: quoted fields, doubled quotes, commas and line breaks inside quotes. */
@@ -40,7 +43,7 @@ export function parseCsv(text: string): Array<Record<string, string>> {
     let field = "";
     let record: string[] = [];
     let quoted = false;
-    const source = text.replace(/^﻿/, "");
+    const source = text.replace(new RegExp("^" + BOM), "");
     for (let i = 0; i < source.length; i += 1) {
         const ch = source[i] as string;
         if (quoted) {

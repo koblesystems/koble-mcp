@@ -23,13 +23,14 @@ const envSchema = z.object({
      * where every listed company may be written to.
      */
     EBMS_SANDBOX: z.string().optional(),
-    /** Bound actions ebms_command refuses, comma-separated. */
-    EBMS_DENIED_COMMANDS: z.string().optional(),
+    /** Bound actions ebms_command will run, comma-separated. Anything else is refused. */
+    EBMS_ALLOWED_COMMANDS: z.string().optional(),
     /** JSON-lines request log. Method, path, company, status and duration only. */
     EBMS_LOG_FILE: z.string().optional(),
 });
 
-export const DEFAULT_DENIED_COMMANDS = ["Send", "RecordPayment", "PrintReport", "Sign"];
+/** The bound actions the skills use. None of them posts, pays or sends anything. */
+export const DEFAULT_ALLOWED_COMMANDS = ["MarkAllAsShipped", "RecalculateAllPrices", "CalculateFreight", "ChangeCustomer"];
 
 export interface CompanyInfo {
     id: string;
@@ -43,7 +44,7 @@ export interface Settings {
     configured: string[] | null;
     /** When set, the only company writes may go to. */
     sandbox: string | null;
-    deniedCommands: string[];
+    allowedCommands: string[];
     logFile: string | undefined;
 }
 
@@ -107,7 +108,7 @@ export function loadSettings(): Settings {
         serial: values.EBMS_SERIAL_NUMBER,
         configured: listed.length > 0 ? listed : null,
         sandbox,
-        deniedCommands: values.EBMS_DENIED_COMMANDS === undefined ? DEFAULT_DENIED_COMMANDS : splitList(values.EBMS_DENIED_COMMANDS),
+        allowedCommands: values.EBMS_ALLOWED_COMMANDS === undefined ? DEFAULT_ALLOWED_COMMANDS : splitList(values.EBMS_ALLOWED_COMMANDS),
         logFile: values.EBMS_LOG_FILE,
     };
     return settings;

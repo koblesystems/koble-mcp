@@ -16,13 +16,13 @@ import type { McpToolResult, ToolDefinition } from "./src/tools/types.js";
 
 function describeSetup(): string {
     try {
-        const { sandbox, deniedCommands } = loadSettings();
+        const { sandbox, allowedCommands } = loadSettings();
         const companies = describeCompanies();
         return [
             companies ? `Companies: ${companies}.` : "No companies known yet; call ebms_companies.",
             sandbox ? `Testing mode: writes go only to ${sandbox}.` : "Every available company may be read and written; name the company (ID or name) on every write.",
             companies.includes(",") ? "Name the company on every call." : "",
-            `Denied commands: ${deniedCommands.join(", ")}.`,
+            `Actions ebms_command will run: ${allowedCommands.join(", ")}.`,
         ]
             .filter(Boolean)
             .join(" ");
@@ -43,7 +43,7 @@ const server = new McpServer(
     {
         instructions:
             "Thin proxy over EBMS OData. Use the ebms-api skill for syntax and quirks and the task skills for procedure. " +
-            "PROCESS is never accepted; a POST whose EXTERNALID already exists is refused; a 2xx is not proof a write applied — read back. " +
+            "PROCESS is never accepted, and ebms_command runs only a short allow-list of actions; a POST whose EXTERNALID already exists is refused; a 2xx is not proof a write applied — read back. " +
             describeSetup(),
     },
 );

@@ -13,7 +13,7 @@ export interface EbmsMessage {
     Detail?: string;
 }
 
-export type ErrorKind = "network" | "timeout" | "http" | "credentials";
+export type ErrorKind = "network" | "timeout" | "http" | "credentials" | "embedded" | "refused";
 
 export class EbmsError extends Error {
     readonly status: number;
@@ -36,7 +36,8 @@ export class EbmsError extends Error {
      * the only safe next step is to read the record back — never to resend it.
      */
     get uncertain(): boolean {
-        return this.kind === "network" || this.kind === "timeout" || this.status === 408 || this.status >= 500;
+        if (this.kind === "refused" || this.kind === "credentials") return false;
+        return this.kind === "network" || this.kind === "timeout" || this.kind === "embedded" || this.status === 408 || this.status >= 500;
     }
 
     override toString(): string {
