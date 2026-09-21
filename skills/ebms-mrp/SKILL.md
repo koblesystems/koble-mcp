@@ -21,10 +21,14 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
    the one input the plan cannot guess: it means *buy and make what is needed for everything due
    on or before this date*. Offer a starting point if they are unsure: roughly their longest
    vendor lead time plus how often they place orders. `mrp_plan` refuses to run without it.
-2. **The company**, if more than one is available. Confirm it by name (`ebms_companies`).
-3. **Scope**, only if they raise it: one vendor (`vendor`), or particular products (`items`). The
-   plan always calculates everything, because demand flows between items; these only filter what
-   is shown.
+2. **The scope.** "Is this for everything, or are you working particular vendors or products
+   today?" Buyers often do one vendor at a time. Pass `scope` as `everything`, `vendors` (with
+   `vendors`: IDs or names, as the user says them) or `products` (with `items`). `mrp_plan`
+   refuses to run without it, and asks back if a vendor name fits more than one vendor. The plan
+   is always worked out for the whole company, because demand flows between items; the scope
+   decides what is reported and what goes on the worksheet. A vendor-scoped plan leaves out
+   `MAKE` rows; say how many batches were planned elsewhere if the result mentions them.
+3. **The company**, if more than one is available. Confirm it by name (`ebms_companies`).
 4. **Lead times**, only if they have them. EBMS does not publish vendor lead times through its
    API, so by default the plan says when stock is *needed*, not when to *order*. If the planner
    gives a number ("assume three weeks", or per product), pass `leadTimeDays` / `leadTimes` and
@@ -37,8 +41,17 @@ Leave `includeJobs` on unless they say job transfers should not count as demand.
 Call `mrp_plan` with the company and the time frame. It takes about half a minute on a small
 company and longer on a large one; say so before you call it.
 
-It returns a summary and the path of the **worksheet**, a CSV saved on the user's computer
-(in `Documents/Koble MRP` unless they chose a folder with `saveTo`).
+It returns a summary and the **worksheet** as CSV, attached to the result, and also saved on the
+user's computer (in `Documents/Koble MRP` unless they chose a folder with `saveTo`).
+
+**Give the user the worksheet as a file in the conversation.** If you can create files, create one
+named exactly `worksheet.fileName` whose content is the attached CSV **character for character**.
+Do not re-sort it, re-format it, round a number, drop a column or retype a value: every row
+carries a `Check` code tying it to this run, and any number that differs from the run's own
+record is reported as a change when purchase orders are drafted. If you cannot create files,
+show the CSV in a code block and also give the saved path. Never send the user off to find the
+file as the only option. If the result says the worksheet was too large to attach in full, say
+what was attached (the rows needing a decision) and where the full file is.
 
 ## 3. Report, in this order
 
@@ -99,8 +112,9 @@ Tell the planner what to do with it:
   because the run keeps its own record of each row.
 - **EBMS Qty To Order** is what EBMS's own purchasing screen last saved for the product. It is
   there for comparison; the plan does not use it.
-- Save it as CSV and come back with it. The `ebms-mrp-purchase-orders` skill turns the approved
-  rows into purchase orders, one per vendor, and asks before creating each.
+- Save it as CSV and attach or paste it back into the conversation. The
+  `ebms-mrp-purchase-orders` skill turns the approved rows into purchase orders, one per vendor,
+  and asks before creating each.
 
 `MAKE` rows are not turned into batches by any tool yet; the planner creates those in EBMS.
 

@@ -8,6 +8,9 @@ import { resetAuth } from "../src/ebms/client.js";
 import { registerProxyTools } from "../src/tools/proxy-tools.js";
 import type { McpToolResult } from "../src/tools/types.js";
 
+const textOf = (result: McpToolResult): string => { const [first] = result.content; return first?.type === "text" ? first.text : "{}"; };
+
+
 type Handler = (args: unknown) => Promise<McpToolResult>;
 const tools: Record<string, Handler> = {};
 registerProxyTools((name, def, handler) => {
@@ -17,7 +20,7 @@ const call = async (name: string, args: unknown): Promise<Record<string, unknown
     const handler = tools[name];
     assert.ok(handler, name);
     const result = await handler(args);
-    return { ...(JSON.parse(result.content[0]?.text ?? "{}") as Record<string, unknown>), isError: result.isError };
+    return { ...(JSON.parse(textOf(result)) as Record<string, unknown>), isError: result.isError };
 };
 
 interface Sent { method: string; url: string; body: unknown }

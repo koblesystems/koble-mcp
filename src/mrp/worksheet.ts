@@ -18,9 +18,9 @@ export function runId(company: string, now = new Date()): string {
     return `mrp-${company.toLowerCase()}-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
-export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
+export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan, include: (item: string, type: string) => boolean = () => true): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
     const warnings: string[] = [];
-    const buyIds = [...new Set(plan.plannedOrders.filter((order) => order.action === "buy").map((order) => order.item))];
+    const buyIds = [...new Set(plan.plannedOrders.filter((order) => order.action === "buy" && include(order.item, "BUY")).map((order) => order.item))];
     const vendorRows: Array<Record<string, unknown>> = [];
     const unitRows: UnitRow[] = [];
     for (let i = 0; i < buyIds.length; i += 15) {
@@ -106,6 +106,11 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         const hasActivity = item.timeline.length > 1 || (snapshot.products.get(item.item)?.min ?? 0) > 0;
         if (hasActivity) rows.push({ ...base, Type: "OK", Item: item.item, ...figures(item.item), Status: "Covered", Recommendation: "Nothing to do" });
     }
+    // The planner's scope: the plan is always worked out for everything, because demand flows
+    // between items, but the worksheet holds only the rows they asked to see.
+    const scoped = rows.filter((row) => include(String(row.Item ?? ""), String(row.Type ?? "")));
+    rows.length = 0;
+    rows.push(...scoped);
     const rank = (row: SheetRow): number => TYPE_ORDER.indexOf(String(row.Type) as (typeof TYPE_ORDER)[number]);
     rows.sort((a, b) => rank(a) - rank(b) || String(a.Vendor ?? "").localeCompare(String(b.Vendor ?? "")) || String(a.Item).localeCompare(String(b.Item)) || String(a.Document ?? "").localeCompare(String(b.Document ?? "")));
 

@@ -79,7 +79,7 @@ arithmetic over hundreds of rows that has to be exact.
 
 | Tool | What it answers |
 |---|---|
-| `mrp_plan` | What to buy and make, by when, and why — for everything due within a time frame the user gives. |
+| `mrp_plan` | What to buy and make, by when, and why — for a time frame and a scope (everything, particular vendors, or particular products) that the user gives. It will not assume either. The worksheet comes back attached to the result, so it can be handed to the user in the conversation. |
 | `mrp_item_view` | Everything needed to build N of one finished good, down every BOM level, against what is available. |
 | `po_from_csv` | Reads the planner's approved worksheet and drafts one purchase order per vendor. Creates nothing; the drafts go through `ebms_write`. |
 

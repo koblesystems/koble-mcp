@@ -12,6 +12,9 @@ import { checkCode, toCsv, type RunManifest, type SheetRow } from "../src/mrp/cs
 import { registerMrpTools } from "../src/tools/mrp-tools.js";
 import type { McpToolResult } from "../src/tools/types.js";
 
+const textOf = (result: McpToolResult): string => { const [first] = result.content; return first?.type === "text" ? first.text : "{}"; };
+
+
 const tables: Record<string, Array<Record<string, unknown>>> = {
     APVENDOR: ["V1", "V2", "V3"].map((ID) => ({ AUTOID: `v${ID}`, ID, F_NAME: "", L_NAME: ID, INACTIVE: false })),
     INVENTRY: ["WIDGET", "BOLT"].map((ID) => ({ AUTOID: `p${ID}`, ID, DESCR_1: ID, INACTIVE: false })),
@@ -39,8 +42,12 @@ globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 }) as typeof fetch;
 
 let po: (args: unknown) => Promise<McpToolResult>;
-registerMrpTools((name, def, handler) => { if (name === "po_from_csv") po = async (args) => handler(def.inputSchema.parse(args) as never); });
-const call = async (args: unknown) => JSON.parse((await po(args)).content[0]?.text ?? "{}") as Record<string, any>;
+let planTool: (args: unknown) => Promise<McpToolResult>;
+registerMrpTools((name, def, handler) => {
+    if (name === "po_from_csv") po = async (args) => handler(def.inputSchema.parse(args) as never);
+    if (name === "mrp_plan") planTool = async (args) => handler(def.inputSchema.parse(args) as never);
+});
+const call = async (args: unknown) => JSON.parse(textOf(await po(args))) as Record<string, any>;
 
 const RUN = "mrp-sbx-20260921-140533";
 function worksheet(edits: Record<string, Partial<SheetRow>>): string {
@@ -92,5 +99,16 @@ test("an untouched row is ordered exactly as the run wrote it, and the tool neve
     assert.equal(r.runRecordFound, true);
     assert.deepEqual(r.drafts[0].write.body, { ID: "V1", EXTERNALID: `${RUN}-V1`, Details: [{ INVEN: "WIDGET", O_QUAN_VIS: 2, UNIT_MEAS: "CASE", UNIT_VIS: 48 }] });
     assert.deepEqual(r.drafts[0].changedByPlanner, []);
+    assert.deepEqual(writes, []);
+});
+
+test("mrp_plan will not guess the two things only the planner knows: the time frame and the scope", async () => {
+    fresh();
+    const ask = async (args: unknown) => JSON.parse(textOf(await planTool(args))) as Record<string, string>;
+    assert.match((await ask({ company: "sbx" })).needsInput ?? "", /time frame/);
+    assert.match((await ask({ company: "sbx", days: 30 })).needsInput ?? "", /everything, particular vendors .* or particular products/);
+    assert.match((await ask({ company: "sbx", days: 30, scope: "vendors" })).needsInput ?? "", /which vendor/);
+    assert.match((await ask({ company: "sbx", days: 30, scope: "products", items: [] })).needsInput ?? "", /which products/);
+    assert.match((await ask({ company: "sbx", through: "2026-02-30", scope: "everything" })).needsInput ?? "", /not a calendar date/);
     assert.deepEqual(writes, []);
 });

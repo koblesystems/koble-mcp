@@ -9,6 +9,9 @@ import { resetAuth } from "../src/ebms/client.js";
 import { registerProxyTools } from "../src/tools/proxy-tools.js";
 import type { McpToolResult } from "../src/tools/types.js";
 
+const textOf = (result: McpToolResult): string => { const [first] = result.content; return first?.type === "text" ? first.text : "{}"; };
+
+
 type Row = Record<string, unknown> & { AUTOID: string; Materials: Row[] };
 interface Order { AUTOID: string; INVOICE: string; ID: string; PO_NO: string; EXTERNALID: string; Details: Row[] }
 
@@ -77,7 +80,7 @@ globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 
 let write: (args: unknown) => Promise<McpToolResult>;
 registerProxyTools((name, def, handler) => { if (name === "ebms_write") write = async (args) => handler(def.inputSchema.parse(args) as never); });
-const call = async (args: unknown) => JSON.parse((await write(args)).content[0]?.text ?? "{}") as Record<string, any>;
+const call = async (args: unknown) => JSON.parse(textOf(await write(args))) as Record<string, any>;
 
 const fresh = (q: typeof quirks = {}) => {
     configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p", EBMS_COMPANIES: "sbx" });

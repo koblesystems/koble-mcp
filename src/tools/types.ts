@@ -2,8 +2,13 @@
 import type { z } from "zod/v4";
 import { EbmsError } from "../ebms/errors.js";
 
+export type ContentBlock =
+    | { type: "text"; text: string }
+    /** A file's contents travelling with the result, so the chat can show or offer it without anyone fetching it from disk. */
+    | { type: "resource"; resource: { uri: string; mimeType: string; text: string } };
+
 export interface McpToolResult {
-    content: Array<{ type: "text"; text: string }>;
+    content: ContentBlock[];
     isError?: boolean;
     [key: string]: unknown;
 }
@@ -14,6 +19,11 @@ export interface ToolDefinition<S extends z.ZodType = z.ZodType> {
 }
 
 export type ToolRegistrar = <S extends z.ZodType>(name: string, definition: ToolDefinition<S>, handler: (args: z.infer<S>) => Promise<McpToolResult>) => void;
+
+/** A JSON result with a text file attached to it. */
+export function jsonResultWithFile(value: unknown, file: { uri: string; mimeType: string; text: string }): McpToolResult {
+    return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }, { type: "resource", resource: file }] };
+}
 
 export function jsonResult(value: unknown): McpToolResult {
     return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };

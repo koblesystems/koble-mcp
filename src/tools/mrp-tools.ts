@@ -21,7 +21,8 @@ import { addDays, runMrp, type PlannedOrder } from "../mrp/engine.js";
 import { takeSnapshot } from "../mrp/snapshot.js";
 import { buildTree, renderTree } from "../mrp/tree.js";
 import type { ToolRegistrar } from "./types.js";
-import { errorResult, jsonResult } from "./types.js";
+import { pathToFileURL } from "node:url";
+import { errorResult, jsonResult, jsonResultWithFile } from "./types.js";
 
 /** Today where the planner is, not in UTC: after 5 pm Pacific, UTC is already tomorrow. */
 const today = (): string => {
@@ -44,7 +45,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
         "mrp_plan",
         {
             description:
-                "Material requirements plan for one company, read-only. Nets open sales and job demand, open manufacturing batches and open purchase orders against stock, day by day, through the bill of materials, and returns what to buy and make, by when, and why. ALWAYS ask the user for the time frame first (through, or days): it is 'buy and make what is needed to cover everything due by this date'. EBMS does not publish vendor lead times, so orders carry a needed-by date; pass leadTimeDays only if the user gives one. Minimums (MIN_INVEN), order-up-to (MAX_INVEN) and the reorder increment (ORDER_AMT) come from the product. Only stocked products and stocked lines are planned; drop-ship, associated and sync lines are tied to their own orders and are left out.",
+                "Material requirements plan for one company, read-only. Nets open sales and job demand, open manufacturing batches and open purchase orders against stock, day by day, through the bill of materials, and returns what to buy and make, by when, and why. ALWAYS ask the user two things first and never assume either: the time frame (through, or days) — 'buy and make what is needed to cover everything due by this date' — and the scope: everything, particular vendors, or particular products. EBMS does not publish vendor lead times, so orders carry a needed-by date; pass leadTimeDays only if the user gives one. Minimums (MIN_INVEN), order-up-to (MAX_INVEN) and the reorder increment (ORDER_AMT) come from the product. Only stocked products and stocked lines are planned; drop-ship, associated and sync lines are tied to their own orders and are left out.",
             inputSchema: z.object({
                 ...common,
                 through: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().describe("Last date to cover, yyyy-mm-dd. Give this or days."),
@@ -52,17 +53,22 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 includeJobs: z.boolean().optional().describe("Count job transfers as demand. Default true."),
                 leadTimeDays: z.number().int().min(0).max(365).optional().describe("A lead time to assume for every item, only if the user states one."),
                 leadTimes: z.record(z.string(), z.number().int().min(0).max(365)).optional().describe("Lead time in days per product ID, overriding leadTimeDays."),
-                vendor: z.string().optional().describe("Show only purchases whose primary vendor is this vendor ID. Planning still covers everything, because demand flows between items."),
-                items: z.array(z.string()).optional().describe("Show only these product IDs."),
+                scope: z.enum(["everything", "vendors", "products"]).optional().describe("Required. ASK the user: is this for everything, for particular vendors, or for particular products? Buyers often work one vendor at a time. The plan is always calculated for the whole company, because demand flows between items; the scope decides what is reported and what goes on the worksheet."),
+                vendors: z.array(z.string()).optional().describe("With scope 'vendors': the vendors to plan purchases for, by vendor ID or name. A product belongs to its primary vendor."),
+                items: z.array(z.string()).optional().describe("With scope 'products': the product IDs to report."),
                 maxRows: z.number().int().min(5).max(500).optional().describe("Rows per section in this result, default 25. The worksheet always has every row."),
                 worksheet: z.boolean().optional().describe("Default true: write the planner's worksheet (CSV) and return its path. It lists every planned item with its status and recommendation; the planner edits Order Qty, Approve and Notes, and po_from_csv turns the approved rows into purchase orders."),
                 saveTo: z.string().optional().describe("Folder for the worksheet. Default: KOBLE_OUTPUT_DIR, or 'Koble MRP' in the user's Documents."),
+                inChat: z.boolean().optional().describe("Default true: the worksheet's CSV comes back with this result so you can give it to the user as a file in the conversation, instead of sending them to find it on disk. A very large worksheet comes back with only the rows that need a decision."),
             }),
         },
         async (args) => {
             try {
                 const company = resolveCompany(args.company);
                 if (!args.through && !args.days) return jsonResult({ needsInput: "Ask the user for the time frame: a date to cover through, or a number of days. Do not assume one." });
+                if (!args.scope) return jsonResult({ needsInput: "Ask the user what this plan is for: everything, particular vendors (which ones?), or particular products (which ones?). Do not assume 'everything'." });
+                if (args.scope === "vendors" && !(args.vendors ?? []).some((v) => v.trim())) return jsonResult({ needsInput: "Ask the user which vendor or vendors, by ID or name." });
+                if (args.scope === "products" && !(args.items ?? []).some((v) => v.trim())) return jsonResult({ needsInput: "Ask the user which products, by product ID." });
                 const now = today();
                 const through = args.through ?? addDays(now, args.days ?? 30);
                 if (!isRealDate(through)) return jsonResult({ needsInput: `"${through}" is not a calendar date. Ask the user for the time frame again, as yyyy-mm-dd or a number of days.` });
@@ -71,8 +77,34 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 const snapshot = await takeSnapshot(company, { today: now, through, includeJobs: args.includeJobs, alsoMade: args.alsoMade, buyInstead: args.buyInstead, leadTimeDays: args.leadTimeDays, leadTimes: args.leadTimes });
                 const plan = runMrp({ today: now, through, items: snapshot.items, demands: snapshot.demands, supplies: snapshot.supplies });
 
-                const wanted = args.items ? new Set(args.items.map((id) => id.trim())) : null;
-                const show = (order: PlannedOrder): boolean => (wanted === null || wanted.has(order.item)) && (!args.vendor || order.action === "make" || snapshot.products.get(order.item)?.vendor.toLowerCase() === args.vendor.trim().toLowerCase());
+                // Scope. Vendors may be named by ID or by name; a name that fits more than one is asked about.
+                let vendorIds: Set<string> | null = null;
+                let vendorNames: Record<string, string> = {};
+                if (args.scope === "vendors") {
+                    const primary = [...new Set([...snapshot.products.values()].map((p) => p.vendor.toUpperCase()).filter(Boolean))];
+                    const known: Array<{ id: string; name: string }> = [];
+                    for (let i = 0; i < primary.length; i += 15) {
+                        const filter = primary.slice(i, i + 15).map((id) => `ID eq ${odataString(id)}`).join(" or ");
+                        for (const row of await readAll(company, "APVENDOR", { $filter: filter, $select: "ID,F_NAME,L_NAME" })) known.push({ id: String(row["ID"] ?? "").trim().toUpperCase(), name: `${String(row["F_NAME"] ?? "").trim()} ${String(row["L_NAME"] ?? "").trim()}`.trim() });
+                    }
+                    vendorIds = new Set();
+                    const unclear: string[] = [];
+                    for (const given of (args.vendors ?? []).map((v) => v.trim()).filter(Boolean)) {
+                        const lower = given.toLowerCase();
+                        const exact = known.filter((v) => v.id.toLowerCase() === lower || v.name.toLowerCase() === lower);
+                        const matches = exact.length > 0 ? exact : known.filter((v) => v.name.toLowerCase().includes(lower) || v.id.toLowerCase().includes(lower));
+                        if (matches.length === 1 && matches[0]) { vendorIds.add(matches[0].id); vendorNames[matches[0].id] = matches[0].name; }
+                        else unclear.push(matches.length === 0 ? `"${given}" is not the primary vendor of any product` : `"${given}" could be ${matches.map((v) => `${v.id} (${v.name})`).join(", ")}`);
+                    }
+                    if (unclear.length > 0) return jsonResult({ needsInput: `Ask the user which vendor they mean: ${unclear.join("; ")}.`, vendorsWithProducts: known.slice(0, 60) });
+                }
+                const wanted = args.scope === "products" ? new Set((args.items ?? []).map((id) => id.trim())) : null;
+                const inScope = (item: string, type: string): boolean => {
+                    if (wanted !== null) return wanted.has(item);
+                    if (vendorIds !== null) return type !== "MAKE" && vendorIds.has((snapshot.products.get(item)?.vendor ?? "").toUpperCase());
+                    return true;
+                };
+                const show = (order: PlannedOrder): boolean => inScope(order.item, order.action === "make" ? "MAKE" : "BUY");
                 const describe = (order: PlannedOrder) => {
                     const product = snapshot.products.get(order.item);
                     return {
@@ -89,35 +121,54 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 const orders = plan.plannedOrders.filter(show).sort((a, b) => a.receiptDate.localeCompare(b.receiptDate) || a.item.localeCompare(b.item));
                 const buys = cap(orders.filter((o) => o.action === "buy").map(describe), max);
                 const makes = cap(orders.filter((o) => o.action === "make").map(describe), max);
-                const exceptions = plan.exceptions.filter((e) => wanted === null || wanted.has(e.item));
+                const exceptions = plan.exceptions.filter((e) => inScope(e.item, ""));
                 const byType: Record<string, number> = {};
                 for (const e of exceptions) byType[e.type] = (byType[e.type] ?? 0) + 1;
                 const quiet = new Set(["assumed-date", "past-due-demand"]);
                 const important = cap(exceptions.filter((e) => !quiet.has(e.type)).map((e) => ({ type: e.type, item: e.item, message: e.message })), max);
                 const late = exceptions.filter((e) => e.type === "past-due-demand");
                 const oldest = late.map((e) => e.from ?? "").filter(Boolean).sort()[0];
-                const beyond = cap(plan.beyondHorizon.filter((b) => b.demandQty > 0 && (wanted === null || wanted.has(b.item))).map(({ supplies: _s, ...rest }) => rest), 20);
+                const beyond = cap(plan.beyondHorizon.filter((b) => b.demandQty > 0 && inScope(b.item, "")).map(({ supplies: _s, ...rest }) => rest), 20);
                 const buying = new Set(orders.filter((o) => o.action === "buy").map((o) => o.item));
                 const alreadyOnOrder = cap(plan.beyondHorizon.filter((b) => b.supplies.length > 0 && buying.has(b.item)).map((b) => ({ item: b.item, onOrder: b.supplies.map((sup) => `${sup.ref}: ${sup.qty} on ${sup.date}`) })), max);
 
                 let worksheet: Record<string, unknown> | undefined;
+                let attachment: { uri: string; mimeType: string; text: string } | undefined;
                 if (args.worksheet ?? true) {
                     const run = runId(company);
-                    const sheet = await buildWorksheet(company, run, snapshot, plan);
+                    const sheet = await buildWorksheet(company, run, snapshot, plan, inScope);
                     const dir = outputDir(args.saveTo);
                     await mkdir(dir, { recursive: true });
-                    const file = join(dir, `${run} through ${through}.csv`);
-                    await writeFile(file, toCsv(sheet.rows), "utf8");
+                    const name = `${run} through ${through}.csv`;
+                    const file = join(dir, name);
+                    const csv = toCsv(sheet.rows);
+                    await writeFile(file, csv, "utf8");
                     // The run's own record, which po_from_csv trusts over anything a spreadsheet did to the file.
-                    await mkdir(join(dir, "runs"), { recursive: true });
-                    await writeFile(join(dir, "runs", `${run}.json`), JSON.stringify(sheet.manifest, null, 1), "utf8");
+                    // It is kept in the usual place as well, so a worksheet handed back as text is still matched to its run.
+                    for (const runs of new Set([join(dir, "runs"), join(outputDir(undefined), "runs")])) {
+                        await mkdir(runs, { recursive: true });
+                        await writeFile(join(runs, `${run}.json`), JSON.stringify(sheet.manifest, null, 1), "utf8");
+                    }
                     const byType: Record<string, number> = {};
                     for (const row of sheet.rows) byType[String(row.Type)] = (byType[String(row.Type)] ?? 0) + 1;
-                    worksheet = { path: file, run, rows: sheet.rows.length, byType, editableColumns: ["Order Qty", "Approve", "Vendor", "Notes"], warnings: sheet.warnings };
+                    worksheet = { fileName: name, savedAt: file, run, rows: sheet.rows.length, byType, editableColumns: ["Order Qty", "Approve", "Vendor", "Notes"], warnings: sheet.warnings };
+                    if (args.inChat ?? true) {
+                        // Keep the conversation affordable: past ~150 KB, send only the rows that need a decision.
+                        const LIMIT = 150_000;
+                        const actionable = sheet.rows.filter((row) => row.Type !== "OK");
+                        const text = csv.length <= LIMIT ? csv : toCsv(actionable);
+                        if (text.length <= LIMIT) {
+                            attachment = { uri: pathToFileURL(file).toString(), mimeType: "text/csv", text };
+                            worksheet["inChat"] = csv.length <= LIMIT ? "The full worksheet is attached to this result as CSV." : `The worksheet is large, so only the ${actionable.length} rows that need a decision are attached; the full file is at savedAt.`;
+                        } else {
+                            worksheet["inChat"] = "The worksheet is too large to attach; give the user the savedAt path.";
+                        }
+                    }
                 }
 
-                return jsonResult({
+                const summary = {
                     company,
+                    scope: args.scope === "vendors" ? { vendors: [...(vendorIds ?? [])].map((id) => `${id}${vendorNames[id] ? ` (${vendorNames[id]})` : ""}`), note: `The whole company was planned; only these vendors' products are reported. ${plan.plannedOrders.filter((o) => o.action === "make").length} planned batch(es) elsewhere in the plan may be what drives some of these purchases — the Because column says so.` } : args.scope === "products" ? { products: [...(wanted ?? [])] } : "everything",
                     ...(worksheet ? { worksheet } : {}),
                     timeFrame: { from: now, through },
                     leadTimes: args.leadTimeDays === undefined && !args.leadTimes ? "unknown — EBMS does not publish them; orders show when stock is needed, not when to order" : "as supplied by the user",
@@ -135,8 +186,11 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     leftOut: snapshot.skipped,
                     warnings: snapshot.warnings,
                     ms: { ...snapshot.timings, total: Date.now() - started },
-                    next: "Nothing was written to EBMS. Give the user the worksheet path and a short summary: expedites and stock-outs first, then buys by vendor. They review it in a spreadsheet, set Approve to Y (and adjust Order Qty) on the BUY rows they want, save it as CSV, and hand it back; po_from_csv then drafts the purchase orders. Use mrp_item_view to explain one finished good.",
-                });
+                    next: attachment
+                        ? "Nothing was written to EBMS. GIVE THE USER THE WORKSHEET AS A FILE IN THIS CONVERSATION: create a downloadable file named exactly worksheet.fileName whose content is the attached CSV, character for character — do not re-sort, re-format, round, trim columns or retype any value (each row carries a Check code, and any altered number will be reported as a change when the orders are drafted). If you cannot create files, show the CSV in a code block. Then give a short summary: expedites and stock-outs first, then buys by vendor. The user reviews it in a spreadsheet, sets Approve to Y (and may adjust Order Qty or Vendor) on the BUY rows they want, saves it as CSV, and attaches or pastes it back; pass that text to po_from_csv as csv. Use mrp_item_view to explain one finished good."
+                        : "Nothing was written to EBMS. Tell the user where the worksheet was saved (worksheet.savedAt) and give a short summary: expedites and stock-outs first, then buys by vendor. They review it in a spreadsheet, set Approve to Y on the BUY rows they want, save it as CSV, and hand it back; po_from_csv then drafts the purchase orders. Use mrp_item_view to explain one finished good.",
+                };
+                return attachment ? jsonResultWithFile(summary, attachment) : jsonResult(summary);
             } catch (error) {
                 return errorResult(error);
             }

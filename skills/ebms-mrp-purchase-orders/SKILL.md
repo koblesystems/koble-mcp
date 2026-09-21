@@ -20,8 +20,10 @@ and stop.
 
 ## 1. Get the file and the company
 
-- Ask for the worksheet if you do not have it: its path on their computer, or the file attached.
-  Pass the path as `path`, or the file's text as `csv`.
+- Ask for the worksheet if you do not have it. The usual way is that they attach or paste the
+  edited CSV into the conversation: pass its text to `po_from_csv` as `csv`, **exactly as
+  received** — do not tidy it. A path on their computer works too (`path`). Either way the run's
+  own record is found on the computer that ran the plan.
 - Confirm the company by name. It must be the company the worksheet was made for; `po_from_csv`
   refuses a mismatch. If the server is in testing mode, writes only go to the sandbox company —
   say so rather than working around it.
