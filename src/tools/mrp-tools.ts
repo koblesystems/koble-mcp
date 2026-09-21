@@ -244,10 +244,11 @@ export function registerMrpTools(register: ToolRegistrar): void {
                         lines: draft.lines.length,
                         estCost: draft.estCost,
                         changedByPlanner: draft.changes,
+                        neededBy: draft.neededBy,
                         alreadyCreated: existing.has(draft.externalId) ? existing.get(draft.externalId) : undefined,
                         write: existing.has(draft.externalId) ? "This purchase order already exists for this run; do not create it again." : { tool: "ebms_write", method: "POST", path: "APINV", body: draft.body, readBack: { record: "INVOICE,ID,TOTAL", lines: "UNIT_MEAS,UNIT_VIS,ETA_DATE" } },
                     })),
-                    next: "Nothing was created. Show each draft — vendor, lines, quantities, units, cost — and get a clear yes for each purchase order. Then call ebms_write with that draft's body exactly as given, and report the PO number and the verification. If a verification is not ok, stop and tell the user before doing the next one.",
+                    next: "Nothing was created. Show each draft — vendor, lines, quantities, units, cost — and get a clear yes for each purchase order. Then call ebms_write with that draft's body exactly as given, and report the PO number and the verification. EBMS sets each line's expected date (ETA_DATE) itself from the vendor's lead time: compare it with the draft's neededBy and tell the user about any line expected later than it is needed, or with no expected date at all. If a verification is not ok, stop and tell the user before doing the next one.",
                 });
             } catch (error) {
                 return errorResult(error);
@@ -259,7 +260,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
         "mrp_item_view",
         {
             description:
-                "The total view of one finished good, read-only: everything needed to build a quantity of it, down every level of its bill of materials, against what is available (on hand + incoming − on order). Stock of a sub-assembly covers its branch before anything is exploded further, and a part used in two branches is only counted once. Returns an indented tree, what to make, what to buy, and whether it can be built today.",
+                "The total view of one finished good, read-only: everything needed to build a quantity of it, down every level of its bill of materials, against what is available (on hand + incoming − on order). Stock of a sub-assembly covers its branch before anything is exploded further, and a part used in two branches is only counted once. Returns an indented tree, what to make, what to buy, and canBuildWithoutBuying: true when every purchased part is available, even if sub-assemblies still have to be made from them.",
             inputSchema: z.object({
                 ...common,
                 item: z.string().min(1).describe("Required. Product ID of the finished good."),
@@ -282,7 +283,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     item: id,
                     qty: args.qty,
                     availability: mode === "onHand" ? "on hand" : "on hand + incoming − on order",
-                    canBuildNow: canBuildFromStock,
+                    canBuildWithoutBuying: canBuildFromStock,
                     tree: renderTree(root),
                     make: totals.filter((t) => t.action === "make" && t.short > 0).map((t) => ({ item: t.item, qty: t.short })),
                     buy: totals.filter((t) => t.action === "buy" && t.short > 0).map((t) => ({ item: t.item, qty: t.short, vendor: snapshot.products.get(t.item)?.vendor || "(no primary vendor)" })),

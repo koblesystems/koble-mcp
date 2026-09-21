@@ -3,7 +3,7 @@
 A thin MCP server over the EBMS (Koble Systems) OData API. It owns **authentication, the
 list of companies it may use, and a few hard guards**, and nothing else. Which entity to touch, which
 fields to select, how to chunk a large order, when to read back, when to ask — all of that
-lives in skills (`ebms-api`, `ebms-sales-orders`, `ebms-products`, `invoice-to-po`).
+lives in skills. The two that ship here, in `skills/`, are `ebms-mrp` and `ebms-mrp-purchase-orders`.
 
 It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for comparison.
 
@@ -12,14 +12,29 @@ It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for
 | Tool | What it does | Refuses |
 |---|---|---|
 | `ebms_companies` | Lists the companies the serial reaches — ID, name, version, and whether writes are allowed. Needs no credentials. | — |
-| `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | a path that is not an entity path |
-| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV` whose `EXTERNALID` already exists; malformed paths |
-| `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); denied commands (`Send`, `RecordPayment`, `PrintReport`, `Sign` by default); `PROCESS` in the body |
+| `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | anything but `ENTITY` or `ENTITY('key')`; a key containing `/ \ ? %` or `..` |
+| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV` whose `EXTERNALID` already exists; the same path rules |
+| `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); any action that is not on the allow-list (`MarkAllAsShipped`, `RecalculateAllPrices`, `CalculateFreight`, `ChangeCustomer` by default); `PROCESS` in the body |
 
-Every result names the company it ran against. Every failure comes back as
-`{ error, uncertain, advice }`, where `uncertain: true` means a timeout, a dropped
-connection or a 5xx: the write may or may not have happened, so **read the record back
-before sending it again**. A resent create or add duplicates.
+Every result names the company it ran against. Every failure carries `uncertain` and says
+what it means:
+
+- `uncertain: false` with `refused: true` — this server stopped it, or a check before the write
+  failed. **Nothing was sent.**
+- `uncertain: false` with an `error.status` — EBMS answered and said no. Nothing was saved.
+- `uncertain: true` — a timeout, a dropped connection, a response that broke off part-way, a
+  5xx, or a 2xx carrying an error message. The write may or may not have happened, so **read
+  the record back before sending it again**. A resent create or add duplicates.
+
+**Paths are parsed and rebuilt, not passed through.** The entity name is validated; each key
+value may not contain `/ \ ? %`, `..` or control characters, and is percent-encoded (so a `#`
+in a PO number is data, not a URL fragment). As a second check the client refuses any finished
+URL that is not inside the company's own OData root. That is what makes the company boundary
+hold even against text a model was tricked into using.
+
+**Actions are allowed by name, not refused by name.** EBMS has many bound actions that post,
+process, pay or send (`ProcessScanner`, `Post`, `Unpost`, `RecordPayment`, `Send`, …); a list of
+those could never be complete, so `ebms_command` runs only `EBMS_ALLOWED_COMMANDS`.
 
 ## Every write is verified
 
@@ -84,16 +99,33 @@ What is read, and how it is netted (worked out against SBX with someone who know
   level by level, so a made component of a made item is planned too.
 - **Two rules for shortage** — a projected stock-out pulls in a later receipt (an expedite
   message) or plans a dated order; being under the minimum only matters if it is still under at
-  the end of the time frame, which with every date collapsed to today is EBMS's own
-  `QUAN2ORDER`.
-- **Lead time** — EBMS keeps it (`INVENDOR.LEAD_DAYS`) but does not publish it through the API,
+  the end of the time frame. (`QUAN2ORDER` on the product is not a formula to match: it is
+  whatever EBMS's own purchasing screen last saved. The worksheet shows it as a reference.)
+- **A receipt with no expected date** is counted on the last day of the time frame — late enough
+  that it cannot quietly cover a shortage it may not arrive for, early enough to count toward the
+  minimum. Where it is needed sooner, the plan asks the buyer to confirm it by that date.
+- **What is already on order just after the time frame** is not netted, but it is shown: on the
+  worksheet, and beside any item the plan says to buy.
+- **Lead time** — kept per product vendor in EBMS (the `LEAD_DAYS` column, according to Koble) but not published through the API,
   so orders carry a needed-by date. `leadTimeDays` / `leadTimes` supply it when the user knows.
 
 **The worksheet.** `mrp_plan` writes a CSV (to `KOBLE_OUTPUT_DIR`, or `Documents/Koble MRP`) with
 every planned item: its status, the recommendation (`EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`, `OK`),
 the numbers behind it, and for purchases the vendor, part number, purchase unit, order quantity in
-that unit and cost from `INVENDOR`. A planner edits three columns — `Order Qty`, `Approve`, `Notes`
-— in a spreadsheet and hands it back. `po_from_csv` checks each approved row against EBMS, names
+that unit and cost from `INVENDOR` (the product's own stock unit when the vendor has none, stated
+on the order so EBMS cannot default to a case). A planner edits `Order Qty`, `Approve` and `Notes`
+— and `Vendor` where there is none — in a spreadsheet and hands it back.
+
+Spreadsheets reformat dates, turn long numeric product IDs into `3.94E+13` and drop leading
+zeros, so the file is not trusted for anything the planner was not meant to edit: `mrp_plan`
+also saves a small **run record** (`runs/<run>.json` beside the worksheet), and `po_from_csv`
+takes the item, unit, cost and date from it, keyed by the row's `Line`. Rows added by hand,
+duplicated rows, a changed `Run` cell, unrecognised `Approve` text and ambiguous quantities
+(`1,5`, `1e3`) are named as problems, and each draft lists what the planner changed. If the
+record cannot be found (the file moved to another computer) the file is read strictly and the
+result says so. Drafts do not send an expected date: EBMS sets a purchase line's `ETA_DATE` itself
+from the vendor's lead time, so the read-back reports it and the skill compares it with the day
+the stock is needed. `po_from_csv` checks each approved row against EBMS, names
 any it cannot order (no vendor, zero quantity, inactive product), and drafts one purchase order per
 vendor whose `EXTERNALID` is the run plus the vendor, so the same worksheet cannot order twice.
 The file is written and read by code so the numbers a person approves are the numbers ordered.
@@ -114,7 +146,7 @@ EBMS_COMPANIES=sbx,live          # optional: narrow to these IDs; unset = every 
 EBMS_SANDBOX=sbx                 # optional, while testing: writes go only here
 EBMS_COF_USERNAME=...            # optional per-company credentials
 EBMS_COF_PASSWORD=...
-EBMS_DENIED_COMMANDS=Send,RecordPayment,PrintReport,Sign
+EBMS_ALLOWED_COMMANDS=MarkAllAsShipped,RecalculateAllPrices,CalculateFreight,ChangeCustomer   # optional; this is the default
 EBMS_LOG_FILE=./logs/requests.jsonl   # optional; method, path, company, status, ms — never bodies
 ```
 
@@ -172,8 +204,10 @@ you will test against. Nothing here needs a Mac.
 
 **What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view` and `po_from_csv` never write
 to EBMS. Purchase orders are only created by the second skill, one at a time, after you say yes to
-each. With `EBMS_SANDBOX` set, writes can only go to that company, whatever anyone asks; leave it
-set while testing. `PROCESS` is refused everywhere.
+each. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
+this server builds itself, and a request that would land anywhere else is refused before it is
+sent. Leave it set while testing. The `PROCESS` field is refused in every request body, and
+`ebms_command` runs only a short list of actions, none of which posts, pays or sends.
 
 **What to look for, and tell us.** Numbers that disagree with what you know to be true, and why;
 products planned that should not be (or the reverse); units that come out wrong; anything the plan
@@ -201,7 +235,8 @@ client's `env` block (or `node --env-file=.env index.js`).
   without a rebuild and a restart. What it does do in code is arithmetic nobody should
   trust a model with: comparing what was stored against what was sent.
 - **The guards are the ones a model skips under pressure**, and only those: an
-  unconfigured company, `PROCESS`, duplicate `EXTERNALID`, denied commands, path shape.
+  unconfigured company, `PROCESS`, duplicate `EXTERNALID`, actions off the allow-list, and
+  anything in a path that could leave the company.
 - **Uncertainty is explicit.** Timeouts, network failures and 5xx responses are labelled
   so a skill can tell "EBMS said no" from "nobody knows".
 - **Credentials stay in the process.** They are read once, per company, and never enter a

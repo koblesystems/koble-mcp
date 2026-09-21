@@ -31,11 +31,20 @@ and stop.
 Call `po_from_csv`. It creates nothing. It returns:
 
 - `counts` — rows, BUY rows, how many were approved and how many were not.
-- `problems` — approved rows that cannot be ordered as they stand: no vendor, a quantity of 0,
-  a vendor or product that is not in EBMS or is inactive, an approved row that is not a BUY row,
-  a file that mixes runs or companies.
-- `drafts` — one per vendor: vendor name, line count, estimated cost, and under `write` the exact
-  request to send. A draft marked `alreadyCreated` was ordered from this same worksheet before.
+- `runRecordFound` — true when the run's own record was found on this computer. Then the
+  product, unit, cost and date on every line come from the run, and only Order Qty, Approve and
+  Vendor come from the file, so nothing a spreadsheet did to the file matters. If it is false,
+  say so, and ask the planner to check products, units and costs on each draft with extra care.
+- `problems` — approved rows that cannot be ordered as they stand: no vendor, a quantity that is
+  not a plain number above 0, a vendor or product that is not in EBMS or is inactive, an approved
+  row that is not a BUY row, a row that appears twice or was added by hand, Approve text it does
+  not recognise, a Run cell that was changed, a file that mixes runs or companies — or that this
+  server is not allowed to write to the company at all.
+- `notes` — things that were handled but are worth saying, such as a product ID the spreadsheet
+  had reformatted.
+- `drafts` — one per vendor: vendor name, line count, estimated cost, `changedByPlanner` (every
+  quantity or vendor that differs from the recommendation), and under `write` the exact request
+  to send. A draft marked `alreadyCreated` was ordered from this same worksheet before.
 
 **If there are problems, deal with them first.** Read each one out with its line number. The
 planner either fixes the file and hands it back, or tells you to go ahead without those rows.
@@ -51,7 +60,9 @@ For every draft that is not `alreadyCreated`, show:
 - the vendor (ID and name);
 - each line: product, quantity **with its unit**, unit cost if there is one, needed-by date;
 - the estimated total, or that it cannot be estimated because a cost is missing;
-- anything the planner changed from the recommendation, if you can see it.
+- everything in `changedByPlanner`, read out, so they can confirm each change was meant. A line
+  ordered in the stock unit because the chosen vendor has no record for the product needs a
+  second look at its quantity.
 
 Then ask plainly, per purchase order: *"Create this purchase order for BIKEPARTS — 2 lines,
 about $1,350?"* A yes to one is not a yes to the next. If they say "yes to all", list the
@@ -69,18 +80,23 @@ Read the result before moving on:
 
 - **`verification.ok` is true** — report the PO number (`record.INVOICE`), the vendor, and the
   stored lines from `verification.rows`: quantity, unit, cost. Use EBMS's values, not the
-  worksheet's.
+  worksheet's. Then look at each line's `ETA_DATE`: EBMS sets it itself, from the vendor's lead
+  time. Hold it against the draft's `neededBy` for that product and say plainly which lines are
+  **expected after they are needed** ("SADDLE is needed 25 Sep; EBMS expects it 5 Oct") and
+  which have **no expected date**. That is the planner's cue to call the vendor.
 - **`verification.ok` is false** — stop. Show every mismatch and problem exactly as returned
   (for example a quantity stored as 0, which means the product's unit is set up wrongly). The
   purchase order exists; tell the planner its number and what is wrong on it, and do not create
   the remaining ones until they say to continue.
 - **`refused: true` with an existing record** — it was already created from this worksheet.
   Report its number and move on.
-- **`uncertain: true`** (a timeout or dropped connection) — do **not** send it again. Look for it
-  with `ebms_get` on `APINV` filtered by the draft's `EXTERNALID`. If it is there, report it; if
-  not, tell the planner and ask before retrying.
-- **Any other refusal** — report EBMS's message. Nothing was saved. Ask before trying anything
-  else.
+- **`uncertain: true`** (a timeout, a dropped connection, a response that broke off) — do **not**
+  send it again. Look for it: `ebms_get` with `path` `APINV`, `filter`
+  `EXTERNALID eq '<the draft's EXTERNALID>'`, `select` `AUTOID,INVOICE,ID`. If it is there,
+  report its number and carry on; if it is not, tell the planner and ask before retrying.
+- **`uncertain: false`** with an error or a refusal — nothing was saved. If the result says the
+  write was not sent, it is safe to try again; otherwise report EBMS's message and ask before
+  trying anything else. Read the `uncertain` field, not the wording, to tell the two apart.
 
 ## 5. Finish
 
@@ -100,5 +116,6 @@ Do not offer to receive, process or pay the purchase orders.
   convert.
 - Costs come from the product's vendor record. A missing cost is left for EBMS to fill in; say so
   rather than estimating.
-- The needed-by date is sent as the line's expected date. It is when stock is needed, not a
-  promise from the vendor.
+- The needed-by date is **not** sent: EBMS works out a purchase line's expected date from the
+  vendor's lead time and ignores one that is sent. What comes back is EBMS's estimate of
+  arrival, which is the useful thing to compare with the day the stock is needed.

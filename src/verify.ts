@@ -37,11 +37,18 @@ const isControlKey = (key: string): boolean => key.startsWith("@") || key.starts
 
 /** Numbers within half a cent, strings ignoring padding and line-ending style, null the same as empty. */
 export function sameValue(sent: unknown, stored: unknown): boolean {
-    if (typeof sent === "number" && typeof stored === "number") return Math.abs(sent - stored) < TOLERANCE;
+    // A value that was sent and came back as nothing is never "close enough": that is the
+    // zeroed-quantity failure this check exists to catch, however small the number.
+    if (typeof sent === "number" && typeof stored === "number") return sent !== 0 && stored === 0 ? false : Math.abs(sent - stored) < TOLERANCE;
     if (typeof sent === "number" && typeof stored === "string" && stored.trim() !== "" && !Number.isNaN(Number(stored))) return Math.abs(sent - Number(stored)) < TOLERANCE;
     if (typeof sent === "boolean" || typeof stored === "boolean") return sent === stored;
     const text = (value: unknown): string => (value === null || value === undefined ? "" : String(value).replace(/\r\n/g, "\n").trim());
-    return text(sent) === text(stored);
+    // A date sent as a day and stored as midnight of that day is the same date.
+    const dayOf = (value: string): string | null => (/^\d{4}-\d{2}-\d{2}(T00:00:00(\.0+)?(Z|[+-]00:00)?)?$/.test(value) ? value.slice(0, 10) : null);
+    const a = text(sent);
+    const b = text(stored);
+    if (dayOf(a) !== null && dayOf(a) === dayOf(b)) return true;
+    return a === b;
 }
 
 export interface BodyShape {

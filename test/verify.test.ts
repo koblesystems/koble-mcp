@@ -10,6 +10,10 @@ test("values compare the way EBMS stores them", () => {
     assert.equal(sameValue("", null), true);
     assert.equal(sameValue(true, false), false);
     assert.equal(sameValue(12.5, "12.50"), true);
+    assert.equal(sameValue(0.004, 0), false, "a small quantity EBMS zeroed is still zeroed");
+    assert.equal(sameValue(0, 0.004), true);
+    assert.equal(sameValue("2026-10-05", "2026-10-05T00:00:00Z"), true);
+    assert.equal(sameValue("2026-10-05", "2026-10-06T00:00:00Z"), false);
 });
 
 test("a body splits into scalars, deltas and create arrays; control keys are ignored", () => {

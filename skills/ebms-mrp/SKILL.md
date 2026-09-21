@@ -45,12 +45,14 @@ It returns a summary and the path of the **worksheet**, a CSV saved on the user'
 Lead with the file, then what matters most. Keep it short; the detail is in the worksheet.
 
 1. **Where the worksheet is**, how many rows, and how many of each type.
-2. **Expedites** — incoming purchase orders or batches that arrive after the stock is needed.
-   These are the urgent ones: the supply exists, it is just late. Give the document, the item,
-   and the dates.
+2. **Expedites** — incoming purchase orders or batches that arrive after the stock is needed,
+   or that have no expected date at all. These are the urgent ones: the supply exists, it is
+   just late or undated. Give the document, the item, and the dates.
 3. **Stock-outs to buy**, grouped by vendor, soonest first. Say how many lines per vendor and
    name the biggest few. Call out any with **no primary vendor** — those cannot be ordered until
-   someone picks one.
+   someone picks one. If the result has `alreadyOnOrderJustAfterTimeFrame`, say which of these
+   items already have an order arriving shortly after the time frame: moving that order up may be
+   better than buying more, and the planner should decide.
 4. **What to make**, and for each what it pulls in below it. If a made item is *also purchased*,
    say so: the planner may prefer to buy it this time (`buyInstead`).
 5. **Not needed** — open purchase orders nothing in the plan requires. Present these as
@@ -61,7 +63,9 @@ Lead with the file, then what matters most. Keep it short; the detail is in the 
    wrongly (a unit that does not belong to the product, for instance) and someone should fix it.
 7. **Caveats that change how to read it:** if lead times are unknown, say the dates are
    needed-by dates. If many demand lines were already past due, say the plan treats them as due
-   now. If incoming receipts have no expected date, say their document date was assumed.
+   now. If incoming receipts have no expected date in EBMS, say so: they are counted on the last
+   day of the time frame, and where one is needed sooner it shows up as an `EXPEDITE` row asking
+   the buyer to confirm it will arrive by that date.
 
 Do not paste the whole plan into the chat. Do not recalculate quantities yourself.
 
@@ -85,8 +89,14 @@ Tell the planner what to do with it:
 - Open it in a spreadsheet. Rows are in reading order: `EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`,
   `OK`.
 - On the `BUY` rows they want ordered, put **Y** in **Approve**. They may change **Order Qty**
-  (it is in the vendor's purchase unit, shown beside it) and fill in **Vendor** where it says
-  there is none. **Notes** is theirs. Leave every other column alone.
+  (it is in the purchase unit shown beside it; plain numbers like `12` or `1.5`) and fill in or
+  change **Vendor**. **Notes** is theirs. Leave every other column alone — especially **Run** and
+  **Line**, which tie each row to this run. Rows cannot be added by hand.
+- A spreadsheet may reformat dates or long product numbers when it opens the file. That is
+  harmless as long as the purchase orders are created on the same computer that ran the plan,
+  because the run keeps its own record of each row.
+- **EBMS Qty To Order** is what EBMS's own purchasing screen last saved for the product. It is
+  there for comparison; the plan does not use it.
 - Save it as CSV and come back with it. The `ebms-mrp-purchase-orders` skill turns the approved
   rows into purchase orders, one per vendor, and asks before creating each.
 
@@ -101,8 +111,11 @@ Tell the planner what to do with it:
   batches, converted into each product's stock unit.
 - **Starting point:** on hand. Minimum, maximum and reorder increment come from the product.
 - **Two rules:** a projected stock-out pulls in a later receipt (an expedite) or plans a dated
-  order. Being under the minimum only produces an order if the item is still under it at the end
-  of the time frame — the same logic as EBMS's own "quantity to order", but aware of dates.
+  order, sized to bring the item back up to its maximum (or its minimum, if it has no maximum),
+  rounded up to the reorder increment. Being under the minimum only produces an order if the item
+  is still under it at the end of the time frame. There is at most one order per item per day.
+- **Receipts with no expected date** are counted on the last day of the time frame.
+- **What is on order after the time frame** is not counted, but it is shown.
 - **Made or bought:** an item is manufactured if it has ever been the finished good of a batch.
   Made items are exploded through their components, level by level. Kits and configure-to-order
   items that have never been on a batch are not planned as batches.

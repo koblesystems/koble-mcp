@@ -212,6 +212,8 @@ export function readSheet(text: string, manifest: RunManifest | null = null): Sh
 
 export interface PurchaseOrderDraft {
     vendor: string;
+    /** Item → the day the plan needs it, to hold against the expected date EBMS assigns. */
+    neededBy: Record<string, string>;
     externalId: string;
     lines: ApprovedLine[];
     estCost: number | null;
@@ -231,6 +233,7 @@ export function draftPurchaseOrders(reading: SheetReading): PurchaseOrderDraft[]
             vendor,
             externalId: `${reading.run}-${vendor}`.slice(0, 50),
             lines,
+            neededBy: Object.fromEntries(lines.filter((line) => line.neededBy).map((line) => [line.item, line.neededBy])),
             changes: lines.flatMap((line) => line.changes.map((change) => `${line.item}: ${change}`)),
             estCost: costed ? Math.round(lines.reduce((sum, line) => sum + line.qty * (line.unitCost ?? 0), 0) * 100) / 100 : null,
             body: {
@@ -241,7 +244,9 @@ export function draftPurchaseOrders(reading: SheetReading): PurchaseOrderDraft[]
                     O_QUAN_VIS: line.qty,
                     ...(line.unit !== null ? { UNIT_MEAS: line.unit } : {}),
                     ...(line.unitCost !== null ? { UNIT_VIS: line.unitCost } : {}),
-                    ...(/^\d{4}-\d{2}-\d{2}$/.test(line.neededBy) ? { ETA_DATE: `${line.neededBy}T00:00:00Z` } : {}),
+                    // No ETA_DATE: EBMS sets a purchase line's expected date itself (seen on SBX: a date
+                    // sent as the needed-by day came back as the vendor's lead-time date, or empty). The
+                    // read-back reports what EBMS chose, to compare with the day the stock is needed.
                 })),
             },
         };

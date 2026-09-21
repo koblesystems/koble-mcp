@@ -53,12 +53,12 @@ test("demand dated in the past is planned as due today and reported", () => {
     assert.ok(plan.exceptions.some((e) => e.type === "past-due-demand" && e.ref === "SO-1173"));
 });
 
-test("EBMS's own numbers are the one-bucket case: minimum, order-up-to and reorder increment, with no demand at all", () => {
+test("with no demand at all, an item under its minimum is brought back up: gap, order-up-to and reorder increment", () => {
     const at = (item: ItemParams, supplies: Supply[] = []) => runMrp({ today, items: [item], demands: [], supplies }).plannedOrders.map((o) => o.qty);
-    assert.deepEqual(at({ id: "GRAVELBIKE-01", onHand: 1, safetyStock: 10, orderMultiple: 5 }), [10]); // QUAN2ORDER 10
-    assert.deepEqual(at({ id: "FRAMESET-ALU", onHand: 5, safetyStock: 10 }), [5]); // QUAN2ORDER 5
-    assert.deepEqual(at({ id: "SHIFTERS", onHand: 0, safetyStock: 10, orderUpTo: 20 }, [po("SHIFTERS", 20, "2026-10-05")]), []); // 20 on order: QUAN2ORDER 0
-    assert.deepEqual(at({ id: "FLATBAR", onHand: -1, safetyStock: 20 }, [po("FLATBAR", 20, "2026-10-05")]), [1]); // net 19: QUAN2ORDER 1
+    assert.deepEqual(at({ id: "GRAVELBIKE-01", onHand: 1, safetyStock: 10, orderMultiple: 5 }), [10]);
+    assert.deepEqual(at({ id: "FRAMESET-ALU", onHand: 5, safetyStock: 10 }), [5]);
+    assert.deepEqual(at({ id: "SHIFTERS", onHand: 0, safetyStock: 10, orderUpTo: 20 }, [po("SHIFTERS", 20, "2026-10-05")]), []); // 20 already on order
+    assert.deepEqual(at({ id: "FLATBAR", onHand: -1, safetyStock: 20 }, [po("FLATBAR", 20, "2026-10-05")]), [1]); // net 19 against a minimum of 20
     assert.deepEqual(at({ id: "GRAVEL2", onHand: 1, safetyStock: 2, orderUpTo: 5 }), [4]); // up to the maximum
 });
 

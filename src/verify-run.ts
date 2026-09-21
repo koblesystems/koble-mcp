@@ -7,6 +7,7 @@
  * nested expand costs EBMS tens of seconds on a large document.
  */
 import { odataString, request } from "./ebms/client.js";
+import { EbmsError } from "./ebms/errors.js";
 import { checkRecord, checkRows, childrenOf, emptyVerification, fieldsOf, finish, shapeOf, type BodyShape, type Json, type Verification } from "./verify.js";
 
 const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -48,7 +49,9 @@ export interface Before {
 export async function readBefore(company: string, path: string, body: unknown): Promise<Before> {
     const shape = shapeOf(body);
     const before: Before = { rows: {}, children: {} };
-    const navsWithAdds = Object.keys(shape.deltas).filter((nav) => FIELD_RE.test(nav) && hasAdds(shape.deltas[nav] ?? []));
+    // A plain `Nav: [...]` array on a PATCH adds rows too, so the rows that were already there
+    // must be known or an old row could be mistaken for the new one.
+    const navsWithAdds = navsOf(shape).filter((nav) => shape.creates[nav] !== undefined || hasAdds(shape.deltas[nav] ?? []));
     if (navsWithAdds.length > 0) {
         const record = (await request(company, "GET", `${path}${query([], navsWithAdds.map((nav) => `${nav}($select=AUTOID)`))}`)).body as Json | null;
         for (const nav of navsWithAdds) before.rows[nav] = new Set(rowsOf(record, nav).map((row) => String(row["AUTOID"] ?? "")));
@@ -99,7 +102,7 @@ export async function verifyWrite(company: string, path: string, body: unknown, 
 
     for (const nav of navs) {
         const entries = allEntries(shape, nav);
-        const isCreate = before === null || (shape.deltas[nav] === undefined && shape.creates[nav] !== undefined && before.rows[nav] === undefined);
+        const isCreate = before === null;
         const matched = checkRows("", nav, entries, rowsOf(record, nav), isCreate ? null : (before?.rows[nav] ?? new Set(rowsOf(record, nav).map((row) => String(row["AUTOID"])))), out);
 
         // Nested children, read only for the parents this write touched.
@@ -137,8 +140,11 @@ export async function verifyDelete(company: string, path: string): Promise<Verif
     try {
         await request(company, "GET", `${path}?%24select=AUTOID`);
         out.problems.push("The record is still there after the DELETE.");
-    } catch {
-        // Not found is the expected outcome.
+    } catch (error) {
+        // Only "not found" proves it is gone. EBMS says that as a 404, or a 400/422 "Key not found".
+        const status = error instanceof EbmsError ? error.status : -1;
+        const gone = status === 404 || ((status === 400 || status === 422) && /key not found|not found/i.test(error instanceof EbmsError ? `${error.message} ${error.detail ?? ""}` : ""));
+        if (!gone) out.problems.push(`Could not confirm the record is gone: the read-back failed (${error instanceof Error ? error.message : String(error)}). Read it again before assuming the DELETE worked.`);
     }
     return finish(out);
 }

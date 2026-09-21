@@ -42,7 +42,7 @@ const server = new McpServer(
     { name: "koble-mcp", version: "0.1.0" },
     {
         instructions:
-            "Thin proxy over EBMS OData. Use the ebms-api skill for syntax and quirks and the task skills for procedure. " +
+            "Thin proxy over EBMS OData, plus read-only planning tools. Follow the ebms-mrp and ebms-mrp-purchase-orders skills when they are installed. " +
             "PROCESS is never accepted, and ebms_command runs only a short allow-list of actions; a POST whose EXTERNALID already exists is refused; a 2xx is not proof a write applied — read back. " +
             describeSetup(),
     },

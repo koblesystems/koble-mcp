@@ -55,7 +55,7 @@ export function buildTree(input: { item: string; qty: number; items: readonly Bo
         const item = byId.get(id);
         const node: TreeNode = { item: id, level, qtyPer, required: round(required), fromStock: 0, short: 0, action: "none", children: [] };
         if (item?.nonStock) return { ...node, note: "not a stocked material; left out of the plan" };
-        if (path.includes(id)) return { ...node, short: node.required, note: `loop: ${[...path, id].join(" → ")}; not followed further` };
+        if (path.includes(id)) return { ...node, short: node.required, action: "make", note: `loop: ${[...path, id].join(" → ")}; not followed further` };
 
         // The finished good itself is what is being built, so its own stock is not consumed at level 0.
         const have = level === 0 ? 0 : (pool.get(id) ?? 0);
@@ -79,9 +79,17 @@ export function buildTree(input: { item: string; qty: number; items: readonly Bo
         return node;
     };
 
+    let looped = false;
+    const flag = (node: TreeNode): void => {
+        if (node.note?.startsWith("loop")) looped = true;
+        node.children.forEach(flag);
+    };
     const root = visit(input.item, 1, input.qty, 0, []);
+    flag(root);
     const list = [...totals.values()].filter((row) => row.item !== input.item);
-    return { root, totals: list, canBuildFromStock: list.every((row) => row.action === "make" || row.short === 0) && list.filter((row) => row.action === "buy").every((row) => row.short === 0) };
+    // "From stock" means nothing has to be BOUGHT: sub-assemblies may still have to be made, from
+    // parts that are on the shelf. A loop in the bill of materials means the answer is not known.
+    return { root, totals: list, canBuildFromStock: !looped && list.filter((row) => row.action === "buy").every((row) => row.short === 0) };
 }
 
 /** An indented text rendering, for a tool result or a report. */

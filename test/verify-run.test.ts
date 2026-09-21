@@ -150,3 +150,41 @@ test("when only the read-back fails, the write is not called failed and the advi
     assert.match(r.next, /only the read-back failed.*do not resend/);
     assert.equal(order.Details[0]?.M_QUAN_VIS, 30);
 });
+
+test("a PATCH that sends a plain Details array cannot pass by pointing at a row that was already there", async () => {
+    fresh();
+    const ignoring = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => ((init?.method ?? "GET") === "PATCH" ? new Response(JSON.stringify({ AUTOID: "O1" }), { status: 200 }) : ignoring(url, init))) as typeof fetch;
+    try {
+        const r = await call({ company: "sbx", method: "PATCH", path: "ARINV('O1')", body: { Details: [{ INVEN: "MUG", M_QUAN_VIS: 24 }] } });
+        assert.equal(r.verification.ok, false);
+        assert.match(r.verification.problems[0], /no new row appeared/);
+    } finally {
+        globalThis.fetch = ignoring;
+    }
+});
+
+test("a DELETE is only verified by 'not found'; a read-back that fails some other way is not proof", async () => {
+    fresh();
+    const real = globalThis.fetch;
+    let mode: "gone" | "timeout" | "still" = "gone";
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+        const method = init?.method ?? "GET";
+        if (String(url).endsWith("/Token")) return real(url, init);
+        if (method === "DELETE") return new Response(null, { status: 204 });
+        if (mode === "gone") return new Response(JSON.stringify({ Messages: [{ TextBriefDescription: "Key not found" }] }), { status: 422 });
+        if (mode === "timeout") throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+        return new Response(JSON.stringify({ AUTOID: "O1" }), { status: 200 });
+    }) as typeof fetch;
+    try {
+        assert.equal((await call({ company: "sbx", method: "DELETE", path: "ARINV('O1')" })).verification.ok, true);
+        mode = "timeout";
+        const unsure = await call({ company: "sbx", method: "DELETE", path: "ARINV('O1')" });
+        assert.equal(unsure.verification.ok, false);
+        assert.match(unsure.verification.problems[0], /Could not confirm the record is gone/);
+        mode = "still";
+        assert.match((await call({ company: "sbx", method: "DELETE", path: "ARINV('O1')" })).verification.problems[0], /still there/);
+    } finally {
+        globalThis.fetch = real;
+    }
+});

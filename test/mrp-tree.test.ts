@@ -50,5 +50,6 @@ test("labour is shown but left out, a loop is reported rather than followed, and
     const { root, totals } = buildTree({ item: "BAG12", qty: 4, items: withLabour, available: { ROAST: 1 } });
     assert.equal(totals.some((t) => t.item === "LABOUR"), false);
     assert.match(root.children.find((n) => n.item === "BAG12")?.note ?? "", /loop/);
+    assert.equal(buildTree({ item: "BAG12", qty: 4, items: withLabour, available: { ROAST: 99 } }).canBuildFromStock, false, "with a loop the answer is not known, so it is not yes");
     assert.deepEqual(renderTree(root).slice(0, 2), ["BAG12  need 4, make 4", "  ROAST  need 3 (0.75 each), 1 from stock, buy 2"]);
 });

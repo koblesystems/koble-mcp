@@ -40,7 +40,8 @@ test("only approved BUY rows become purchase-order lines, one order per vendor, 
     assert.deepEqual(drafts.map((d) => d.vendor), ["BIKEPARTS", "PACKCO"]);
     assert.equal(drafts[0]?.externalId, `${RUN}-BIKEPARTS`);
     assert.equal(drafts[0]?.estCost, 1125);
-    assert.deepEqual(drafts[0]?.body, { ID: "BIKEPARTS", EXTERNALID: `${RUN}-BIKEPARTS`, Details: [{ INVEN: "SADDLE", O_QUAN_VIS: 50, UNIT_MEAS: "Each", UNIT_VIS: 22.5, ETA_DATE: "2026-09-25T00:00:00Z" }] });
+    assert.deepEqual(drafts[0]?.body, { ID: "BIKEPARTS", EXTERNALID: `${RUN}-BIKEPARTS`, Details: [{ INVEN: "SADDLE", O_QUAN_VIS: 50, UNIT_MEAS: "Each", UNIT_VIS: 22.5 }] });
+    assert.deepEqual(drafts[0]?.neededBy, { SADDLE: "2026-09-25" }, "the needed-by day is kept to compare with the expected date EBMS assigns; it is not sent");
 });
 
 test("what a spreadsheet does to the file does not reach the purchase order when the run record is there", () => {
@@ -63,7 +64,7 @@ test("what a spreadsheet does to the file does not reach the purchase order when
     assert.deepEqual(zero?.changes, ["vendor set to ACME"]);
     assert.equal(reading.notes.filter((n) => /spreadsheets often reformat/.test(n)).length, 2);
     const [draft] = draftPurchaseOrders({ ...reading, approved: [long as NonNullable<typeof long>] });
-    assert.deepEqual(draft?.body["Details"], [{ INVEN: "12345678901234", O_QUAN_VIS: 3, UNIT_MEAS: "", ETA_DATE: "2026-10-05T00:00:00Z" }], "a blank-named stock unit is still sent, so EBMS cannot default to a case");
+    assert.deepEqual(draft?.body["Details"], [{ INVEN: "12345678901234", O_QUAN_VIS: 3, UNIT_MEAS: "" }], "a blank-named stock unit is still sent, so EBMS cannot default to a case");
 });
 
 test("without the run record the file is read strictly and says so", () => {
