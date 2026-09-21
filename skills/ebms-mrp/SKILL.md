@@ -33,6 +33,14 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
    API, so by default the plan says when stock is *needed*, not when to *order*. If the planner
    gives a number ("assume three weeks", or per product), pass `leadTimeDays` / `leadTimes` and
    the plan adds release dates and flags anything already too late. Never invent one.
+5. **What a minimum means to them**, the first time you plan for a company. "When an item drops
+   under its minimum, do you reorder right then, or is the minimum a level to be back at by the
+   end of the period?" Reorder right then is `minimumRule: "when-crossed"` (the default): the
+   order is dated the day the item went under, and because that stock arrives early it can make
+   hurrying an existing purchase order unnecessary. Back by the end is `"by-end"`: the order is
+   dated the last day of the time frame, and an existing order is still expedited to cover a
+   stock-out in between. It is company policy, not a per-run choice; once they have answered,
+   use the same rule every time and say which one the plan used.
 
 Leave `includeJobs` on unless they say job transfers should not count as demand.
 
@@ -129,7 +137,9 @@ Tell the planner what to do with it:
 - **Two rules:** a projected stock-out pulls in a later receipt (an expedite) or plans a dated
   order, sized to bring the item back up to its maximum (or its minimum, if it has no maximum),
   rounded up to the reorder increment. Being under the minimum only produces an order if the item
-  is still under it at the end of the time frame. There is at most one order per item per day.
+  is still under it at the end of the time frame; `minimumRule` decides whether that order is
+  dated the day the item went under (and the rest of the time frame planned with it in hand) or
+  the last day of the time frame. There is at most one order per item per day.
 - **Receipts with no expected date** are counted on the last day of the time frame.
 - **What is on order after the time frame** is not counted, but it is shown.
 - **Made or bought:** an item is manufactured if it has ever been the finished good of a batch.

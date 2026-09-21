@@ -211,7 +211,19 @@ interface Receipt extends Supply {
     effective: string;
 }
 
-function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: readonly Supply[], today: string, laterShortfall: number, out: { orders: PlannedOrder[]; exceptions: PlanException[] }): ItemPlan & { planned: PlannedOrder[] } {
+/**
+ * How an item that ends the time frame under its minimum is brought back up.
+ * "when-crossed": the minimum is a reorder point — order for the day it went under for good, and
+ * plan the rest of the time frame with that order in place (so it can replace an expedite).
+ * "by-end": the minimum is a level to be back at by the end of the time frame — order for the last day.
+ */
+export type MinimumRule = "when-crossed" | "by-end";
+
+interface Frame { today: string; lastDay: string; laterShortfall: number; rule: MinimumRule }
+
+function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: readonly Supply[], frame: Frame, restore?: { date: string; qty: number; peg: Peg }): ItemPlan & { planned: PlannedOrder[]; exceptions: PlanException[] } {
+    const { today, laterShortfall } = frame;
+    const out = { exceptions: [] as PlanException[] };
     const safety = item.safetyStock ?? 0;
     const target = Math.max(safety, item.orderUpTo ?? 0);
     const action = item.make ? "make" : "buy";
@@ -249,7 +261,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
 
     let balance = round(item.onHand);
     const startsShort = round(item.onHand) < 0;
-    const days = [...new Set([...(startsShort ? [today] : []), ...demands.map((d) => d.due), ...receipts.map((r) => r.due)])].sort(cmp);
+    const days = [...new Set([...(startsShort ? [today] : []), ...(restore ? [restore.date] : []), ...demands.map((d) => d.due), ...receipts.map((r) => r.due)])].sort(cmp);
     for (const date of days) {
         for (const receipt of receipts) {
             if (receipt.due !== date || receipt.used) continue;
@@ -265,6 +277,11 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             timeline.push({ date, change: -demand.qty, balance, what: `${demand.kind} ${demand.ref}` });
             const pushedUnder = round(Math.max(0, -balance) - Math.max(0, -before));
             if (pushedUnder > 0) pegs.push({ ref: demand.ref, kind: demand.kind, qty: pushedUnder, date });
+        }
+        if (restore?.date === date) {
+            balance = round(balance + restore.qty);
+            timeline.push({ date, change: restore.qty, balance, what: `planned ${action} (restore minimum)` });
+            place(newOrder(date, restore.qty, [restore.peg]));
         }
         // A real stock-out: pull in the EARLIEST later receipts first, then plan what is still missing.
         while (balance < 0) {
@@ -295,26 +312,19 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
         endOfDay.push({ date, balance });
     }
 
-    // Still under the minimum when the time frame ends: restore it, dated from the start of the
-    // final stretch below the minimum, and folded into that day's order if there already is one.
-    if (balance < safety) {
+    // Still under the minimum when the time frame ends. A planned order always lifts the balance
+    // to the minimum or above, so the day chosen here never already has one.
+    if (balance < safety && !restore) {
         let since = endOfDay.length;
         while (since > 0 && (endOfDay[since - 1]?.balance ?? 0) < safety) since -= 1;
-        const neededBy = since === 0 && round(item.onHand) < safety ? today : (endOfDay[since]?.date ?? today);
-        const peg: Peg = { ref: safety > 0 ? String(safety) : "0 (on hand is negative)", kind: "minimum", qty: round(safety - balance), date: neededBy };
-        const sameDay = planned.find((order) => order.receiptDate === neededBy);
-        if (sameDay) {
-            const resized = lotSize(round(target - (balance - sameDay.qty)), item);
-            balance = round(balance - sameDay.qty + resized);
-            sameDay.qty = resized;
-            sameDay.pegs.push(peg);
-            timeline.push({ date: neededBy, change: 0, balance, what: `planned ${action} resized to restore the minimum` });
-        } else {
-            const qty = lotSize(round(target - balance), item);
-            balance = round(balance + qty);
-            timeline.push({ date: neededBy, change: qty, balance, what: `planned ${action} (restore minimum)` });
-            place(newOrder(neededBy, qty, [peg]));
-        }
+        const wentUnder = since === 0 && round(item.onHand) < safety ? today : (endOfDay[since]?.date ?? today);
+        const date = frame.rule === "by-end" ? frame.lastDay : wentUnder;
+        const peg: Peg = { ref: safety > 0 ? String(safety) : "0 (on hand is negative)", kind: "minimum", qty: round(safety - balance), date };
+        const qty = lotSize(round(target - balance), item);
+        if (frame.rule === "when-crossed") return planItem(item, demandsIn, suppliesIn, frame, { date, qty, peg });
+        balance = round(balance + qty);
+        timeline.push({ date, change: qty, balance, what: `planned ${action} (restore minimum)` });
+        place(newOrder(date, qty, [peg]));
     }
 
     for (const receipt of receipts) {
@@ -345,8 +355,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
         }
     }
 
-    out.orders.push(...planned);
-    return { item: item.id, level: 0, timeline, endingBalance: balance, planned };
+    return { item: item.id, level: 0, timeline, endingBalance: balance, planned, exceptions: out.exceptions };
 }
 
 /**
@@ -355,7 +364,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
  * listed instead, receipts included, so nobody buys what is already on order. Past-due demand
  * is always inside the time frame. Minimum levels are held for the whole time frame.
  */
-export function runMrp(input: { today: string; through?: string | undefined; items: readonly ItemParams[]; demands: readonly Demand[]; supplies: readonly Supply[] }): Plan {
+export function runMrp(input: { today: string; through?: string | undefined; minimumRule?: MinimumRule | undefined; items: readonly ItemParams[]; demands: readonly Demand[]; supplies: readonly Supply[] }): Plan {
     const out = { orders: [] as PlannedOrder[], exceptions: [] as PlanException[] };
     const through = input.through ?? null;
     const inside = (date: string): boolean => through === null || date <= through;
@@ -405,7 +414,12 @@ export function runMrp(input: { today: string; through?: string | undefined; ite
     const items: ItemPlan[] = [];
     for (const item of order) {
         const afterFrame = beyond.get(item.id);
-        const plan = planItem(item, demands.get(item.id) ?? [], supplies.get(item.id) ?? [], input.today, afterFrame ? Math.max(0, round(afterFrame.demandQty - afterFrame.supplyQty)) : 0, out);
+        const mine = { demands: demands.get(item.id) ?? [], supplies: supplies.get(item.id) ?? [] };
+        const lastDay = through ?? [input.today, ...mine.demands.map((d) => d.date), ...mine.supplies.map((s) => s.date)].sort(cmp).at(-1) ?? input.today;
+        const laterShortfall = afterFrame ? Math.max(0, round(afterFrame.demandQty - afterFrame.supplyQty)) : 0;
+        const plan = planItem(item, mine.demands, mine.supplies, { today: input.today, lastDay, laterShortfall, rule: input.minimumRule ?? "when-crossed" });
+        out.orders.push(...plan.planned);
+        out.exceptions.push(...plan.exceptions);
         items.push({ item: plan.item, level: levels.get(item.id) ?? 0, timeline: plan.timeline, endingBalance: plan.endingBalance });
         if (!item.make) continue;
         for (const planned of plan.planned) {

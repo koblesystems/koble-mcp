@@ -77,6 +77,26 @@ test("still under the minimum at the end of the time frame: restore it, dated fr
     assert.equal(plan.plannedOrders[0]?.pegs[0]?.kind, "minimum");
 });
 
+test("the minimum rule is the customer's choice: a reorder point replaces the expedite, a level to be back at keeps it", () => {
+    // 12 on hand, minimum 10. 5 go on Oct 1 (7 left: under, not out), 10 on Oct 20 (-3: out). A PO for 5 is due Nov 10.
+    const input = { today, through: "2026-11-20", items: [{ id: "A", onHand: 12, safetyStock: 10 }], demands: [sales("A", 5, "2026-10-01", "SO-1"), sales("A", 10, "2026-10-20", "SO-2")], supplies: [po("A", 5, "2026-11-10")] };
+    const show = (plan: ReturnType<typeof runMrp>) => ({ orders: plan.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}`), exceptions: plan.exceptions.map((e) => e.type), ends: plan.items[0]?.endingBalance });
+
+    // Reorder point: order the day it went under for good; with that stock in hand Oct 20 is covered and the PO can arrive when it likes.
+    assert.deepEqual(show(runMrp({ ...input, minimumRule: "when-crossed" })), { orders: ["8 by 2026-10-01"], exceptions: [], ends: 10 });
+    assert.deepEqual(show(runMrp(input)), show(runMrp({ ...input, minimumRule: "when-crossed" })), "the default");
+
+    // Level to be back at: the stock-out is real, so the PO is pulled in, and the top-up is dated the last day of the time frame.
+    assert.deepEqual(show(runMrp({ ...input, minimumRule: "by-end" })), { orders: ["8 by 2026-11-20"], exceptions: ["expedite"], ends: 10 });
+});
+
+test("a reorder-point order too small to prevent a later stock-out still leaves that stock-out handled", () => {
+    const plan = runMrp({ today, through: "2026-11-20", minimumRule: "when-crossed", items: [{ id: "A", onHand: 12, safetyStock: 10 }], demands: [sales("A", 5, "2026-10-01"), sales("A", 40, "2026-10-20", "SO-2")], supplies: [po("A", 35, "2026-11-10")] });
+    assert.deepEqual(plan.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}`), ["8 by 2026-10-01"]);
+    assert.deepEqual(plan.exceptions.map((e) => `${e.type} ${e.ref} to ${e.to}`), ["expedite PO-1 to 2026-10-20"]);
+    assert.equal(plan.items[0]?.endingBalance, 10);
+});
+
 test("planned production explodes into dated demand on its components, lowest level last", () => {
     const items: ItemParams[] = [
         { id: "LEG", onHand: 10, leadTimeDays: 5 },
@@ -176,12 +196,13 @@ test("the plan never depends on the order rows arrive in", () => {
     let seed = 7;
     const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
     const shuffle = <T>(list: readonly T[]): T[] => { const a = [...list]; for (let i = a.length - 1; i > 0; i -= 1) { const j = rnd(i + 1); [a[i], a[j]] = [a[j] as T, a[i] as T]; } return a; };
-    for (let run = 0; run < 300; run += 1) {
+    for (let run = 0; run < 600; run += 1) {
         const item: ItemParams = { id: "X", onHand: rnd(30), ...(rnd(2) ? { safetyStock: rnd(15) } : {}), ...(rnd(3) === 0 ? { orderUpTo: 20 + rnd(30) } : {}), ...(rnd(3) === 0 ? { orderMultiple: 1 + rnd(12) } : {}) };
         const demands = Array.from({ length: 1 + rnd(6) }, (_, i) => sales("X", 1 + rnd(25), addDays(today, rnd(12)), `SO-${i}`));
         const supplies = Array.from({ length: rnd(5) }, (_, i) => po("X", 1 + rnd(25), addDays(today, rnd(20)), `PO-${i}`));
-        const a = runMrp({ today, items: [item], demands, supplies });
-        const b = runMrp({ today, items: [item], demands: shuffle(demands), supplies: shuffle(supplies) });
+        const minimumRule = run % 2 === 0 ? "when-crossed" : "by-end";
+        const a = runMrp({ today, minimumRule, items: [item], demands, supplies });
+        const b = runMrp({ today, minimumRule, items: [item], demands: shuffle(demands), supplies: shuffle(supplies) });
         assert.deepEqual(b.plannedOrders, a.plannedOrders, `run ${run}`);
         assert.deepEqual(b.exceptions, a.exceptions, `run ${run}`);
         const perDay = new Set(a.plannedOrders.map((o) => o.receiptDate));

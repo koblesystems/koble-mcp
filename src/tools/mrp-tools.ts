@@ -58,6 +58,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 vendors: z.array(z.string()).optional().describe("With scope 'vendors': vendor IDs or names. A product belongs to its primary vendor."),
                 items: z.array(z.string()).optional().describe("With scope 'products': the product IDs to report."),
                 includeJobs: z.boolean().optional().describe("Count job transfers as demand. Default true."),
+                minimumRule: z.enum(["when-crossed", "by-end"]).optional().describe("How an item that ends the time frame under its minimum is restored. when-crossed (default): the minimum is a reorder point, so the order is dated the day the item went under and can replace an expedite. by-end: the minimum is a level to be back at by the end of the time frame, so the order is dated its last day. It is a company policy; ask once."),
                 leadTimeDays: z.number().int().min(0).max(365).optional().describe("A lead time to assume for every item, only if the user states one."),
                 leadTimes: z.record(z.string(), z.number().int().min(0).max(365)).optional().describe("Lead time in days per product ID, overriding leadTimeDays."),
                 maxRows: z.number().int().min(5).max(500).optional().describe("Rows per section in this result, default 25. The worksheet always has every row."),
@@ -80,7 +81,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
 
                 const started = Date.now();
                 const snapshot = await takeSnapshot(id, { today: now, through, includeJobs: args.includeJobs, alsoMade: args.alsoMade, buyInstead: args.buyInstead, leadTimeDays: args.leadTimeDays, leadTimes: args.leadTimes });
-                const plan = runMrp({ today: now, through, items: snapshot.items, demands: snapshot.demands, supplies: snapshot.supplies });
+                const plan = runMrp({ today: now, through, minimumRule: args.minimumRule, items: snapshot.items, demands: snapshot.demands, supplies: snapshot.supplies });
                 const scope = await resolveScope(id, snapshot, { scope: args.scope, vendors: args.vendors, items: args.items });
                 if ("ask" in scope) return ask(scope.ask, { vendorsWithProducts: scope.vendorsWithProducts });
 
@@ -88,6 +89,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     company: id,
                     scope: scope.label,
                     timeFrame: { from: now, through },
+                    minimumRule: args.minimumRule ?? "when-crossed",
                     leadTimes: args.leadTimeDays === undefined && !args.leadTimes ? "unknown: EBMS does not publish them, so orders show when stock is needed, not when to order" : "as supplied by the user",
                     ...summarise(plan, snapshot, scope.inScope, args.maxRows ?? 25),
                 };
