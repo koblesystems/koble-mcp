@@ -6,13 +6,15 @@
  * many tokens to get a worse answer. They write nothing. Turning a planned order into a
  * purchase order is a separate, confirmed step through ebms_write, guided by a skill.
  */
+import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod/v4";
 import { assertWriteCompany, resolveCompany } from "../config.js";
 import { odataString } from "../ebms/client.js";
-import { draftPurchaseOrders, readSheet, toCsv } from "../mrp/csv.js";
+import { draftPurchaseOrders, parseCsv, readSheet, toCsv, type RunManifest } from "../mrp/csv.js";
+import { baseUnitOf, type UnitRow } from "../mrp/units.js";
 import { readAll } from "../mrp/snapshot.js";
 import { buildWorksheet, runId } from "../mrp/worksheet.js";
 import { addDays, runMrp, type PlannedOrder } from "../mrp/engine.js";
@@ -21,7 +23,12 @@ import { buildTree, renderTree } from "../mrp/tree.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
-const today = (): string => new Date().toISOString().slice(0, 10);
+/** Today where the planner is, not in UTC: after 5 pm Pacific, UTC is already tomorrow. */
+const today = (): string => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+};
+const isRealDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 /** Where worksheets go: KOBLE_OUTPUT_DIR, or "Koble MRP" in the user's Documents folder. */
 const outputDir = (given: string | undefined): string => resolve(given?.trim() || process.env["KOBLE_OUTPUT_DIR"] || join(homedir(), "Documents", "Koble MRP"));
 const cap = <T>(list: readonly T[], max: number): { shown: T[]; more: number } => ({ shown: list.slice(0, max), more: Math.max(0, list.length - max) });
@@ -58,8 +65,10 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 if (!args.through && !args.days) return jsonResult({ needsInput: "Ask the user for the time frame: a date to cover through, or a number of days. Do not assume one." });
                 const now = today();
                 const through = args.through ?? addDays(now, args.days ?? 30);
+                if (!isRealDate(through)) return jsonResult({ needsInput: `"${through}" is not a calendar date. Ask the user for the time frame again, as yyyy-mm-dd or a number of days.` });
+                if (through < now) return jsonResult({ needsInput: `${through} is already in the past (today is ${now}). Ask the user how far ahead the plan should cover.` });
                 const started = Date.now();
-                const snapshot = await takeSnapshot(company, { today: now, includeJobs: args.includeJobs, alsoMade: args.alsoMade, buyInstead: args.buyInstead, leadTimeDays: args.leadTimeDays, leadTimes: args.leadTimes });
+                const snapshot = await takeSnapshot(company, { today: now, through, includeJobs: args.includeJobs, alsoMade: args.alsoMade, buyInstead: args.buyInstead, leadTimeDays: args.leadTimeDays, leadTimes: args.leadTimes });
                 const plan = runMrp({ today: now, through, items: snapshot.items, demands: snapshot.demands, supplies: snapshot.supplies });
 
                 const wanted = args.items ? new Set(args.items.map((id) => id.trim())) : null;
@@ -87,7 +96,9 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 const important = cap(exceptions.filter((e) => !quiet.has(e.type)).map((e) => ({ type: e.type, item: e.item, message: e.message })), max);
                 const late = exceptions.filter((e) => e.type === "past-due-demand");
                 const oldest = late.map((e) => e.from ?? "").filter(Boolean).sort()[0];
-                const beyond = cap(plan.beyondHorizon.filter((b) => b.demandQty > 0 && (wanted === null || wanted.has(b.item))), 20);
+                const beyond = cap(plan.beyondHorizon.filter((b) => b.demandQty > 0 && (wanted === null || wanted.has(b.item))).map(({ supplies: _s, ...rest }) => rest), 20);
+                const buying = new Set(orders.filter((o) => o.action === "buy").map((o) => o.item));
+                const alreadyOnOrder = cap(plan.beyondHorizon.filter((b) => b.supplies.length > 0 && buying.has(b.item)).map((b) => ({ item: b.item, onOrder: b.supplies.map((sup) => `${sup.ref}: ${sup.qty} on ${sup.date}`) })), max);
 
                 let worksheet: Record<string, unknown> | undefined;
                 if (args.worksheet ?? true) {
@@ -97,6 +108,9 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     await mkdir(dir, { recursive: true });
                     const file = join(dir, `${run} through ${through}.csv`);
                     await writeFile(file, toCsv(sheet.rows), "utf8");
+                    // The run's own record, which po_from_csv trusts over anything a spreadsheet did to the file.
+                    await mkdir(join(dir, "runs"), { recursive: true });
+                    await writeFile(join(dir, "runs", `${run}.json`), JSON.stringify(sheet.manifest, null, 1), "utf8");
                     const byType: Record<string, number> = {};
                     for (const row of sheet.rows) byType[String(row.Type)] = (byType[String(row.Type)] ?? 0) + 1;
                     worksheet = { path: file, run, rows: sheet.rows.length, byType, editableColumns: ["Order Qty", "Approve", "Notes"], warnings: sheet.warnings };
@@ -115,7 +129,8 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     exceptions: important.shown,
                     ...(important.more ? { exceptionsNotShown: important.more } : {}),
                     ...(late.length > 0 ? { pastDueDemand: `${late.length} open demand lines were already due before today (oldest ${oldest}); they are planned as due now.` } : {}),
-                    ...((byType["assumed-date"] ?? 0) > 0 ? { assumedDates: `${byType["assumed-date"]} incoming receipts have no expected date in EBMS; their document date was used.` } : {}),
+                    ...((byType["assumed-date"] ?? 0) > 0 ? { assumedDates: `${byType["assumed-date"]} incoming receipts have no expected date in EBMS. They are counted on the last day of the time frame, so they cannot hide a shortage: where one is needed sooner, the plan asks you to confirm it by that date.` } : {}),
+                    ...(alreadyOnOrder.shown.length > 0 ? { alreadyOnOrderJustAfterTimeFrame: alreadyOnOrder.shown, alreadyOnOrderNote: "These items are recommended to BUY but already have receipts dated after the time frame. Tell the user: moving that order up may be better than buying more." } : {}),
                     demandAfterTimeFrame: beyond.shown,
                     leftOut: snapshot.skipped,
                     warnings: snapshot.warnings,
@@ -142,11 +157,27 @@ export function registerMrpTools(register: ToolRegistrar): void {
         async (args) => {
             try {
                 const company = resolveCompany(args.company);
-                assertWriteCompany(company);
+                let cannotWrite: string | null = null;
+                try {
+                    assertWriteCompany(company);
+                } catch (error) {
+                    cannotWrite = error instanceof Error ? error.message : String(error);
+                }
                 if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path, or its CSV text." });
                 const textIn = args.csv ?? (await readFile(resolve(args.path as string), "utf8"));
-                const reading = readSheet(textIn);
+                // Find the run's own record: beside the file, or in the usual output folder.
+                const runInFile = parseCsv(textIn).map((row) => row["Run"] ?? "").find(Boolean) ?? "";
+                let manifest: RunManifest | null = null;
+                if (/^mrp-[a-z0-9_-]+-\d{8}-\d{4,6}$/i.test(runInFile)) {
+                    const places = [...(args.path ? [join(dirname(resolve(args.path)), "runs")] : []), join(outputDir(undefined), "runs")];
+                    for (const place of places) {
+                        const candidate = join(place, `${runInFile}.json`);
+                        if (existsSync(candidate)) { manifest = JSON.parse(await readFile(candidate, "utf8")) as RunManifest; break; }
+                    }
+                }
+                const reading = readSheet(textIn, manifest);
                 const problems = [...reading.problems];
+                if (cannotWrite) problems.push(`These drafts cannot be created from this server as it is set up: ${cannotWrite}`);
                 if (reading.company && reading.company !== company) problems.push(`The worksheet is for company ${reading.company}, but this call names ${company}. Nothing was drafted.`);
                 if (problems.some((p) => p.includes("does not look like") || p.includes("but this call names") || p.includes("mixes"))) return jsonResult({ company, problems, drafts: [] });
 
@@ -170,6 +201,30 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     if (product["INACTIVE"] === true) { problems.push(`Line ${line.row}: product ${line.item} is inactive.`); return false; }
                     return true;
                 });
+                // Lines whose unit is not known (a vendor the planner chose, or no run record): use that
+                // vendor's unit and cost if the product has them, otherwise the product's stock unit.
+                const open = usable.filter((line) => line.unit === null);
+                if (open.length > 0) {
+                    const ids = [...new Set(open.map((line) => line.item))];
+                    const vendorRows: Array<Record<string, unknown>> = [];
+                    const unitRows: UnitRow[] = [];
+                    for (let i = 0; i < ids.length; i += 15) {
+                        const filter = ids.slice(i, i + 15).map((id) => `ID eq ${odataString(id)}`).join(" or ");
+                        vendorRows.push(...(await readAll(company, "INVENDOR", { $filter: filter, $select: "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO" })));
+                        unitRows.push(...((await readAll(company, "INVENUNT", { $filter: filter, $select: "ID,UNIT,MULTIPLIER,MULTIPLY" })) as unknown as UnitRow[]));
+                    }
+                    for (const line of open) {
+                        const theirs = vendorRows.find((row) => String(row["ID"] ?? "").trim() === line.item && String(row["VENDOR_ID"] ?? "").trim().toUpperCase() === line.vendor);
+                        if (theirs) {
+                            line.unit = String(theirs["UNIT_MEAS"] ?? "").trim();
+                            if (line.unitCost === null && typeof theirs["COST"] === "number" && theirs["COST"] > 0) line.unitCost = theirs["COST"];
+                            line.partNo = line.partNo || String(theirs["PART_NO"] ?? "").trim();
+                        } else {
+                            line.unit = baseUnitOf(line.item, unitRows);
+                            line.changes.push(`${line.vendor} has no vendor record for this product, so it is ordered in the stock unit${line.unit ? ` (${line.unit})` : ""} with no cost — check the quantity means what you intend`);
+                        }
+                    }
+                }
                 const drafts = draftPurchaseOrders({ ...reading, approved: usable });
                 const existing = new Map<string, Record<string, unknown>>();
                 for (const draft of drafts) {
@@ -180,12 +235,15 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     company,
                     run: reading.run,
                     counts: reading.counts,
+                    runRecordFound: reading.fromManifest,
                     problems,
+                    notes: reading.notes,
                     drafts: drafts.map((draft) => ({
                         vendor: draft.vendor,
                         vendorName: `${String(vendors.get(draft.vendor)?.["F_NAME"] ?? "").trim()} ${String(vendors.get(draft.vendor)?.["L_NAME"] ?? "").trim()}`.trim(),
                         lines: draft.lines.length,
                         estCost: draft.estCost,
+                        changedByPlanner: draft.changes,
                         alreadyCreated: existing.has(draft.externalId) ? existing.get(draft.externalId) : undefined,
                         write: existing.has(draft.externalId) ? "This purchase order already exists for this run; do not create it again." : { tool: "ebms_write", method: "POST", path: "APINV", body: draft.body, readBack: { record: "INVOICE,ID,TOTAL", lines: "UNIT_MEAS,UNIT_VIS,ETA_DATE" } },
                     })),

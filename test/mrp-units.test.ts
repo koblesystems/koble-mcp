@@ -24,5 +24,6 @@ test("a unit the product does not have, or one set up as larger x0, is used unco
     const broken = toBaseUnits("TEAMJERSEY", 1, "EA", rows);
     assert.equal(broken.qty, 1);
     assert.match(broken.warning ?? "", /multiplier of 0/);
-    assert.deepEqual(toBaseUnits("NOUNITS", 4, "EA", rows), { qty: 4 });
+    assert.match(toBaseUnits("NOUNITS", 4, "EA", rows).warning ?? "", /no units set up/);
+    assert.deepEqual(toBaseUnits("NOUNITS", 4, "", rows), { qty: 4 });
 });

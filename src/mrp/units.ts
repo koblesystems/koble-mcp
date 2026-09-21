@@ -26,7 +26,8 @@ const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 export function toBaseUnits(item: string, qty: number, unit: string | null | undefined, rows: readonly UnitRow[]): Conversion {
     const wanted = norm(unit);
     const mine = rows.filter((row) => norm(row.ID) === norm(item));
-    if (wanted === "" || mine.length === 0) return { qty: round(qty) };
+    if (wanted === "") return { qty: round(qty) };
+    if (mine.length === 0) return { qty: round(qty), warning: `${item}: the line is in "${unit}" but the product has no units set up; quantity ${qty} was used unconverted.` };
     const row = mine.find((candidate) => norm(candidate.UNIT) === wanted);
     if (!row) return { qty: round(qty), warning: `${item}: unit "${unit}" is not one of its units; quantity ${qty} was used unconverted.` };
     const larger = norm(row.MULTIPLY) === "larger";
@@ -55,4 +56,11 @@ export function fromBaseUnits(item: string, baseQty: number, unit: string | null
         return { qty: up2(baseQty) };
     }
     return { qty: larger ? Math.ceil(round(baseQty / row.MULTIPLIER) - 1e-6) : up2(baseQty * row.MULTIPLIER) };
+}
+
+/** The name of a product's base (stock) unit: the "Smaller" row with multiplier 0. May be blank. */
+export function baseUnitOf(item: string, rows: readonly UnitRow[]): string | null {
+    const mine = rows.filter((row) => norm(row.ID) === norm(item));
+    const base = mine.find((row) => row.MULTIPLIER === 0 && norm(row.MULTIPLY) !== "larger");
+    return base ? (base.UNIT ?? "").trim() : null;
 }

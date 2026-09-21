@@ -4,20 +4,21 @@
  * (INVENDOR), and those items' units (INVENUNT) so stock quantities become order quantities.
  */
 import { odataString } from "../ebms/client.js";
-import { TYPE_ORDER, type SheetRow } from "./csv.js";
+import { TYPE_ORDER, type RunManifest, type SheetRow } from "./csv.js";
 import type { Plan } from "./engine.js";
 import { readAll, type Snapshot } from "./snapshot.js";
-import { fromBaseUnits, type UnitRow } from "./units.js";
+import { baseUnitOf, fromBaseUnits, type UnitRow } from "./units.js";
 
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
+/** Local date and time to the second, so two runs a moment apart never share an ID. */
 export function runId(company: string, now = new Date()): string {
-    const stamp = now.toISOString().replace(/[-:T]/g, "").slice(0, 12);
-    return `mrp-${company.toLowerCase()}-${stamp.slice(0, 8)}-${stamp.slice(8, 12)}`;
+    const pad = (n: number): string => String(n).padStart(2, "0");
+    return `mrp-${company.toLowerCase()}-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
 }
 
-export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan): Promise<{ rows: SheetRow[]; warnings: string[] }> {
+export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
     const warnings: string[] = [];
     const buyIds = [...new Set(plan.plannedOrders.filter((order) => order.action === "buy").map((order) => order.item))];
     const vendorRows: Array<Record<string, unknown>> = [];
@@ -32,10 +33,14 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         const mine = vendorRows.filter((row) => text(row["ID"]) === item);
         const chosen = mine.find((row) => text(row["VENDOR_ID"]).toUpperCase() === (product?.vendor ?? "").toUpperCase()) ?? (product?.vendor ? undefined : mine[0]);
         const cost = typeof chosen?.["COST"] === "number" && chosen["COST"] > 0 ? chosen["COST"] : null;
-        return { vendor: product?.vendor || text(chosen?.["VENDOR_ID"]) || "(no primary vendor)", unit: text(chosen?.["UNIT_MEAS"]), cost, partNo: text(chosen?.["PART_NO"]) };
+        // With no vendor record to say otherwise, order in the product's own stock unit — and say
+        // so on the purchase order, so EBMS cannot default the line to a case.
+        const unit = chosen ? text(chosen["UNIT_MEAS"]) : (baseUnitOf(item, unitRows) ?? "");
+        return { vendor: product?.vendor || text(chosen?.["VENDOR_ID"]) || "(no primary vendor)", unit, cost, partNo: text(chosen?.["PART_NO"]) };
     };
 
     const base = { Run: run, Company: company };
+    const later = new Map(plan.beyondHorizon.filter((row) => row.supplies.length > 0).map((row) => [row.item, row.supplies.map((supply) => `${supply.ref}: ${supply.qty} on ${supply.date}`).join("; ")]));
     const itemPlan = new Map(plan.items.map((item) => [item.item, item]));
     const figures = (id: string): SheetRow => {
         const product = snapshot.products.get(id);
@@ -49,6 +54,8 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             Minimum: product?.min || "",
             Maximum: product?.max || "",
             "Reorder Increment": product?.increment || "",
+            "EBMS Qty To Order": product?.ebmsQtyToOrder || "",
+            "On Order After Time Frame": later.get(id) ?? "",
             "Demand In Time Frame": round2(demand),
             "Supply In Time Frame": round2(supply),
             "Projected Balance": itemPlan.get(id)?.endingBalance ?? "",
@@ -80,13 +87,13 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             "Est Cost": vendor.cost === null ? "" : round2(vendor.cost * converted.qty),
             Approve: "",
             Because: because,
-            Notes: converted.warning ? "Check the unit before ordering" : "",
+            Notes: [converted.warning ? "Check the unit before ordering." : "", later.has(order.item) ? "Already on order just after the time frame — consider moving that order up instead of buying more." : ""].filter(Boolean).join(" "),
         });
     }
     for (const exception of plan.exceptions) {
         if (exception.type === "expedite") {
             touched.add(exception.item);
-            rows.push({ ...base, Type: "EXPEDITE", Item: exception.item, ...figures(exception.item), Status: "Receipt arrives after it is needed", Recommendation: `Move ${exception.ref} (${exception.qty}) from ${exception.from} to ${exception.to}`, "Needed By": exception.to ?? "", Document: exception.ref, Because: exception.message });
+            rows.push({ ...base, Type: "EXPEDITE", Item: exception.item, ...figures(exception.item), Status: exception.dateAssumed ? "On order with no expected date in EBMS" : "Receipt arrives after it is needed", Recommendation: exception.dateAssumed ? `Confirm ${exception.ref} (${exception.qty}) will arrive by ${exception.to}` : `Move ${exception.ref} (${exception.qty}) from ${exception.from} to ${exception.to}`, "Needed By": exception.to ?? "", Document: exception.ref, Because: exception.message });
         } else if (exception.type === "not-needed") {
             touched.add(exception.item);
             rows.push({ ...base, Type: "NOT NEEDED", Item: exception.item, ...figures(exception.item), Status: "On order but nothing needs it", Recommendation: `Defer or cancel ${exception.ref} (${exception.qty})`, Document: exception.ref, Because: exception.message });
@@ -98,6 +105,22 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         if (hasActivity) rows.push({ ...base, Type: "OK", Item: item.item, ...figures(item.item), Status: "Covered", Recommendation: "Nothing to do" });
     }
     const rank = (row: SheetRow): number => TYPE_ORDER.indexOf(String(row.Type) as (typeof TYPE_ORDER)[number]);
-    rows.sort((a, b) => rank(a) - rank(b) || String(a.Vendor ?? "").localeCompare(String(b.Vendor ?? "")) || String(a.Item).localeCompare(String(b.Item)));
-    return { rows, warnings };
+    rows.sort((a, b) => rank(a) - rank(b) || String(a.Vendor ?? "").localeCompare(String(b.Vendor ?? "")) || String(a.Item).localeCompare(String(b.Item)) || String(a.Document ?? "").localeCompare(String(b.Document ?? "")));
+
+    const manifest: RunManifest = { run, company, through: plan.through ?? "", createdAt: new Date().toISOString(), lines: {} };
+    rows.forEach((row, index) => {
+        const line = `L${String(index + 1).padStart(4, "0")}`;
+        row.Line = line;
+        manifest.lines[line] = {
+            type: String(row.Type ?? ""),
+            item: String(row.Item ?? ""),
+            vendor: String(row.Vendor ?? ""),
+            partNo: String(row["Vendor Part No"] ?? ""),
+            purchaseUnit: String(row["Purchase Unit"] ?? ""),
+            orderQty: typeof row["Order Qty"] === "number" ? row["Order Qty"] : null,
+            unitCost: typeof row["Unit Cost"] === "number" ? row["Unit Cost"] : null,
+            neededBy: String(row["Needed By"] ?? ""),
+        };
+    });
+    return { rows, warnings, manifest };
 }

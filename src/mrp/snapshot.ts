@@ -14,16 +14,40 @@ const num = (value: unknown): number => (typeof value === "number" ? value : 0);
 const day = (value: unknown): string | null => (typeof value === "string" && value.length >= 10 ? value.slice(0, 10) : null);
 const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 
-/** Pages a collection with $skip/$top until @odata.count is satisfied. */
+const PAGE_CAP = 2000;
+
+/**
+ * Pages a collection with $skip/$top and refuses to return a partial answer quietly.
+ * EBMS has no nextLink and no sortable key, so rows are de-duplicated by AUTOID in case pages
+ * shift while reading; if the server gives no count, paging continues until a short page; and
+ * a read that is still short of the server's count, or that hits the page cap, throws rather
+ * than handing the planner half a company.
+ */
 export async function readAll(company: string, entity: string, params: Record<string, string>, pageSize = 200): Promise<Row[]> {
+    const select = params["$select"];
+    const withKey = select && !select.split(",").includes("AUTOID") ? { ...params, $select: `AUTOID,${select}` } : params;
+    const seen = new Set<string>();
     const rows: Row[] = [];
-    for (let page = 0; page < 200; page += 1) {
-        const query = new URLSearchParams({ ...params, $top: String(pageSize), $skip: String(rows.length), $count: "true" });
+    let fetched = 0;
+    let total: number | null = null;
+    for (let page = 0; ; page += 1) {
+        if (page >= PAGE_CAP) throw new Error(`Reading ${entity} did not finish after ${PAGE_CAP} pages (${fetched} rows). Refusing to plan on a partial read; narrow the scope.`);
+        const query = new URLSearchParams({ ...withKey, $top: String(pageSize), $skip: String(fetched), $count: "true" });
         const body = (await request(company, "GET", `${entity}?${query.toString()}`)).body as { value?: Row[]; "@odata.count"?: number } | null;
         const batch = body?.value ?? [];
-        rows.push(...batch);
-        const total = typeof body?.["@odata.count"] === "number" ? body["@odata.count"] : rows.length;
-        if (batch.length === 0 || rows.length >= total) break;
+        if (typeof body?.["@odata.count"] === "number") total = body["@odata.count"];
+        fetched += batch.length;
+        for (const row of batch) {
+            const key = typeof row["AUTOID"] === "string" ? row["AUTOID"] : null;
+            if (key !== null && seen.has(key)) continue;
+            if (key !== null) seen.add(key);
+            rows.push(row);
+        }
+        if (batch.length === 0) break;
+        if (total !== null ? fetched >= total : batch.length < pageSize) break;
+    }
+    if (total !== null && rows.length < total) {
+        throw new Error(`Reading ${entity} returned ${rows.length} distinct rows but EBMS counted ${total}; the data changed while it was being read. Run the plan again.`);
     }
     return rows;
 }
@@ -40,6 +64,8 @@ export interface ProductInfo {
     min: number;
     max: number;
     increment: number;
+    /** INVENTRY.QUAN2ORDER: what the EBMS purchasing screen last saved. A reference, not a formula. */
+    ebmsQtyToOrder: number;
 }
 
 export interface Snapshot {
@@ -64,6 +90,8 @@ const isStockedLine = (row: Row): boolean => {
 
 export interface SnapshotOptions {
     today: string;
+    /** The end of the time frame. A receipt with no expected date is counted here, the latest it can help. */
+    through?: string | undefined;
     includeJobs?: boolean | undefined;
     alsoMade?: readonly string[] | undefined;
     buyInstead?: readonly string[] | undefined;
@@ -91,7 +119,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     const productsRead = () => timed("products", () =>
         readAll(company, "INVENTRY", {
             $filter: "not startswith(ID,'($)') and INACTIVE eq false",
-            $select: "ID,DESCR_1,C_TYPE,PURC_METH,PRI_VENDOR,T_ON_HAND,MIN_INVEN,MAX_INVEN,ORDER_AMT,PUR_O,PUR_S,M_IN_O,M_IN_S,SALES_O,SALES_S,M_OUT_O,M_OUT_S,JOB_OUT_O,JOB_OUT_S",
+            $select: "ID,DESCR_1,C_TYPE,PURC_METH,PRI_VENDOR,T_ON_HAND,MIN_INVEN,MAX_INVEN,ORDER_AMT,QUAN2ORDER,PUR_O,PUR_S,M_IN_O,M_IN_S,SALES_O,SALES_S,M_OUT_O,M_OUT_S,JOB_OUT_O,JOB_OUT_S",
         }),
     );
     const bomRead = () => timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
@@ -132,6 +160,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             min: num(row["MIN_INVEN"]),
             max: num(row["MAX_INVEN"]),
             increment: num(row["ORDER_AMT"]),
+            ebmsQtyToOrder: num(row["QUAN2ORDER"]),
         });
     }
 
@@ -144,15 +173,18 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
 
     // Sales and job demand: QUAN and SHIP are base-unit fields and read correctly standalone;
     // this read also returns materials-list children, which the header's Details does not.
-    const parents = new Set(lineRows.map((row) => text(row["PAR_TIME"])).filter(Boolean));
+    // A line's TIMESTAMP is only unique within its own document, so the parent rule is too.
+    const parents = new Set(lineRows.filter((row) => text(row["PAR_TIME"])).map((row) => `${text(row["INVOICE"])}|${text(row["PAR_TIME"])}`));
+    let undatedDemand = 0;
     const demands: Demand[] = [];
     for (const row of lineRows) {
         const item = text(row["INVEN"]);
         const remaining = round(num(row["QUAN"]) - num(row["SHIP"]));
         if (!item) { skip("line without a product"); continue; }
-        if (parents.has(text(row["TIMESTAMP"]))) { skip("materials-list parent (its children are counted)"); continue; }
+        if (parents.has(`${text(row["INVOICE"])}|${text(row["TIMESTAMP"])}`)) { skip("materials-list parent (its children are counted)"); continue; }
         if (remaining <= 0) { skip("sales line fully shipped"); continue; }
         if (!isStockedLine(row)) { skip(`sales line purchased as "${text(row["PURC_M_VIS"])}"`); continue; }
+        if (day(row["SHIP_DATE"]) === null) undatedDemand += 1;
         demands.push({ item, qty: remaining, date: day(row["SHIP_DATE"]) ?? options.today, kind: text(row["DOC_TYPE"]) === "J" ? "job" : "sales", ref: text(row["INVOICE"]) });
     }
 
@@ -179,16 +211,22 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
         return result.qty;
     };
 
+    // A receipt with no expected date is counted on the LAST day of the time frame: late enough
+    // that it cannot quietly cover a shortage it may not arrive for (the plan then asks for it by
+    // the date it is needed), early enough that it still counts toward the minimum at the end.
+    const noDate = options.through ?? options.today;
     const supplies: Supply[] = [];
     for (const batch of batches) {
         const ref = text(batch["BATCH"]);
         const batchDate = day(batch["DATE"]) ?? options.today;
+        const batchEnd = day(batch["END_DATE"]);
         for (const line of (batch["FinishedDetails"] as Row[] | undefined) ?? []) {
             const item = text(line["INVEN"]);
             const remaining = convert(item, num(line["O_QUAN_VIS"]) - num(line["SHIP_VIS"]), line["UNIT_MEAS"]);
             if (!item || remaining <= 0) { skip("batch output already made"); continue; }
             const eta = day(line["ETA_DATE"]);
-            supplies.push({ item, qty: remaining, date: eta ?? batchDate, kind: "batch", ref, ...(eta ? {} : { dateAssumed: true }) });
+            const known = eta ?? (batchEnd !== null && batchEnd >= options.today ? batchEnd : null);
+            supplies.push({ item, qty: remaining, date: known ?? noDate, kind: "batch", ref, ...(known ? {} : { dateAssumed: true }) });
         }
         for (const line of (batch["ARINVDETs"] as Row[] | undefined) ?? []) {
             const item = text(line["INVEN"]);
@@ -207,7 +245,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             const remaining = convert(item, num(line["O_QUAN_VIS"]) - num(line["SHIP_VIS"]), line["UNIT_MEAS"]);
             if (remaining <= 0) { skip("purchase line fully received"); continue; }
             const eta = day(line["ETA_DATE"]);
-            supplies.push({ item, qty: remaining, date: eta ?? day(order["INV_DATE"]) ?? options.today, kind: "purchase", ref, ...(eta ? {} : { dateAssumed: true }) });
+            supplies.push({ item, qty: remaining, date: eta ?? noDate, kind: "purchase", ref, ...(eta ? {} : { dateAssumed: true }) });
         }
     }
 
@@ -247,5 +285,9 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     const keptDemands = demands.filter((d) => planned.has(d.item));
     if (before !== keptDemands.length) skipped["demand on an item that is not planned (service, non-stocked or inactive)"] = before - keptDemands.length;
 
-    return { company, takenAt: new Date().toISOString(), products, made, bom, items, demands: keptDemands, supplies: supplies.filter((s) => planned.has(s.item)), skipped, warnings, timings };
+    const keptSupplies = supplies.filter((s) => planned.has(s.item));
+    if (keptSupplies.length !== supplies.length) skipped["incoming supply for an item that is not planned (service, non-stocked or inactive)"] = supplies.length - keptSupplies.length;
+    if (undatedDemand > 0) warnings.push(`${undatedDemand} open demand line(s) have no ship date in EBMS and were planned as due today.`);
+
+    return { company, takenAt: new Date().toISOString(), products, made, bom, items, demands: keptDemands, supplies: keptSupplies, skipped, warnings, timings };
 }
