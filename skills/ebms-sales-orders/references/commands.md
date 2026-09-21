@@ -2,8 +2,12 @@
 
 Read `../SKILL.md` first for the ground rules.
 
-EBMS commands run as `POST /ARINV('<AUTOID>')/Model.Entities.<Command>`. Verified against SBX
+Commands are bound actions, run with `ebms_command`: `entity: ARINV`, `key: <order AUTOID>`,
+`command: <name>`, and `body` only when the command has a dialog. Verified against SBX
 (EBMS 1.8.148, September 2026).
+
+The server allows only the four commands below by name — nothing that posts, processes, pays or
+sends. Anything else comes back refused; say so and suggest doing it in EBMS.
 
 ## How commands take input
 
@@ -17,13 +21,14 @@ EBMS commands run as `POST /ARINV('<AUTOID>')/Model.Entities.<Command>`. Verifie
   - `{"@id": "…"}` makes EBMS try to **save** a customer ("Could not find customer defaults").
   - `{"AUTOID": "…"}` is refused (403), and `NewCustomer@odata.bind` isn't recognised.
 
-  Get the Guid with `/ARCUST('<AUTOID>')?$select=Guid`.
+  Get the Guid with `ebms_get` on `ARCUST('<AUTOID>')`, `select: Guid`.
 - The commands tested returned no useful body. **Read the order back** to see what changed.
 
 ## Recalculate all prices
 
 ```
-POST /ARINV('<AUTOID>')/Model.Entities.RecalculateAllPrices
+ebms_command  company: sbx   entity: ARINV   key: <order AUTOID>
+              command: RecalculateAllPrices        (no body)
 ```
 
 Reprices every line from the customer's price level. **It discards manual prices**: a line the
@@ -45,9 +50,10 @@ A plain `PATCH {"ID": "…"}` is refused: "cannot change the id on a saved entit
 command". Use the command:
 
 ```
-POST /ARINV('<order AUTOID>')/Model.Entities.ChangeCustomer
-{"NewCustomer": {"Guid": "<new customer's Guid>"},
- "ChangeAddress": true, "ChangeTerms": true, "RecalculatePrices": true}
+ebms_command  company: sbx   entity: ARINV   key: <order AUTOID>
+              command: ChangeCustomer
+              body: {"NewCustomer": {"Guid": "<new customer's Guid>"},
+                     "ChangeAddress": true, "ChangeTerms": true, "RecalculatePrices": true}
 ```
 
 Each flag is a real choice. Ask the user about all three rather than defaulting them:
@@ -67,7 +73,8 @@ afterwards, and report customer, address, terms and `TOTAL_S_SO` before and afte
 ## Calculate freight
 
 ```
-POST /ARINV('<AUTOID>')/Model.Entities.CalculateFreight
+ebms_command  company: sbx   entity: ARINV   key: <order AUTOID>
+              command: CalculateFreight           (no body)
 ```
 
 Only partly verified. On an order shipping via `Pickup` it returned 200 and changed nothing.
@@ -82,8 +89,9 @@ Tell the user plainly when asked for one of these, and suggest doing it in EBMS:
 | Command | Why |
 |---|---|
 | `EstimateFees` | Returns **404** on the install tested, with or without a body, despite being in the metadata. |
-| `RecordPayment` | Money that can only be voided, never deleted, plus card fields. Reserved for a guarded MCP tool, if ever. |
+| `RecordPayment` | Money that can only be voided, never deleted, plus card fields. Not on the server's allow-list. |
 | `Send` | Emails the customer. Not something an agent should do unprompted, and it can't be tested safely. |
-| `GetPdfReport` | Returns a binary PDF. Reserved for an MCP tool that saves it to a file. |
+| `GetPdfReport` | Returns a binary PDF, which these tools cannot hand you. |
 | `PrintReport`, `SelectReport`, `Sign`, scanner commands, `UpdateLocked` | Tied to EBMS screens and devices. |
-| Deleting orders | Do it in EBMS, where the person can see what they're removing. |
+| Processing / unprocessing | `PROCESS` is refused by the server at any depth. See `fulfil.md`. |
+| Deleting orders | Possible (`method: DELETE`), but do it in EBMS where the person can see what they're removing — unless they ask outright and confirm. |

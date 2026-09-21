@@ -11,12 +11,11 @@ not written by hand.
 
 For anything not covered there, look it up rather than guessing:
 
-- `GET {base}/$metadata` returns the install's full schema. Confirmed served, and without
-  credentials, on SBX and a second company (1.8.148); not yet confirmed on every build.
-- `GET {base}/EntityMetaData('<ENTITY>')?$expand=Properties` returns EBMS's own label,
-  description, required and read-only flags for every field, **including the install's
-  custom fields**, which the generated references deliberately leave out.
-- `describe_entity` in the EBMS MCP server, if the session has it.
+- `ebms_get` with `path: $metadata` returns the install's full schema. Confirmed served on
+  SBX and a second company (1.8.148); not yet confirmed on every build.
+- `ebms_get` with `path: EntityMetaData('<ENTITY>')` and `expand: Properties` returns EBMS's
+  own label, description, required and read-only flags for every field, **including the
+  install's custom fields**, which the generated references deliberately leave out.
 
 What lives here is what none of those will tell you: where the schema and reality
 disagree.
