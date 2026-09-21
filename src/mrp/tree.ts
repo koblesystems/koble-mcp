@@ -62,7 +62,9 @@ export function buildTree(input: { item: string; qty: number; items: readonly Bo
         node.fromStock = round(Math.min(have, required));
         if (level > 0) pool.set(id, round(have - node.fromStock));
         node.short = round(required - node.fromStock);
-        const make = item?.make === true && item.components.length > 0;
+        // The item being asked about is always opened up: "what does it take to build this?" is the
+        // question, whether or not the company has ever run it as a batch.
+        const make = (item?.make === true || level === 0) && (item?.components.length ?? 0) > 0;
         node.action = node.short > 0 ? (make ? "make" : "buy") : "none";
         if (!item) node.note = "no product record found";
 
@@ -74,7 +76,7 @@ export function buildTree(input: { item: string; qty: number; items: readonly Bo
             totals.set(id, total);
         }
         if (make && node.short > 0) {
-            node.children = item.components.map((component) => visit(component.item, component.qtyPer, node.short * component.qtyPer, level + 1, [...path, id]));
+            node.children = (item?.components ?? []).map((component) => visit(component.item, component.qtyPer, node.short * component.qtyPer, level + 1, [...path, id]));
         }
         return node;
     };
@@ -87,9 +89,11 @@ export function buildTree(input: { item: string; qty: number; items: readonly Bo
     const root = visit(input.item, 1, input.qty, 0, []);
     flag(root);
     const list = [...totals.values()].filter((row) => row.item !== input.item);
+    const nothingToOpen = root.children.length === 0;
+    if (nothingToOpen) root.note = root.note ?? "no bill of materials, so there is nothing to build it from";
     // "From stock" means nothing has to be BOUGHT: sub-assemblies may still have to be made, from
     // parts that are on the shelf. A loop in the bill of materials means the answer is not known.
-    return { root, totals: list, canBuildFromStock: !looped && list.filter((row) => row.action === "buy").every((row) => row.short === 0) };
+    return { root, totals: list, canBuildFromStock: !looped && !nothingToOpen && list.filter((row) => row.action === "buy").every((row) => row.short === 0) };
 }
 
 /** An indented text rendering, for a tool result or a report. */

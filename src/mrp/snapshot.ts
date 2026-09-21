@@ -4,6 +4,7 @@
  * SBX with the person who knows the database; the reasons are beside each read.
  */
 import { odataString, request } from "../ebms/client.js";
+import { EbmsError } from "../ebms/errors.js";
 import type { Demand, ItemParams, Supply } from "./engine.js";
 import type { BomItem } from "./tree.js";
 import { toBaseUnits, type UnitRow } from "./units.js";
@@ -18,22 +19,35 @@ const PAGE_CAP = 2000;
 
 /**
  * Pages a collection with $skip/$top and refuses to return a partial answer quietly.
- * EBMS has no nextLink and no sortable key, so rows are de-duplicated by AUTOID in case pages
- * shift while reading; if the server gives no count, paging continues until a short page; and
+ * EBMS has no nextLink, so pages are read in AUTOID order where the entity allows it (it does on
+ * SBX's INVENTRY and ARINVDET; not every entity or build accepts it, so a refusal falls back to
+ * the server's own order). Rows are still de-duplicated by AUTOID in case pages shift while
+ * reading; if the server gives no count, paging continues until a short page; and
  * a read that is still short of the server's count, or that hits the page cap, throws rather
  * than handing the planner half a company.
  */
 export async function readAll(company: string, entity: string, params: Record<string, string>, pageSize = 200): Promise<Row[]> {
     const select = params["$select"];
-    const withKey = select && !select.split(",").includes("AUTOID") ? { ...params, $select: `AUTOID,${select}` } : params;
+    const withKey = select && !select.split(",").map((name) => name.trim()).includes("AUTOID") ? { ...params, $select: `AUTOID,${select}` } : params;
+    let ordered = params["$orderby"] === undefined;
     const seen = new Set<string>();
     const rows: Row[] = [];
     let fetched = 0;
     let total: number | null = null;
     for (let page = 0; ; page += 1) {
         if (page >= PAGE_CAP) throw new Error(`Reading ${entity} did not finish after ${PAGE_CAP} pages (${fetched} rows). Refusing to plan on a partial read; narrow the scope.`);
-        const query = new URLSearchParams({ ...withKey, $top: String(pageSize), $skip: String(fetched), $count: "true" });
-        const body = (await request(company, "GET", `${entity}?${query.toString()}`)).body as { value?: Row[]; "@odata.count"?: number } | null;
+        const ask = (withOrder: boolean) => request(company, "GET", `${entity}?${new URLSearchParams({ ...withKey, ...(withOrder ? { $orderby: "AUTOID" } : {}), $top: String(pageSize), $skip: String(fetched), $count: "true" }).toString()}`);
+        let response;
+        try {
+            response = await ask(ordered);
+        } catch (error) {
+            // Only the first page may fall back: changing the order part-way would scramble the pages.
+            const refusedOrder = ordered && page === 0 && error instanceof EbmsError && error.status >= 400 && error.status < 500;
+            if (!refusedOrder) throw error;
+            ordered = false;
+            response = await ask(false);
+        }
+        const body = response.body as { value?: Row[]; "@odata.count"?: number } | null;
         const batch = body?.value ?? [];
         if (typeof body?.["@odata.count"] === "number") total = body["@odata.count"];
         fetched += batch.length;

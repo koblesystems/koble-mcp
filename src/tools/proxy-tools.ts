@@ -18,6 +18,7 @@ import { discoverCompanies } from "../ebms/companies.js";
 import { readBefore, verifyDelete, verifyWrite, type Before } from "../verify-run.js";
 import type { Verification } from "../verify.js";
 import { DOCUMENT_ENTITIES, encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, validateName, validatePath } from "../guards.js";
+import { EbmsError } from "../ebms/errors.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
@@ -133,6 +134,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
             }),
         },
         async (args) => {
+            let sent = false;
             try {
                 const company = resolveCompany(args.company);
                 assertWriteCompany(company);
@@ -177,6 +179,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
                     }
                 }
 
+                sent = true;
                 const result = await request(company, args.method, path, args.body);
                 const created = (result.body ?? {}) as Record<string, unknown>;
                 const identity = Object.fromEntries(["AUTOID", "INVOICE", "ID"].filter((key) => created[key] !== undefined).map((key) => [key, created[key]]));
@@ -210,7 +213,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
                     });
                 }
             } catch (error) {
-                return errorResult(error, { company: args.company, method: args.method, path: args.path });
+                return errorResult(error, { company: args.company, method: args.method, path: args.path, ...(sent && !(error instanceof EbmsError) ? { afterSend: true } : {}) });
             }
         },
     );
@@ -229,6 +232,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
             }),
         },
         async (args) => {
+            let sent = false;
             try {
                 const company = resolveCompany(args.company);
                 assertWriteCompany(company);
@@ -240,10 +244,11 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const processKeys = findProcessKeys(args.body);
                 if (processKeys.length > 0) throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}.`);
                 const path = `${entity}(${encodeKey(args.key)})/Model.Entities.${command}`;
+                sent = true;
                 const result = await request(company, "POST", path, args.body);
                 return jsonResult({ company, command, path, status: result.status, response: result.body, warnings: result.warnings, ms: result.ms, next: "Read the record back to see what changed." });
             } catch (error) {
-                return errorResult(error, { company: args.company, entity: args.entity, command: args.command });
+                return errorResult(error, { company: args.company, entity: args.entity, command: args.command, ...(sent && !(error instanceof EbmsError) ? { afterSend: true } : {}) });
             }
         },
     );

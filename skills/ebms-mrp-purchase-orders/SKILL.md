@@ -95,8 +95,10 @@ Read the result before moving on:
   `EXTERNALID eq '<the draft's EXTERNALID>'`, `select` `AUTOID,INVOICE,ID`. If it is there,
   report its number and carry on; if it is not, tell the planner and ask before retrying.
 - **`uncertain: false`** with an error or a refusal — nothing was saved. If the result says the
-  write was not sent, it is safe to try again; otherwise report EBMS's message and ask before
-  trying anything else. Read the `uncertain` field, not the wording, to tell the two apart.
+  write was not sent (a check before it failed, or the server could not sign in), it is safe to
+  try again; otherwise report EBMS's message and ask before trying anything else. Read the
+  `uncertain` field, not the wording, to tell the two apart: the server sets it to true whenever
+  the request had already gone to EBMS and the outcome is not known.
 
 ## 5. Finish
 
@@ -112,10 +114,15 @@ Do not offer to receive, process or pay the purchase orders.
 - The purchase order's `EXTERNALID` is the worksheet's run plus the vendor ID. That is why the
   same file cannot order twice, and why a *new* `mrp_plan` run is needed for a new round of
   ordering.
-- Quantities are in the **vendor's purchase unit** shown on the row. A case is a case; do not
-  convert.
+- Quantities are in the **purchase unit shown on the row**. A case is a case; never convert one
+  yourself. If the planner moved a line to another vendor, `po_from_csv` has already converted
+  it — the quantity is read in the unit the row showed, taken through stock units, and written
+  in the new vendor's unit — and `changedByPlanner` spells that out ("2 CASE = 48 in stock
+  units, ordered from V2 as 48 EA"). Read it back to them; it is the change most worth a second
+  look. A line that could not be converted with confidence is in `problems` and was not drafted.
 - Costs come from the product's vendor record. A missing cost is left for EBMS to fill in; say so
   rather than estimating.
 - The needed-by date is **not** sent: EBMS works out a purchase line's expected date from the
-  vendor's lead time and ignores one that is sent. What comes back is EBMS's estimate of
-  arrival, which is the useful thing to compare with the day the stock is needed.
+  vendor's lead time, as far as has been observed (on four purchase orders in one company, a
+  date that was sent came back as a different date or as nothing). What comes back is EBMS's
+  own expected date, which is the useful thing to compare with the day the stock is needed.

@@ -164,7 +164,15 @@ export async function request(company: string, method: string, path: string, bod
     const conn = connectionFor(company);
     const started = Date.now();
     const attempt = async (isRetry: boolean): Promise<Response> => {
-        const headers: Record<string, string> = { Authorization: await authHeader(conn, isRetry), Accept: "application/json" };
+        let authorization: string;
+        try {
+            authorization = await authHeader(conn, isRetry);
+        } catch (error) {
+            if (error instanceof EbmsError && error.kind === "credentials") throw error;
+            const why = error instanceof Error ? error.message : String(error);
+            throw new EbmsError(`Could not sign in to EBMS (${why}). The request was not sent.`, error instanceof EbmsError ? error.status : 0, { kind: "signin" });
+        }
+        const headers: Record<string, string> = { Authorization: authorization, Accept: "application/json" };
         if (body !== undefined) headers["Content-Type"] = "application/json";
         const init: RequestInit = { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
         if (body !== undefined) init.body = JSON.stringify(body);

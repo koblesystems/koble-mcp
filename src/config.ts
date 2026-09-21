@@ -71,6 +71,9 @@ const splitList = (value: string | undefined): string[] =>
 /** Company IDs compare case-insensitively; EBMS itself reports them upper-case. */
 export const normalizeCompany = (company: string): string => company.trim().toUpperCase();
 
+/** A company ID becomes a segment of the URL, so it may only be letters, digits, underscore and hyphen. */
+export const isCompanyId = (company: string): boolean => /^[A-Za-z0-9_-]{1,40}$/.test(company.trim());
+
 /** Points the module at a different environment. Tests use it; the server never calls it. */
 export function configure(newEnv: Env): void {
     env = newEnv;
@@ -81,7 +84,8 @@ export function configure(newEnv: Env): void {
 
 /** Records what the company-list endpoint reported for this serial. */
 export function setDiscoveredCompanies(list: CompanyInfo[]): void {
-    discovered = list;
+    // An ID from the discovery endpoint is used in a URL too; one that is not a plain ID is dropped.
+    discovered = list.filter((info) => isCompanyId(info.id));
     discoveryError = null;
 }
 
@@ -104,6 +108,8 @@ export function loadSettings(): Settings {
     const listed = splitList(values.EBMS_COMPANIES ?? values.EBMS_COMPANY_ID).map(normalizeCompany);
     const sandbox = values.EBMS_SANDBOX?.trim() ? normalizeCompany(values.EBMS_SANDBOX) : null;
     if (sandbox !== null && sandbox.includes(",")) throw new Error("koble-mcp: EBMS_SANDBOX names one company, the only one writes may go to while testing.");
+    const bad = [...listed, ...(sandbox === null ? [] : [sandbox])].filter((id) => !isCompanyId(id));
+    if (bad.length > 0) throw new Error(`koble-mcp: not a company ID: ${bad.map((id) => JSON.stringify(id)).join(", ")}. IDs are letters, digits, underscore and hyphen only.`);
     settings = {
         serial: values.EBMS_SERIAL_NUMBER,
         configured: listed.length > 0 ? listed : null,
@@ -148,7 +154,12 @@ export function resolveCompany(company: string | undefined): string {
         throw new Error(`Name the company. Available: ${describeCompanies()}.`);
     }
     const wanted = company.trim().toLowerCase();
-    const match = available.find((info) => info.id.toLowerCase() === wanted) ?? available.find((info) => info.name.toLowerCase() === wanted);
+    const byName = available.filter((info) => info.name.toLowerCase() === wanted);
+    // A live company and its test copy often share a name: a name is only accepted when it is unique.
+    if (byName.length > 1 && !available.some((info) => info.id.toLowerCase() === wanted)) {
+        throw new Error(`"${company}" is the name of ${byName.length} companies (${byName.map((info) => info.id).join(", ")}). Use the company ID.`);
+    }
+    const match = available.find((info) => info.id.toLowerCase() === wanted) ?? byName[0];
     if (!match) throw new Error(`Company "${company}" is not available on this server. Available: ${describeCompanies()}. Call ebms_companies to see what the serial reaches.`);
     return match.id;
 }

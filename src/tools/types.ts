@@ -50,7 +50,12 @@ export function errorResult(error: unknown, extra: Record<string, unknown> = {})
             isError: true,
         };
     }
-    // Anything that is not an EbmsError was raised by this server before a request went out.
     const message = error instanceof Error ? error.message : String(error);
+    if (extra["afterSend"] === true) {
+        // Something failed in this server AFTER the request went to EBMS: the write may well have happened.
+        const { afterSend: _afterSend, ...rest } = extra;
+        return { content: [{ type: "text", text: JSON.stringify({ error: { message }, uncertain: true, advice: "The request was sent to EBMS and this server failed while handling the answer. The outcome is unknown: read the record back before sending this again; a resent create or add duplicates.", ...rest }, null, 2) }], isError: true };
+    }
+    // Otherwise it was raised by this server before a request went out.
     return { content: [{ type: "text", text: JSON.stringify({ error: { message }, refused: true, uncertain: false, advice: "This server refused the request; nothing was sent to EBMS.", ...extra }, null, 2) }], isError: true };
 }

@@ -50,3 +50,15 @@ test("the sandbox is available even when discovery did not list it", () => {
     assert.equal(isWriteCompany("sbx"), false);
     assert.equal(isWriteCompany("test"), true);
 });
+
+test("a name shared by two companies is refused; the ID still works; IDs that are not plain are never used", () => {
+    configure(base);
+    setDiscoveredCompanies([{ id: "LIVE", name: "Acme Bikes", version: null }, { id: "TESTCOPY", name: "Acme Bikes", version: null }, { id: "SBX/../LIVE", name: "Trick", version: null }]);
+    assert.throws(() => resolveCompany("acme bikes"), /is the name of 2 companies \(LIVE, TESTCOPY\)/);
+    assert.equal(resolveCompany("testcopy"), "TESTCOPY");
+    assert.deepEqual(availableCompanies().map((c) => c.id), ["LIVE", "TESTCOPY"]);
+    configure({ ...base, EBMS_SANDBOX: "sbx/../live" });
+    assert.throws(() => availableCompanies(), /not a company ID/);
+    configure({ ...base, EBMS_COMPANIES: "sbx,li ve" });
+    assert.throws(() => availableCompanies(), /not a company ID/);
+});

@@ -206,3 +206,26 @@ test("every refusal has the same shape", async () => {
     assert.equal(r.uncertain, false);
     assert.match(String(r.advice), /nothing was sent/);
 });
+
+test("a failure inside this server AFTER the write went out is uncertain, never 'nothing was sent'", async () => {
+    fresh();
+    // A 200 whose envelope is malformed used to throw a TypeError after the PATCH had been sent.
+    script.push(() => json(200, { AUTOID: "X", Messages: [null, { Severity: 3, TextBriefDescription: "odd" }] }));
+    const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
+    assert.notEqual(r.refused, true);
+    assert.equal(r.isError === true ? r.uncertain : true, true, "either it succeeds, or it is uncertain — it is never 'not sent'");
+});
+
+test("failing to sign in before a write is a refusal with nothing sent, not an unknown outcome", async () => {
+    fresh();
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (url: string | URL, init?: RequestInit) => (String(url).endsWith("/Token") ? new Response("", { status: 503 }) : real(url, init))) as typeof fetch;
+    try {
+        const r = await call("ebms_write", { company: "sbx", method: "PATCH", path: "ARINV('X')", body: { PO_NO: "1" }, verify: false });
+        assert.equal(r.uncertain, false);
+        assert.match(String((r.error as { message: string }).message), /Could not sign in.*not sent/);
+        assert.equal(sent.length, 0);
+    } finally {
+        globalThis.fetch = real;
+    }
+});

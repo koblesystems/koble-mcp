@@ -55,7 +55,8 @@ Lead with the file, then what matters most. Keep it short; the detail is in the 
    better than buying more, and the planner should decide.
 4. **What to make**, and for each what it pulls in below it. If a made item is *also purchased*,
    say so: the planner may prefer to buy it this time (`buyInstead`).
-5. **Not needed** — open purchase orders nothing in the plan requires. Present these as
+5. **Not needed** — open purchase orders nothing requires, inside the time frame or (net of what
+   is on order for later) after it. Present these as
    questions to review, not instructions to cancel; the plan cannot see reasons outside EBMS.
 6. **What the plan left out, and why** (`leftOut`), in a sentence: drop-ship and associated
    lines belong to their own orders, service items are not materials, fully shipped or received
@@ -91,7 +92,8 @@ Tell the planner what to do with it:
 - On the `BUY` rows they want ordered, put **Y** in **Approve**. They may change **Order Qty**
   (it is in the purchase unit shown beside it; plain numbers like `12` or `1.5`) and fill in or
   change **Vendor**. **Notes** is theirs. Leave every other column alone — especially **Run** and
-  **Line**, which tie each row to this run. Rows cannot be added by hand.
+  **Line** and **Check**, which tie each row to this run. Rows cannot be added by hand, and a row
+  whose Run, Line or Check was changed is refused.
 - A spreadsheet may reformat dates or long product numbers when it opens the file. That is
   harmless as long as the purchase orders are created on the same computer that ran the plan,
   because the run keeps its own record of each row.

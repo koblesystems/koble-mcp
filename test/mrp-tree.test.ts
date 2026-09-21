@@ -53,3 +53,14 @@ test("labour is shown but left out, a loop is reported rather than followed, and
     assert.equal(buildTree({ item: "BAG12", qty: 4, items: withLabour, available: { ROAST: 99 } }).canBuildFromStock, false, "with a loop the answer is not known, so it is not yes");
     assert.deepEqual(renderTree(root).slice(0, 2), ["BAG12  need 4, make 4", "  ROAST  need 3 (0.75 each), 1 from stock, buy 2"]);
 });
+
+test("the item asked about is opened up even if it has never been made, and one with no bill of materials is not 'buildable'", () => {
+    const kit: BomItem[] = [{ id: "KIT", make: false, components: [{ item: "PART", qtyPer: 2 }] }, { id: "PART", make: false, components: [] }];
+    const short = buildTree({ item: "KIT", qty: 10, items: kit, available: { PART: 5 } });
+    assert.deepEqual(renderTree(short.root), ["KIT  need 10, make 10", "  PART  need 20 (2 each), 5 from stock, buy 15"]);
+    assert.equal(short.canBuildFromStock, false);
+    assert.equal(buildTree({ item: "KIT", qty: 2, items: kit, available: { PART: 5 } }).canBuildFromStock, true);
+    const bare = buildTree({ item: "PART", qty: 3, items: kit, available: {} });
+    assert.equal(bare.canBuildFromStock, false);
+    assert.match(bare.root.note ?? "", /no bill of materials/);
+});

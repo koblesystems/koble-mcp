@@ -19,11 +19,11 @@ It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for
 Every result names the company it ran against. Every failure carries `uncertain` and says
 what it means:
 
-- `uncertain: false` with `refused: true` — this server stopped it, or a check before the write
-  failed. **Nothing was sent.**
+- `uncertain: false` with `refused: true` — this server stopped it, a check before the write
+  failed, or it could not sign in. **Nothing was sent.**
 - `uncertain: false` with an `error.status` — EBMS answered and said no. Nothing was saved.
 - `uncertain: true` — a timeout, a dropped connection, a response that broke off part-way, a
-  5xx, or a 2xx carrying an error message. The write may or may not have happened, so **read
+  5xx, a 2xx carrying an error message, or a fault inside this server after the request had gone out. The write may or may not have happened, so **read
   the record back before sending it again**. A resent create or add duplicates.
 
 **Paths are parsed and rebuilt, not passed through.** The entity name is validated; each key
@@ -113,18 +113,21 @@ What is read, and how it is netted (worked out against SBX with someone who know
 every planned item: its status, the recommendation (`EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`, `OK`),
 the numbers behind it, and for purchases the vendor, part number, purchase unit, order quantity in
 that unit and cost from `INVENDOR` (the product's own stock unit when the vendor has none, stated
-on the order so EBMS cannot default to a case). A planner edits `Order Qty`, `Approve` and `Notes`
-— and `Vendor` where there is none — in a spreadsheet and hands it back.
+on the order so EBMS cannot default to a case). A planner edits `Order Qty`, `Approve`, `Vendor` and `Notes` in a spreadsheet and hands it back.
 
 Spreadsheets reformat dates, turn long numeric product IDs into `3.94E+13` and drop leading
 zeros, so the file is not trusted for anything the planner was not meant to edit: `mrp_plan`
 also saves a small **run record** (`runs/<run>.json` beside the worksheet), and `po_from_csv`
-takes the item, unit, cost and date from it, keyed by the row's `Line`. Rows added by hand,
+takes the item, unit, cost and date from it, keyed by the row's `Line`. Each row also carries a
+`Check` code over its run, line and product, so a `Run` cell changed on every row, a worksheet
+re-pointed at another run, or a row typed in by hand is refused with or without the record.
+A line the planner moves to another vendor has its quantity converted through stock units into
+that vendor's unit (2 cases of 24 become 48 each), and says so. Rows added by hand,
 duplicated rows, a changed `Run` cell, unrecognised `Approve` text and ambiguous quantities
 (`1,5`, `1e3`) are named as problems, and each draft lists what the planner changed. If the
 record cannot be found (the file moved to another computer) the file is read strictly and the
-result says so. Drafts do not send an expected date: EBMS sets a purchase line's `ETA_DATE` itself
-from the vendor's lead time, so the read-back reports it and the skill compares it with the day
+result says so. Drafts do not send an expected date: on the purchase orders created so far, EBMS stored its own
+`ETA_DATE` (apparently from the vendor's lead time) and ignored the one sent, so the read-back reports it and the skill compares it with the day
 the stock is needed. `po_from_csv` checks each approved row against EBMS, names
 any it cannot order (no vendor, zero quantity, inactive product), and drafts one purchase order per
 vendor whose `EXTERNALID` is the run plus the vendor, so the same worksheet cannot order twice.

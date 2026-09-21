@@ -302,7 +302,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     tree: renderTree(root),
                     make: totals.filter((t) => t.action === "make" && t.short > 0).map((t) => ({ item: t.item, qty: t.short })),
                     buy: totals.filter((t) => t.action === "buy" && t.short > 0).map((t) => ({ item: t.item, qty: t.short, vendor: snapshot.products.get(t.item)?.vendor || "(no primary vendor)" })),
-                    notes: [...overPromised, ...(snapshot.made.has(id) ? [] : [`${id} has never been the finished good of a batch, so it is treated as a kit: pass alsoMade to explode it as a manufactured item.`])],
+                    notes: [...overPromised, ...(snapshot.made.has(id) ? [] : [`${id} has never been the finished good of a batch. Its own bill of materials is opened here because you asked about it, but mrp_plan treats it as a kit or a purchased item, not something to make (alsoMade changes that).`])],
                     warnings: snapshot.warnings,
                 });
             } catch (error) {

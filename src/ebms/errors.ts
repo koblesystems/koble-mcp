@@ -13,7 +13,7 @@ export interface EbmsMessage {
     Detail?: string;
 }
 
-export type ErrorKind = "network" | "timeout" | "http" | "credentials" | "embedded" | "refused";
+export type ErrorKind = "network" | "timeout" | "http" | "credentials" | "embedded" | "refused" | "signin";
 
 export class EbmsError extends Error {
     readonly status: number;
@@ -36,7 +36,8 @@ export class EbmsError extends Error {
      * the only safe next step is to read the record back — never to resend it.
      */
     get uncertain(): boolean {
-        if (this.kind === "refused" || this.kind === "credentials") return false;
+        // Signing in happens before the request itself, so a failure there means nothing was sent.
+        if (this.kind === "refused" || this.kind === "credentials" || this.kind === "signin") return false;
         return this.kind === "network" || this.kind === "timeout" || this.kind === "embedded" || this.status === 408 || this.status >= 500;
     }
 
@@ -51,12 +52,13 @@ export class EbmsError extends Error {
 export function messagesFromBody(body: unknown): EbmsMessage[] {
     if (!body || typeof body !== "object") return [];
     const messages = (body as { Messages?: unknown }).Messages;
-    return Array.isArray(messages) ? (messages as EbmsMessage[]) : [];
+    // EBMS's envelope is trusted no further than its shape: anything that is not an object is dropped.
+    return Array.isArray(messages) ? (messages.filter((m) => m !== null && typeof m === "object") as EbmsMessage[]) : [];
 }
 
 const text = (m: EbmsMessage): string => m.TextBriefDescription ?? m.BriefDescription ?? "EBMS message";
 const isErrorSeverity = (m: EbmsMessage, status: number): boolean => {
-    const severity = m.Severity?.toLowerCase();
+    const severity = typeof m.Severity === "string" ? m.Severity.toLowerCase() : undefined;
     // On a failure status every message is part of the failure. On a success, only a
     // message that says it is an error counts as one.
     if (status >= 400) return true;
