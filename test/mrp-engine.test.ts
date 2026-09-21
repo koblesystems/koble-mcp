@@ -107,11 +107,23 @@ test("a component shared by two parents is planned after both", () => {
     assert.equal(levels.get("WHEEL"), 1);
 });
 
-test("a rework batch that consumes its own finished good does not loop, and a real cycle is reported once", () => {
+test("a rework batch that consumes its own finished good does not loop", () => {
     const rework = runMrp({ today, items: [{ id: "HSBLEND", onHand: 0, leadTimeDays: 1, make: true, components: [{ item: "HSBLEND", qtyPer: 5 }, { item: "BAG", qtyPer: 1 }] }, { id: "BAG", onHand: 0, leadTimeDays: 1 }], demands: [sales("HSBLEND", 5, "2026-10-01")], supplies: [] });
-    assert.deepEqual(rework.plannedOrders.map((o) => `${o.item}:${o.qty}`), ["HSBLEND:5", "BAG:5"]);
-    const cyc = runMrp({ today, items: [{ id: "A", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "B", qtyPer: 1 }] }, { id: "B", onHand: 0, leadTimeDays: 0, make: true, components: [{ item: "A", qtyPer: 1 }] }], demands: [sales("A", 1, "2026-10-01")], supplies: [] });
-    assert.ok(cyc.exceptions.some((e) => e.type === "bom-cycle"));
+    assert.deepEqual(rework.plannedOrders.map((o) => `${o.item}:${o.qty}`).sort(), ["BAG:5", "HSBLEND:5"]);
+    assert.deepEqual(rework.exceptions.filter((e) => e.type === "bom-cycle"), []);
+});
+
+test("a real loop is reported exactly once and broken at one link, so the rest is still planned", () => {
+    const items: ItemParams[] = [
+        { id: "A", onHand: 0, make: true, components: [{ item: "B", qtyPer: 2 }] },
+        { id: "B", onHand: 0, make: true, components: [{ item: "A", qtyPer: 1 }, { item: "C", qtyPer: 3 }] },
+        { id: "C", onHand: 0 },
+    ];
+    for (const list of [items, [...items].reverse()]) {
+        const plan = runMrp({ today, items: list, demands: [sales("A", 1, "2026-10-01")], supplies: [] });
+        assert.equal(plan.exceptions.filter((e) => e.type === "bom-cycle").length, 1);
+        assert.deepEqual(plan.plannedOrders.map((o) => `${o.item}:${o.qty}`).sort(), ["A:1", "B:2", "C:6"], "A needs B, B needs C; only B -> A is left out");
+    }
 });
 
 test("a receipt nothing needs is reported, and one with an assumed date says so", () => {
@@ -125,12 +137,12 @@ test("demand or supply for an item with no parameters is reported, not silently 
     assert.deepEqual(plan.exceptions.map((e) => e.type), ["unknown-item"]);
 });
 
-test("the time frame: only demand due on or before it is bought for, and the rest is counted, not planned", () => {
+test("the time frame: only demand due on or before it is bought for; what lies beyond is listed, receipts included", () => {
     const items: ItemParams[] = [{ id: "A", onHand: 0 }];
     const demands = [sales("A", 5, "2026-09-30", "SO-1"), sales("A", 8, "2026-10-20", "SO-2"), sales("A", 40, "2027-01-15", "SO-3")];
-    const month = runMrp({ today, through: "2026-10-31", items, demands, supplies: [po("A", 100, "2027-02-01", "PO-late")] });
+    const month = runMrp({ today, through: "2026-10-31", items, demands, supplies: [po("A", 100, "2027-02-01", "PO-late"), po("A", 7, "2026-11-01", "PO-next-day")] });
     assert.deepEqual(month.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}`), ["5 by 2026-09-30", "8 by 2026-10-20"]);
-    assert.deepEqual(month.beyondHorizon, [{ item: "A", demandQty: 40, supplyQty: 100, firstDemandDate: "2027-01-15" }]);
+    assert.deepEqual(month.beyondHorizon, [{ item: "A", demandQty: 40, supplyQty: 107, firstDemandDate: "2027-01-15", supplies: [{ kind: "purchase", ref: "PO-next-day", qty: 7, date: "2026-11-01" }, { kind: "purchase", ref: "PO-late", qty: 100, date: "2027-02-01" }] }]);
     assert.equal(month.exceptions.length, 0, "a PO outside the time frame is not called unneeded or expedited");
     const week = runMrp({ today, through: "2026-09-25", items, demands, supplies: [] });
     assert.deepEqual(week.plannedOrders, []);
@@ -157,4 +169,79 @@ test("several shortages on one day make one order, with every reason attached", 
     assert.equal(plan.plannedOrders[0]?.qty, 40); // 35 needed, in tens
     assert.deepEqual(plan.plannedOrders[0]?.pegs.map((p) => p.ref), ["SO-1", "SO-2", "SO-3"]);
     assert.equal(plan.items[0]?.endingBalance, 5);
+});
+
+// ---------------------------------------------------------------- properties the review asked for
+
+test("the plan never depends on the order rows arrive in", () => {
+    let seed = 7;
+    const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+    const shuffle = <T>(list: readonly T[]): T[] => { const a = [...list]; for (let i = a.length - 1; i > 0; i -= 1) { const j = rnd(i + 1); [a[i], a[j]] = [a[j] as T, a[i] as T]; } return a; };
+    for (let run = 0; run < 300; run += 1) {
+        const item: ItemParams = { id: "X", onHand: rnd(30), ...(rnd(2) ? { safetyStock: rnd(15) } : {}), ...(rnd(3) === 0 ? { orderUpTo: 20 + rnd(30) } : {}), ...(rnd(3) === 0 ? { orderMultiple: 1 + rnd(12) } : {}) };
+        const demands = Array.from({ length: 1 + rnd(6) }, (_, i) => sales("X", 1 + rnd(25), addDays(today, rnd(12)), `SO-${i}`));
+        const supplies = Array.from({ length: rnd(5) }, (_, i) => po("X", 1 + rnd(25), addDays(today, rnd(20)), `PO-${i}`));
+        const a = runMrp({ today, items: [item], demands, supplies });
+        const b = runMrp({ today, items: [item], demands: shuffle(demands), supplies: shuffle(supplies) });
+        assert.deepEqual(b.plannedOrders, a.plannedOrders, `run ${run}`);
+        assert.deepEqual(b.exceptions, a.exceptions, `run ${run}`);
+        const perDay = new Set(a.plannedOrders.map((o) => o.receiptDate));
+        assert.equal(perDay.size, a.plannedOrders.length, "one order per item per day");
+        assert.ok(a.plannedOrders.every((o) => o.qty > 0), "no order of zero");
+        assert.ok((a.items[0]?.endingBalance ?? -1) >= (item.safetyStock ?? 0), "ends at or above the minimum");
+        assert.ok((a.items[0]?.timeline ?? []).every((row, i, all) => i === all.length - 1 || all[i + 1]?.date !== row.date || true));
+    }
+});
+
+test("two receipts are never both called spare when only one is", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 10 }], demands: [sales("A", 15, "2026-10-10")], supplies: [po("A", 10, "2026-10-01", "PO-1"), po("A", 10, "2026-10-02", "PO-2")] });
+    assert.deepEqual(plan.exceptions.filter((e) => e.type === "not-needed").map((e) => e.ref), ["PO-2"]);
+});
+
+test("an expedite pulls in the earliest later receipt, whatever order the receipts were read in", () => {
+    const supplies = [po("A", 10, "2026-12-01", "PO-LATE"), po("A", 10, "2026-10-01", "PO-EARLY")];
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0 }], demands: [sales("A", 8, "2026-09-25")], supplies });
+    assert.deepEqual(plan.exceptions.filter((e) => e.type === "expedite").map((e) => e.ref), ["PO-EARLY"]);
+    assert.deepEqual(plan.exceptions.filter((e) => e.type === "not-needed").map((e) => e.ref), ["PO-LATE"]);
+});
+
+test("a receipt with no expected date is asked for by the date it is needed, not 'expedited from' a guess", () => {
+    const plan = runMrp({ today, through: "2026-10-31", items: [{ id: "A", onHand: 0 }], demands: [sales("A", 8, "2026-09-25", "SO-7")], supplies: [{ ...po("A", 10, "2026-10-31", "PO#123"), dateAssumed: true }] });
+    const [message] = plan.exceptions.filter((e) => e.type === "expedite");
+    assert.equal(message?.dateAssumed, true);
+    assert.match(message?.message ?? "", /has no expected date in EBMS, and is needed by 2026-09-25 for sales SO-7/);
+});
+
+test("with a maximum, several lines on one day make one order that brings the item up to it", () => {
+    const item: ItemParams = { id: "A", onHand: 10, safetyStock: 5, orderUpTo: 40 };
+    for (const demands of [[sales("A", 12, today, "SO-1"), sales("A", 20, today, "SO-2")], [sales("A", 20, today, "SO-2"), sales("A", 12, today, "SO-1")]]) {
+        const plan = runMrp({ today, items: [item], demands, supplies: [] });
+        assert.deepEqual(plan.plannedOrders.map((o) => o.qty), [62]);
+        assert.equal(plan.items[0]?.endingBalance, 40);
+    }
+});
+
+test("a stock-out and an under-minimum need on the same day are one order", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0, safetyStock: 10 }], demands: [sales("A", 5, "2026-10-10", "SO-1"), sales("A", 5, "2026-10-10", "SO-2")], supplies: [] });
+    assert.deepEqual(plan.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}`), ["20 by 2026-10-10"]);
+    const under = runMrp({ today, items: [{ id: "A", onHand: 5, safetyStock: 10 }], demands: [sales("A", 9, today, "SO-1"), sales("A", 3, today, "SO-2")], supplies: [] });
+    assert.deepEqual(under.plannedOrders.map((o) => o.qty), [17]);
+});
+
+test("lot sizing never leaves a sliver and never plans a second order of nothing", () => {
+    assert.equal(lotSize(1000.04, { orderMultiple: 1000 }), 2000);
+    assert.equal(lotSize(0, { minOrder: 10 }), 0);
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0, orderMultiple: 1000 }], demands: [sales("A", 1000.04, "2026-10-01")], supplies: [] });
+    assert.deepEqual(plan.plannedOrders.map((o) => o.qty), [2000]);
+});
+
+test("a component nobody set up is reported when a parent needs it, not dropped", () => {
+    const plan = runMrp({ today, items: [{ id: "KIT", onHand: 0, make: true, components: [{ item: "GHOST", qtyPer: 2 }] }], demands: [sales("KIT", 3, "2026-10-01")], supplies: [] });
+    assert.match(plan.exceptions.find((e) => e.type === "unknown-item")?.message ?? "", /GHOST is needed to make KIT/);
+});
+
+test("restoring the minimum with a lead time that has run out is flagged like any other late release", () => {
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 2, safetyStock: 10, leadTimeDays: 21 }], demands: [], supplies: [] });
+    assert.equal(plan.plannedOrders[0]?.pastDue, true);
+    assert.equal(plan.exceptions.filter((e) => e.type === "past-due-release").length, 1);
 });
