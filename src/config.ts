@@ -30,7 +30,7 @@ const envSchema = z.object({
 });
 
 /** The bound actions the skills use. None of them posts, pays or sends anything. */
-export const DEFAULT_ALLOWED_COMMANDS = ["MarkAllAsShipped", "RecalculateAllPrices", "CalculateFreight", "ChangeCustomer"];
+const DEFAULT_ALLOWED_COMMANDS = ["MarkAllAsShipped", "RecalculateAllPrices", "CalculateFreight", "ChangeCustomer"];
 
 export interface CompanyInfo {
     id: string;
@@ -72,7 +72,7 @@ const splitList = (value: string | undefined): string[] =>
 export const normalizeCompany = (company: string): string => company.trim().toUpperCase();
 
 /** A company ID becomes a segment of the URL, so it may only be letters, digits, underscore and hyphen. */
-export const isCompanyId = (company: string): boolean => /^[A-Za-z0-9_-]{1,40}$/.test(company.trim());
+const isCompanyId = (company: string): boolean => /^[A-Za-z0-9_-]{1,40}$/.test(company.trim());
 
 /** Points the module at a different environment. Tests use it; the server never calls it. */
 export function configure(newEnv: Env): void {
@@ -93,9 +93,6 @@ export function setDiscoveryError(message: string): void {
     discoveryError = message;
 }
 
-export function discoveredCompanies(): CompanyInfo[] {
-    return discovered;
-}
 
 export function loadSettings(): Settings {
     if (settings) return settings;

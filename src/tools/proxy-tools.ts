@@ -15,7 +15,7 @@ import { z } from "zod/v4";
 import { assertWriteCompany, availableCompanies, isWriteCompany, loadSettings, resolveCompany, setDiscoveredCompanies, setDiscoveryError } from "../config.js";
 import { odataString, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
-import { readBefore, verifyDelete, verifyWrite, type Before } from "../verify-run.js";
+import { readBefore, verifyDelete, verifyWrite, type Before, type ReadBack } from "../verify-run.js";
 import type { Verification } from "../verify.js";
 import { DOCUMENT_ENTITIES, encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, validateName, validatePath } from "../guards.js";
 import { EbmsError } from "../ebms/errors.js";
@@ -31,7 +31,7 @@ const companyField = (required: boolean) => {
     return required ? base.min(1) : base.optional();
 };
 
-export function buildQuery(options: { select?: string | undefined; filter?: string | undefined; expand?: string | undefined; orderby?: string | undefined; top?: number | undefined; skip?: number | undefined; count?: boolean | undefined }): string {
+function buildQuery(options: { select?: string | undefined; filter?: string | undefined; expand?: string | undefined; orderby?: string | undefined; top?: number | undefined; skip?: number | undefined; count?: boolean | undefined }): string {
     const params = new URLSearchParams();
     if (options.filter) params.set("$filter", options.filter);
     if (options.select) params.set("$select", options.select);
@@ -44,12 +44,42 @@ export function buildQuery(options: { select?: string | undefined; filter?: stri
     return query.length > 0 ? `?${query}` : "";
 }
 
+/** The request must be the right shape for its verb, and must not carry PROCESS anywhere. */
+function checkShape(method: "POST" | "PATCH" | "DELETE", path: string, body: unknown): void {
+    const keyed = path.includes("(");
+    if (method === "DELETE" && body !== undefined) throw new Error("DELETE takes no body.");
+    if (method !== "DELETE" && body === undefined) throw new Error(`${method} needs a body.`);
+    if (method !== "POST" && !keyed) throw new Error(`${method} needs a keyed path, e.g. ARINV('<AUTOID>').`);
+    if (method === "POST" && keyed) throw new Error("POST goes to the entity set, e.g. ARINV, not a keyed path. Bound actions use ebms_command.");
+    const processKeys = findProcessKeys(body);
+    if (processKeys.length > 0) throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}. Posting or unposting a document is done by a person in EBMS, not through this server.`);
+}
+
+/** Documents already carrying the EXTERNALID a create would use. A second one is the costly mistake. */
+async function findExisting(company: string, entity: string, body: unknown): Promise<unknown[]> {
+    const externalId = externalIdOf(body);
+    if (externalId === undefined || !DOCUMENT_ENTITIES.includes(entity)) return [];
+    const found = await request(company, "GET", `${entity}${buildQuery({ filter: `EXTERNALID eq ${odataString(externalId)}`, select: "AUTOID,EXTERNALID", top: 2 })}`);
+    return (found.body as { value?: unknown[] } | null)?.value ?? [];
+}
+
+async function verifyAfter(company: string, method: "POST" | "PATCH" | "DELETE", entity: string, path: string, body: unknown, created: Record<string, unknown>, before: Before | null, readBack: ReadBack | undefined): Promise<Verification> {
+    if (method === "DELETE") return verifyDelete(company, path);
+    if (method === "PATCH") return verifyWrite(company, path, body, before, readBack);
+    if (typeof created["AUTOID"] !== "string") throw new Error("EBMS returned no AUTOID for the new record, so it could not be read back.");
+    return verifyWrite(company, `${entity}(${odataString(created["AUTOID"])})`, body, null, readBack);
+}
+
 export function registerProxyTools(register: ToolRegistrar): void {
     register(
         "ebms_companies",
         {
-            description:
-                "List the companies (datasets) this server can reach on its EBMS serial number, with name, ID, version and whether writes are allowed. Needs no credentials. Call it when the user names a company you haven't seen, or before the first write of a session, so the company is confirmed by name. Nothing marks a company as live or a test copy; ask if unsure.",
+            description: [
+                "List the companies (datasets) this server can reach on its EBMS serial number, with name, ID, version and whether writes are allowed.",
+                "Needs no credentials.",
+                "Call it when the user names a company you haven't seen, or before the first write of a session, so the company is confirmed by name.",
+                "Nothing marks a company as live or a test copy; ask if unsure.",
+            ].join(" "),
             inputSchema: z.object({}),
         },
         async () => {
@@ -77,8 +107,12 @@ export function registerProxyTools(register: ToolRegistrar): void {
     register(
         "ebms_get",
         {
-            description:
-                "Read from EBMS OData: a collection (path 'ARINV') or one record (path \"ARINV('<AUTOID>')\"). Always pass select — an unselected read returns every field, many computed, and large ones hit the 2-minute limit. For a collection, count is on by default and the result says whether rows were truncated. Query syntax and the install's quirks are in the ebms-api skill.",
+            description: [
+                "Read from EBMS OData: a collection (path 'ARINV') or one record (path \"ARINV('<AUTOID>')\").",
+                "Always pass select — an unselected read returns every field, many computed, and large ones hit the 2-minute limit.",
+                "For a collection, count is on by default and the result says whether rows were truncated.",
+                "Query syntax and the install's quirks are in the ebms-api skill.",
+            ].join(" "),
             inputSchema: z.object({
                 company: companyField(false),
                 path: z.string().min(1).describe("Required. Entity path only, e.g. ARINV, ARINV('7XQPR42LM8W91000'), EntityMetaData('ARINV'), $metadata. No query string."),
@@ -116,8 +150,13 @@ export function registerProxyTools(register: ToolRegistrar): void {
     register(
         "ebms_write",
         {
-            description:
-                "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one. Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists. A 2xx is not proof — EBMS silently ignores unknown @ids and unwritable fields — so the server reads back the fields you sent and returns a verification: ok, mismatches (sent vs stored), problems (a row that never appeared or was not removed), notes (rows EBMS added itself) and the stored rows. Treat ok:false as a partly failed write and tell the user. If the result says uncertain, read back before resending — a resent create or add duplicates.",
+            description: [
+                "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one.",
+                "Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists.",
+                "A 2xx is not proof — EBMS silently ignores unknown @ids and unwritable fields — so the server reads back the fields you sent and returns a verification: ok, mismatches (sent vs stored), problems (a row that never appeared or was not removed), notes (rows EBMS added itself) and the stored rows.",
+                "Treat ok:false as a partly failed write and tell the user.",
+                "If the result says uncertain, read back before resending — a resent create or add duplicates.",
+            ].join(" "),
             inputSchema: z.object({
                 company: companyField(true),
                 method: z.enum(["POST", "PATCH", "DELETE"]),
@@ -139,44 +178,21 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const company = resolveCompany(args.company);
                 assertWriteCompany(company);
                 const path = validatePath(args.path);
-                if (args.method === "DELETE" && args.body !== undefined) throw new Error("DELETE takes no body.");
-                if (args.method !== "DELETE" && args.body === undefined) throw new Error(`${args.method} needs a body.`);
-                if (args.method === "DELETE" && !path.includes("(")) throw new Error("DELETE needs a keyed path, e.g. ARINV('<AUTOID>').");
-                if (args.method === "PATCH" && !path.includes("(")) throw new Error("PATCH needs a keyed path, e.g. ARINV('<AUTOID>').");
-                if (args.method === "POST" && path.includes("(")) throw new Error("POST goes to the entity set, e.g. ARINV, not a keyed path. Bound actions use ebms_command.");
-                const processKeys = findProcessKeys(args.body);
-                if (processKeys.length > 0) {
-                    throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}. Posting or unposting a document is done by a person in EBMS, not through this server.`);
-                }
-                const externalId = args.method === "POST" ? externalIdOf(args.body) : undefined;
                 const entity = entityOf(args.path);
-                const notSent = (error: unknown, doing: string) =>
-                    jsonResult({ company, method: args.method, path, refused: true, uncertain: false, reason: `${doing} failed (${error instanceof Error ? error.message : String(error)}), so the write was NOT sent. Nothing changed in EBMS. It is safe to try again.` });
-                if (externalId !== undefined && DOCUMENT_ENTITIES.includes(entity)) {
-                    try {
-                    const check = await request(company, "GET", `${entity}${buildQuery({ filter: `EXTERNALID eq ${odataString(externalId)}`, select: "AUTOID,INVOICE,EXTERNALID", top: 2 })}`);
-                    const existing = (check.body as { value?: unknown[] } | null)?.value ?? [];
-                    if (existing.length > 0) {
-                        return jsonResult({
-                            company,
-                            refused: true,
-                            uncertain: false,
-                            reason: `An ${entity} record with EXTERNALID ${externalId} already exists. Nothing was sent. Read it and continue from it instead of creating another.`,
-                            existing,
-                        });
-                    }
-                    } catch (error) {
-                        return notSent(error, "The check for an existing record with this EXTERNALID");
-                    }
-                }
-                const wantVerify = args.verify ?? true;
+                checkShape(args.method, path, args.body);
+                const verify = args.verify ?? true;
+
+                // Everything up to here, and the two reads below, happen BEFORE the write: if one fails, nothing was sent.
                 let before: Before | null = null;
-                if (wantVerify && args.method === "PATCH") {
-                    try {
-                        before = await readBefore(company, path, args.body);
-                    } catch (error) {
-                        return notSent(error, "Reading the record before the write");
+                try {
+                    const existing = args.method === "POST" ? await findExisting(company, entity, args.body) : [];
+                    if (existing.length > 0) {
+                        return jsonResult({ company, refused: true, uncertain: false, reason: `An ${entity} record with EXTERNALID ${externalIdOf(args.body)} already exists. Nothing was sent. Read it and continue from it instead of creating another.`, existing });
                     }
+                    if (verify && args.method === "PATCH") before = await readBefore(company, path, args.body);
+                } catch (error) {
+                    const why = error instanceof Error ? error.message : String(error);
+                    return jsonResult({ company, method: args.method, path, refused: true, uncertain: false, reason: `A check before the write failed (${why}), so the write was NOT sent. Nothing changed in EBMS. It is safe to try again.` });
                 }
 
                 sent = true;
@@ -184,18 +200,11 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const created = (result.body ?? {}) as Record<string, unknown>;
                 const identity = Object.fromEntries(["AUTOID", "INVOICE", "ID"].filter((key) => created[key] !== undefined).map((key) => [key, created[key]]));
                 const base = { company, method: args.method, path, status: result.status, ...(Object.keys(identity).length > 0 ? { record: identity } : {}), warnings: result.warnings, ms: result.ms };
-                if (!wantVerify) return jsonResult({ ...base, verification: "skipped", next: "Read the record back and compare each field you sent." });
+                if (!verify) return jsonResult({ ...base, verification: "skipped", next: "Read the record back and compare each field you sent." });
 
                 const verifyStarted = Date.now();
                 try {
-                    let verification: Verification;
-                    if (args.method === "DELETE") verification = await verifyDelete(company, path);
-                    else {
-                        const autoId = typeof created["AUTOID"] === "string" ? created["AUTOID"] : undefined;
-                        const recordPath = args.method === "POST" ? (autoId ? `${entity}(${odataString(autoId)})` : null) : path;
-                        if (recordPath === null) throw new Error("EBMS returned no AUTOID for the new record, so it could not be read back.");
-                        verification = await verifyWrite(company, recordPath, args.body, args.method === "POST" ? null : before, args.readBack);
-                    }
+                    const verification = await verifyAfter(company, args.method, entity, path, args.body, created, before, args.readBack);
                     return jsonResult({
                         ...base,
                         verification,
@@ -205,12 +214,8 @@ export function registerProxyTools(register: ToolRegistrar): void {
                             : "EBMS accepted the request but did not store everything as sent. Show the user the mismatches and problems; do not resend an add.",
                     });
                 } catch (error) {
-                    return jsonResult({
-                        ...base,
-                        verification: null,
-                        verificationError: error instanceof Error ? error.message : String(error),
-                        next: "The write itself returned the status above; only the read-back failed. Read the record before doing anything else, and do not resend the write.",
-                    });
+                    // The write succeeded; only looking at it afterwards failed.
+                    return jsonResult({ ...base, verification: null, verificationError: error instanceof Error ? error.message : String(error), next: "The write itself returned the status above; only the read-back failed. Read the record before doing anything else, and do not resend the write." });
                 }
             } catch (error) {
                 return errorResult(error, { company: args.company, method: args.method, path: args.path, ...(sent && !(error instanceof EbmsError) ? { afterSend: true } : {}) });
@@ -221,8 +226,13 @@ export function registerProxyTools(register: ToolRegistrar): void {
     register(
         "ebms_command",
         {
-            description:
-                "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>. Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}. Pass the dialog's fields for one that has a dialog (ChangeCustomer). Refused for a company that is not configured (or not the sandbox, while testing), and for any action that is not on the server's short allow-list — nothing that posts, processes, pays or sends. Commands return little; read the record back afterwards.",
+            description: [
+                "Run a bound action on one record: POST /ENTITY('<AUTOID>')/Model.Entities.<Command>.",
+                "Omit body for a command with no dialog (MarkAllAsShipped, RecalculateAllPrices) — EBMS rejects even {}.",
+                "Pass the dialog's fields for one that has a dialog (ChangeCustomer).",
+                "Refused for a company that is not configured (or not the sandbox, while testing), and for any action that is not on the server's short allow-list — nothing that posts, processes, pays or sends.",
+                "Commands return little; read the record back afterwards.",
+            ].join(" "),
             inputSchema: z.object({
                 company: companyField(true),
                 entity: z.string().min(1).describe("Required. The entity, e.g. ARINV"),

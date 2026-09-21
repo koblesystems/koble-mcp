@@ -34,8 +34,6 @@ export interface ItemParams {
     safetyStock?: number;
     /** When set, an order brings the balance up to this level (EBMS's MAX_INVEN) instead of just back to the minimum. */
     orderUpTo?: number;
-    /** Smallest order worth placing. */
-    minOrder?: number;
     /** Orders are rounded up to a multiple of this (EBMS's reorder increment). */
     orderMultiple?: number;
     /** True when the item is manufactured; its planned orders explode through `components`. */
@@ -138,13 +136,11 @@ export const addDays = (date: string, days: number): string => new Date(Date.par
 const later = (a: string, b: string): string => (a > b ? a : b);
 const cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-/** Order quantity for a shortfall: at least the minimum, rounded up to the multiple. Never zero for a real shortfall. */
-export function lotSize(shortfall: number, item: Pick<ItemParams, "minOrder" | "orderMultiple">): number {
+/** Order quantity for a shortfall, rounded up to the reorder increment. Never zero for a real shortfall. */
+export function lotSize(shortfall: number, item: Pick<ItemParams, "orderMultiple">): number {
     if (shortfall <= 0) return 0;
-    let qty = Math.max(shortfall, item.minOrder ?? 0);
     const multiple = item.orderMultiple ?? 0;
-    if (multiple > 0) qty = Math.ceil(qty / multiple - 1e-9) * multiple;
-    return round(qty);
+    return round(multiple > 0 ? Math.ceil(shortfall / multiple - 1e-9) * multiple : shortfall);
 }
 
 export interface LowLevel {
@@ -235,7 +231,16 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
     const endOfDay: Array<{ date: string; balance: number }> = [];
     const place = (order: PlannedOrder): void => {
         planned.push(order);
-        if (order.pastDue) out.exceptions.push({ type: "past-due-release", item: item.id, ref: order.pegs[0]?.ref ?? "", qty: order.qty, from: order.releaseDate, to: order.receiptDate, message: `To have ${order.qty} of ${item.id} by ${order.receiptDate} this should have been released ${order.releaseDate} (lead time ${item.leadTimeDays ?? 0} days).` });
+        if (!order.pastDue) return;
+        out.exceptions.push({
+            type: "past-due-release",
+            item: item.id,
+            ref: order.pegs[0]?.ref ?? "",
+            qty: order.qty,
+            from: order.releaseDate,
+            to: order.receiptDate,
+            message: `To have ${order.qty} of ${item.id} by ${order.receiptDate} this should have been released ${order.releaseDate} (lead time ${item.leadTimeDays ?? 0} days).`,
+        });
     };
     const newOrder = (date: string, qty: number, pegs: Peg[]): PlannedOrder => {
         const releaseDate = addDays(date, -(item.leadTimeDays ?? 0));
@@ -376,7 +381,11 @@ export function runMrp(input: { today: string; through?: string | undefined; ite
 
     const byId = new Map(input.items.map((item) => [item.id, item]));
     const { levels, cycles, broken } = lowLevelCodes(input.items);
-    for (const cycle of cycles) out.exceptions.push({ type: "bom-cycle", item: cycle[0] ?? "", ref: cycle.join(" → "), message: `Bill of materials loops: ${cycle.join(" → ")}. The link that closes the loop (${cycle[cycle.length - 2]} → ${cycle[cycle.length - 1]}) was left out; every other link was planned.` });
+    for (const cycle of cycles) {
+        const loop = cycle.join(" → ");
+        const dropped = cycle.slice(-2).join(" → ");
+        out.exceptions.push({ type: "bom-cycle", item: cycle[0] ?? "", ref: loop, message: `Bill of materials loops: ${loop}. The link that closes the loop (${dropped}) was left out; every other link was planned.` });
+    }
 
     const demands = new Map<string, Demand[]>();
     const supplies = new Map<string, Supply[]>();

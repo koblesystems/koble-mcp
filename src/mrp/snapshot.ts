@@ -66,6 +66,17 @@ export async function readAll(company: string, entity: string, params: Record<st
     return rows;
 }
 
+/** Rows of an entity whose `field` is one of `ids`, asked for fifteen at a time to keep the filter short. */
+export async function readByIds(company: string, entity: string, field: string, ids: readonly string[], select: string, also = ""): Promise<Row[]> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    const rows: Row[] = [];
+    for (let i = 0; i < unique.length; i += 15) {
+        const anyOf = unique.slice(i, i + 15).map((id) => `${field} eq ${odataString(id)}`).join(" or ");
+        rows.push(...(await readAll(company, entity, { $filter: also ? `${also} and (${anyOf})` : anyOf, $select: select })));
+    }
+    return rows;
+}
+
 export interface ProductInfo {
     id: string;
     description: string;
@@ -130,33 +141,27 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     // One at a time: EBMS works through requests in turn (running these together was measured
     // and gained nothing), and live users share the same server.
     const types = options.includeJobs === false ? "DOC_TYPE eq 'S'" : "(DOC_TYPE eq 'S' or DOC_TYPE eq 'J')";
-    const productsRead = () => timed("products", () =>
+    const productRows = await timed("products", () =>
         readAll(company, "INVENTRY", {
             $filter: "not startswith(ID,'($)') and INACTIVE eq false",
             $select: "ID,DESCR_1,C_TYPE,PURC_METH,PRI_VENDOR,T_ON_HAND,MIN_INVEN,MAX_INVEN,ORDER_AMT,QUAN2ORDER,PUR_O,PUR_S,M_IN_O,M_IN_S,SALES_O,SALES_S,M_OUT_O,M_OUT_S,JOB_OUT_O,JOB_OUT_S",
         }),
     );
-    const bomRead = () => timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
-    const madeRead = () => timed("made", () => readAll(company, "APINVDET", { $filter: "DOC_TYPE eq 'M'", $select: "INVEN" }));
-    const linesRead = () => timed("sales", () =>
+    const bomRows = await timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
+    const madeRows = await timed("made", () => readAll(company, "APINVDET", { $filter: "DOC_TYPE eq 'M'", $select: "INVEN" }));
+    const lineRows = await timed("sales", () =>
         readAll(company, "ARINVDET", { $filter: `${types} and STATUS eq 'SalesOrder'`, $select: "INVOICE,INVEN,QUAN,SHIP,SHIP_DATE,DOC_TYPE,PURC_M_VIS,PAR_TIME,TIMESTAMP" }),
     );
-    const batchesRead = () => timed("batches", () =>
+    const batches = await timed("batches", () =>
         readAll(company, "INMFG", {
             $filter: "STATUS eq 0",
             $select: "AUTOID,BATCH,DATE,END_DATE",
             $expand: "FinishedDetails($select=INVEN,O_QUAN_VIS,SHIP_VIS,UNIT_MEAS,ETA_DATE),ARINVDETs($select=INVEN,QUAN,SHIP)",
         }, 50),
     );
-    const ordersRead = () => timed("purchases", () =>
+    const orders = await timed("purchases", () =>
         readAll(company, "APINV", { $filter: "STATUS eq 'U'", $select: "AUTOID,INVOICE,ID,INV_DATE", $expand: "Details($select=INVEN,O_QUAN_VIS,SHIP_VIS,UNIT_MEAS,ETA_DATE,DOC_TYPE,PURC_M_VIS)" }, 20),
     );
-    const productRows = await productsRead();
-    const bomRows = await bomRead();
-    const madeRows = await madeRead();
-    const lineRows = await linesRead();
-    const batches = await batchesRead();
-    const orders = await ordersRead();
 
     // Products: planning parameters and EBMS's own running totals, one paged read.
     const products = new Map<string, ProductInfo>();
@@ -211,14 +216,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     const needUnits = new Set<string>();
     for (const batch of batches) for (const line of (batch["FinishedDetails"] as Row[] | undefined) ?? []) if (text(line["UNIT_MEAS"])) needUnits.add(text(line["INVEN"]));
     for (const order of orders) for (const line of (order["Details"] as Row[] | undefined) ?? []) if (text(line["UNIT_MEAS"])) needUnits.add(text(line["INVEN"]));
-    const unitRows: UnitRow[] = [];
-    const ids = [...needUnits].filter(Boolean);
-    await timed("units", async () => {
-        for (let i = 0; i < ids.length; i += 15) {
-            const filter = ids.slice(i, i + 15).map((id) => `ID eq ${odataString(id)}`).join(" or ");
-            unitRows.push(...((await readAll(company, "INVENUNT", { $filter: filter, $select: "ID,UNIT,MULTIPLIER,MULTIPLY" })) as unknown as UnitRow[]));
-        }
-    });
+    const unitRows = (await timed("units", () => readByIds(company, "INVENUNT", "ID", [...needUnits], "ID,UNIT,MULTIPLIER,MULTIPLY"))) as unknown as UnitRow[];
     const convert = (item: string, qty: number, unit: unknown): number => {
         const result = toBaseUnits(item, qty, text(unit), unitRows);
         if (result.warning && !warnings.includes(result.warning)) warnings.push(result.warning);

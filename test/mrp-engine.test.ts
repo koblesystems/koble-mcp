@@ -6,9 +6,8 @@ const today = "2026-09-18";
 const sales = (item: string, qty: number, date: string, ref = "SO-1"): Demand => ({ item, qty, date, kind: "sales", ref });
 const po = (item: string, qty: number, date: string, ref = "PO-1"): Supply => ({ item, qty, date, kind: "purchase", ref });
 
-test("lot sizing: minimum order, then rounded up to the increment", () => {
+test("lot sizing: rounded up to the reorder increment", () => {
     assert.equal(lotSize(9, { orderMultiple: 5 }), 10);
-    assert.equal(lotSize(3, { minOrder: 12 }), 12);
     assert.equal(lotSize(0.2756, {}), 0.2756);
     assert.equal(lotSize(10, { orderMultiple: 5 }), 10);
 });
@@ -232,7 +231,7 @@ test("a stock-out and an under-minimum need on the same day are one order", () =
 
 test("lot sizing never leaves a sliver and never plans a second order of nothing", () => {
     assert.equal(lotSize(1000.04, { orderMultiple: 1000 }), 2000);
-    assert.equal(lotSize(0, { minOrder: 10 }), 0);
+    assert.equal(lotSize(0, { orderMultiple: 10 }), 0);
     const plan = runMrp({ today, items: [{ id: "A", onHand: 0, orderMultiple: 1000 }], demands: [sales("A", 1000.04, "2026-10-01")], supplies: [] });
     assert.deepEqual(plan.plannedOrders.map((o) => o.qty), [2000]);
 });

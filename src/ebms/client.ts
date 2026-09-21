@@ -17,7 +17,7 @@ const TOKEN_LIFETIME_MS = 9 * 60 * 1000; // EBMS tokens last ~10 minutes.
  * EBMS cuts requests off at about 2 minutes. This sits above that so it never ends a real
  * request early; it only stops a dropped connection from hanging a tool forever.
  */
-export const REQUEST_TIMEOUT_MS = 150_000;
+const REQUEST_TIMEOUT_MS = 150_000;
 
 interface TokenState {
     accessToken: string;

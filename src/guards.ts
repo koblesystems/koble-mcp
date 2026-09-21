@@ -17,7 +17,7 @@ export function validateName(value: string, what: string): string {
 }
 
 /** A key value as the caller means it (quotes un-doubled): no path, query or escape syntax, no control characters. */
-export function validateKeyValue(value: string, what = "Key"): string {
+function validateKeyValue(value: string, what = "Key"): string {
     if (value.length === 0 || value.length > 200) throw new Error(`${what} must be 1 to 200 characters.`);
     const bad = [...value].some((ch) => ch === "/" || ch === "\\" || ch === "?" || ch === "%" || isControl(ch));
     if (bad || value.includes("..")) {
@@ -64,7 +64,7 @@ function readLiteral(text: string, start: number): { value: string; end: number 
 }
 
 /** ENTITY, ENTITY('key'), ENTITY(FIELD='v',FIELD2='v'), or $metadata. Nothing else. */
-export function parsePath(path: string): ParsedPath {
+function parsePath(path: string): ParsedPath {
     const clean = path.trim().replace(/^\/+/, "");
     if (clean === "$metadata") return { entity: "$metadata", encoded: "$metadata", keyed: false };
     const open = clean.indexOf("(");

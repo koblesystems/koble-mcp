@@ -98,6 +98,13 @@ export function buildTree(input: { item: string; qty: number; items: readonly Bo
 
 /** An indented text rendering, for a tool result or a report. */
 export function renderTree(node: TreeNode): string[] {
-    const line = `${"  ".repeat(node.level)}${node.item}  need ${node.required}${node.level > 0 ? ` (${node.qtyPer} each)` : ""}` + (node.fromStock > 0 ? `, ${node.fromStock} from stock` : "") + (node.short > 0 ? `, ${node.action} ${node.short}` : node.level > 0 && !node.note ? ", covered" : "") + (node.note ? `  [${node.note}]` : "");
+    const child = node.level > 0;
+    const line = [
+        `${"  ".repeat(node.level)}${node.item}  need ${node.required}`,
+        child ? ` (${node.qtyPer} each)` : "",
+        node.fromStock > 0 ? `, ${node.fromStock} from stock` : "",
+        node.short > 0 ? `, ${node.action} ${node.short}` : child && !node.note ? ", covered" : "",
+        node.note ? `  [${node.note}]` : "",
+    ].join("");
     return [line, ...node.children.flatMap(renderTree)];
 }

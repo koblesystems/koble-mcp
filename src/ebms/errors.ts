@@ -49,7 +49,7 @@ export class EbmsError extends Error {
     }
 }
 
-export function messagesFromBody(body: unknown): EbmsMessage[] {
+function messagesFromBody(body: unknown): EbmsMessage[] {
     if (!body || typeof body !== "object") return [];
     const messages = (body as { Messages?: unknown }).Messages;
     // EBMS's envelope is trusted no further than its shape: anything that is not an object is dropped.

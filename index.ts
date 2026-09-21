@@ -12,6 +12,7 @@ import { describeCompanies, loadSettings, setDiscoveredCompanies, setDiscoveryEr
 import { discoverCompanies } from "./src/ebms/companies.js";
 import { registerMrpTools } from "./src/tools/mrp-tools.js";
 import { registerProxyTools } from "./src/tools/proxy-tools.js";
+import { registerWorksheetTools } from "./src/tools/worksheet-tools.js";
 import type { McpToolResult, ToolDefinition } from "./src/tools/types.js";
 
 function describeSetup(): string {
@@ -54,6 +55,7 @@ function register<S extends z.ZodType>(name: string, definition: ToolDefinition<
 
 registerProxyTools(register);
 registerMrpTools(register);
+registerWorksheetTools(register);
 
 async function main(): Promise<void> {
     await server.connect(new StdioServerTransport());

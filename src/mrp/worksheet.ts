@@ -3,10 +3,9 @@
  * needs that a plan does not: the vendor's unit, part number and cost for each item to buy
  * (INVENDOR), and those items' units (INVENUNT) so stock quantities become order quantities.
  */
-import { odataString } from "../ebms/client.js";
 import { TYPE_ORDER, checkCode, type RunManifest, type SheetRow } from "./csv.js";
 import type { Plan } from "./engine.js";
-import { readAll, type Snapshot } from "./snapshot.js";
+import { readByIds, type Snapshot } from "./snapshot.js";
 import { baseUnitOf, fromBaseUnits, type UnitRow } from "./units.js";
 
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
@@ -20,14 +19,10 @@ export function runId(company: string, now = new Date()): string {
 
 export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan, include: (item: string, type: string) => boolean = () => true): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
     const warnings: string[] = [];
+    // The items that get a unit and, for purchases, a vendor: everything the plan orders within scope.
     const buyIds = [...new Set(plan.plannedOrders.filter((order) => include(order.item, order.action === "buy" ? "BUY" : "MAKE")).map((order) => order.item))];
-    const vendorRows: Array<Record<string, unknown>> = [];
-    const unitRows: UnitRow[] = [];
-    for (let i = 0; i < buyIds.length; i += 15) {
-        const filter = buyIds.slice(i, i + 15).map((id) => `ID eq ${odataString(id)}`).join(" or ");
-        vendorRows.push(...(await readAll(company, "INVENDOR", { $filter: filter, $select: "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO" })));
-        unitRows.push(...((await readAll(company, "INVENUNT", { $filter: filter, $select: "ID,UNIT,MULTIPLIER,MULTIPLY" })) as unknown as UnitRow[]));
-    }
+    const vendorRows = await readByIds(company, "INVENDOR", "ID", buyIds, "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO");
+    const unitRows = (await readByIds(company, "INVENUNT", "ID", buyIds, "ID,UNIT,MULTIPLIER,MULTIPLY")) as unknown as UnitRow[];
     const vendorFor = (item: string): { vendor: string; unit: string; cost: number | null; partNo: string } => {
         const product = snapshot.products.get(item);
         const mine = vendorRows.filter((row) => text(row["ID"]) === item);
@@ -103,16 +98,39 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             "Est Cost": vendor.cost === null ? "" : round2(vendor.cost * converted.qty),
             Approve: "",
             Because: because,
-            Notes: [converted.warning ? "Check the unit before ordering." : "", later.has(order.item) ? "Already on order after the time frame (see On Order After Time Frame) — consider moving that order up instead of buying more." : ""].filter(Boolean).join(" "),
+            Notes: [
+                converted.warning ? "Check the unit before ordering." : "",
+                later.has(order.item) ? "Already on order after the time frame (see On Order After Time Frame) — consider moving that order up instead of buying more." : "",
+            ].filter(Boolean).join(" "),
         });
     }
     for (const exception of plan.exceptions) {
         if (exception.type === "expedite") {
             touched.add(exception.item);
-            rows.push({ ...base, Type: "EXPEDITE", Item: exception.item, ...figures(exception.item), Status: exception.dateAssumed ? "On order with no expected date in EBMS" : "Receipt arrives after it is needed", Recommendation: exception.dateAssumed ? `Confirm ${exception.ref} (${exception.qty}) will arrive by ${exception.to}` : `Move ${exception.ref} (${exception.qty}) from ${exception.from} to ${exception.to}`, "Needed By": exception.to ?? "", Document: exception.ref, Because: exception.message });
+            const receipt = `${exception.ref} (${exception.qty})`;
+            rows.push({
+                ...base,
+                Type: "EXPEDITE",
+                Item: exception.item,
+                ...figures(exception.item),
+                Status: exception.dateAssumed ? "On order with no expected date in EBMS" : "Receipt arrives after it is needed",
+                Recommendation: exception.dateAssumed ? `Confirm ${receipt} will arrive by ${exception.to}` : `Move ${receipt} from ${exception.from} to ${exception.to}`,
+                "Needed By": exception.to ?? "",
+                Document: exception.ref,
+                Because: exception.message,
+            });
         } else if (exception.type === "not-needed") {
             touched.add(exception.item);
-            rows.push({ ...base, Type: "NOT NEEDED", Item: exception.item, ...figures(exception.item), Status: "On order but nothing needs it", Recommendation: `Defer or cancel ${exception.ref} (${exception.qty})`, Document: exception.ref, Because: exception.message });
+            rows.push({
+                ...base,
+                Type: "NOT NEEDED",
+                Item: exception.item,
+                ...figures(exception.item),
+                Status: "On order but nothing needs it",
+                Recommendation: `Defer or cancel ${exception.ref} (${exception.qty})`,
+                Document: exception.ref,
+                Because: exception.message,
+            });
         }
     }
     for (const item of plan.items) {

@@ -30,42 +30,27 @@ export function jsonResult(value: unknown): McpToolResult {
 }
 
 /**
- * Every failure comes back in one shape. `uncertain` is the field a skill must read before
- * retrying a write: true means "read the record back first".
+ * Every failure comes back in one shape, and `uncertain` is the field to read before retrying a
+ * write: true means the request had gone to EBMS and the outcome is not known, so read the record
+ * back first. `afterSend` marks a fault inside this server once the request was already out.
  */
-export function errorResult(error: unknown, extra: Record<string, unknown> = {}): McpToolResult {
-    if (error instanceof EbmsError) {
-        return {
-            content: [
-                {
-                    type: "text",
-                    text: JSON.stringify(
-                        {
-                            error: { status: error.status, kind: error.kind, message: error.message, detail: error.detail, solution: error.solution },
-                            uncertain: error.uncertain,
-                            advice: error.uncertain
-                                ? extra["method"] === undefined && extra["command"] === undefined
-                                    ? "The read did not complete; it is safe to try again."
-                                    : "The outcome is unknown. Read the record back before sending this again; a resent create or add duplicates."
-                                : extra["method"] === undefined && extra["command"] === undefined
-                                  ? "EBMS refused this request."
-                                  : "EBMS refused this request; nothing was saved.",
-                            ...extra,
-                        },
-                        null,
-                        2,
-                    ),
-                },
-            ],
-            isError: true,
-        };
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    if (extra["afterSend"] === true) {
-        // Something failed in this server AFTER the request went to EBMS: the write may well have happened.
-        const { afterSend: _afterSend, ...rest } = extra;
-        return { content: [{ type: "text", text: JSON.stringify({ error: { message }, uncertain: true, advice: "The request was sent to EBMS and this server failed while handling the answer. The outcome is unknown: read the record back before sending this again; a resent create or add duplicates.", ...rest }, null, 2) }], isError: true };
-    }
-    // Otherwise it was raised by this server before a request went out.
-    return { content: [{ type: "text", text: JSON.stringify({ error: { message }, refused: true, uncertain: false, advice: "This server refused the request; nothing was sent to EBMS.", ...extra }, null, 2) }], isError: true };
+export function errorResult(error: unknown, context: Record<string, unknown> = {}): McpToolResult {
+    const { afterSend, ...where } = context;
+    const isWrite = where["method"] !== undefined || where["command"] !== undefined;
+    const ebms = error instanceof EbmsError ? error : null;
+    const uncertain = ebms ? ebms.uncertain : afterSend === true;
+    const advice = uncertain
+        ? isWrite
+            ? "The outcome is unknown. Read the record back before sending this again; a resent create or add duplicates."
+            : "The read did not complete; it is safe to try again."
+        : ebms
+          ? isWrite
+              ? "EBMS refused this request; nothing was saved."
+              : "EBMS refused this request."
+          : "This server refused the request; nothing was sent to EBMS.";
+    const detail = ebms
+        ? { status: ebms.status, kind: ebms.kind, message: ebms.message, detail: ebms.detail, solution: ebms.solution }
+        : { message: error instanceof Error ? error.message : String(error) };
+    const body = { error: detail, ...(ebms || uncertain ? {} : { refused: true }), uncertain, advice, ...where };
+    return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }], isError: true };
 }

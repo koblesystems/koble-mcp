@@ -38,7 +38,7 @@ test("only approved BUY rows become purchase-order lines, one order per vendor, 
     const edited = toCsv([{ ...rows[0], Approve: "Y", "Order Qty": 50 }, { ...rows[1], Approve: "yes" }, { ...rows[2], Approve: "" }, { ...base, Line: "L0009", Type: "BUY", Item: "LID", Vendor: "PACKCO", "Order Qty": 10, Approve: "" }]);
     const reading = readSheet(edited);
     assert.deepEqual(reading.problems, []);
-    assert.deepEqual(reading.counts, { rows: 4, buyRows: 3, approved: 2, notApproved: 1 });
+    assert.deepEqual(reading.counts, { rows: 4, candidates: 3, approved: 2, notApproved: 1 });
     const drafts = draftPurchaseOrders(reading);
     assert.deepEqual(drafts.map((d) => d.vendor), ["BIKEPARTS", "PACKCO"]);
     assert.equal(drafts[0]?.externalId, `${RUN}-BIKEPARTS`);

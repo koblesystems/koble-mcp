@@ -10,6 +10,7 @@ import { configure } from "../src/config.js";
 import { resetAuth } from "../src/ebms/client.js";
 import { checkCode, toCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
 import { registerMrpTools } from "../src/tools/mrp-tools.js";
+import { registerWorksheetTools } from "../src/tools/worksheet-tools.js";
 import type { McpToolResult } from "../src/tools/types.js";
 
 const textOf = (result: McpToolResult): string => { const [first] = result.content; return first?.type === "text" ? first.text : "{}"; };
@@ -47,11 +48,13 @@ globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
 let po: (args: unknown) => Promise<McpToolResult>;
 let planTool: (args: unknown) => Promise<McpToolResult>;
 let batchTool: (args: unknown) => Promise<McpToolResult>;
-registerMrpTools((name, def, handler) => {
+const tools: Parameters<typeof registerMrpTools>[0] = (name, def, handler) => {
     if (name === "po_from_csv") po = async (args) => handler(def.inputSchema.parse(args) as never);
     if (name === "batches_from_csv") batchTool = async (args) => handler(def.inputSchema.parse(args) as never);
     if (name === "mrp_plan") planTool = async (args) => handler(def.inputSchema.parse(args) as never);
-});
+};
+registerMrpTools(tools);
+registerWorksheetTools(tools);
 const call = async (args: unknown) => JSON.parse(textOf(await po(args))) as Record<string, any>;
 
 const RUN = "mrp-sbx-20260921-140533";
@@ -145,7 +148,7 @@ test("one worksheet, both kinds approved: each tool takes its own rows and neith
     assert.deepEqual(orders.drafts.map((d: any) => d.vendor), ["V1"]);
 
     const batches = JSON.parse(textOf(await batchTool({ company: "sbx", path: file }))) as Record<string, any>;
-    assert.deepEqual(batches.counts, { rows: 3, makeRows: 2, approved: 2, notApproved: 0 });
+    assert.deepEqual(batches.counts, { rows: 3, candidates: 2, approved: 2, notApproved: 0 });
     assert.equal(batches.drafts.length, 1);
     const [draft] = batches.drafts;
     assert.equal(draft.item, "GADGET");

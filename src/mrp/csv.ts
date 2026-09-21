@@ -121,7 +121,7 @@ export interface SheetReading {
     /** Rows a person marked for ordering that cannot become a purchase-order line as they stand. */
     problems: string[];
     notes: string[];
-    counts: { rows: number; buyRows: number; approved: number; notApproved: number };
+    counts: { rows: number; candidates: number; approved: number; notApproved: number };
 }
 
 const YES = /^(y|yes|true|x|1|approve|approved|ok)$/i;
@@ -158,7 +158,7 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
     const first = rows[0] ?? {};
     const header = text.replace(new RegExp("^" + BOM), "").split(/\r?\n/, 1)[0] ?? "";
     if (rows.length > 0 && Object.keys(first).length === 1 && header.includes(";")) {
-        return { run: "", company: "", fromManifest: false, approved: [], problems: ["The file is separated by semicolons, which is how some spreadsheet settings save CSV. Save it again as comma-separated CSV (in Excel: \"CSV UTF-8 (comma delimited)\")."], notes, counts: { rows: rows.length, buyRows: 0, approved: 0, notApproved: 0 } };
+        return { run: "", company: "", fromManifest: false, approved: [], problems: ["The file is separated by semicolons, which is how some spreadsheet settings save CSV. Save it again as comma-separated CSV (in Excel: \"CSV UTF-8 (comma delimited)\")."], notes, counts: { rows: rows.length, candidates: 0, approved: 0, notApproved: 0 } };
     }
     const missing = ["Run", "Company", "Line", "Check", "Type", "Item", "Vendor", "Order Qty", "Approve"].filter((name) => rows.length > 0 && !(name in first));
     if (rows.length === 0) problems.push("The file has no rows.");
@@ -177,7 +177,7 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
 
     const approved: ApprovedLine[] = [];
     const seenLines = new Set<string>();
-    let buyRows = 0;
+    let candidates = 0;
     let notApproved = 0;
     rows.forEach((row, index) => {
         const at = index + 2; // header is line 1
@@ -193,7 +193,7 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
             if (YES.test(mark) && rowType !== "BUY" && rowType !== "MAKE") problems.push(`Line ${at}: ${row["Item"]} is marked approved but is a ${rowType} row; only BUY rows become purchase orders and MAKE rows become batches.`);
             return;
         }
-        buyRows += 1;
+        candidates += 1;
         if (!YES.test(mark)) { notApproved += 1; return; }
         if (blocked) return;
         if (!line) { problems.push(`Line ${at}: the Line cell is blank, so the row cannot be tied to the run.`); return; }
@@ -242,7 +242,7 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
         });
     });
     if (!manifest && rows.length > 0 && missing.length === 0) notes.push("The run's own record was not found, so every value was taken from the file. Check the products, units and costs on each draft: a spreadsheet may have changed them.");
-    return { run, company, fromManifest: manifest !== null, approved, problems, notes, counts: { rows: rows.length, buyRows, approved: approved.length, notApproved } };
+    return { run, company, fromManifest: manifest !== null, approved, problems, notes, counts: { rows: rows.length, candidates, approved: approved.length, notApproved } };
 }
 
 export interface PurchaseOrderDraft {
