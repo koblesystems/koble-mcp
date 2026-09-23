@@ -27,5 +27,8 @@
   "homepage": "https://github.com/koblesystems/koble-mcp",
   "bugs": {
     "url": "https://github.com/koblesystems/koble-mcp/issues"
+  },
+  "bin": {
+    "koble": "cli.js"
   }
 }

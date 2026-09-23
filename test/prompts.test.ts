@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadGuide } from "../src/guide.js";
 import { PROMPTS, promptText, registerPrompts } from "../src/prompts.js";
+import { readFileSync } from "node:fs";
+import { VERSION } from "../src/version.js";
 
 test("every prompt names a skill the server actually serves", () => {
     const skills = new Set(loadGuide().skills.map((s) => s.name));
@@ -25,4 +27,8 @@ test("registration hands the host an optional string argument per field", () => 
     });
     assert.equal(seen.length, PROMPTS.length);
     assert.deepEqual(seen.find((s) => s.name === "mrp-plan")?.keys, ["days", "scope", "company"]);
+});
+
+test("the version the server reports is the package version", () => {
+    assert.equal(VERSION, (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version);
 });

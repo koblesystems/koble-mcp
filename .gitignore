@@ -4,6 +4,9 @@ node_modules/
 # compiled output (in-place build)
 /index.js
 /index.js.map
+/cli.js
+/cli.js.map
+/dist/
 src/**/*.js
 src/**/*.js.map
 test/**/*.js
