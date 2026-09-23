@@ -64,7 +64,8 @@ export function loadGuide(files: Map<string, string> = fromEmbedded() ?? fromFol
         const [folder, file] = path.split("/");
         if (file !== "SKILL.md" || path.split("/").length !== 2 || !folder) continue;
         const meta = frontMatter(text);
-        if (!meta || meta.name !== folder) continue;
+        // Only the EBMS procedures: koble-setup runs shell commands, which is Claude Code's business, not every host's.
+        if (!meta || meta.name !== folder || !folder.startsWith("ebms-")) continue;
         const others = [...files.keys()].filter((other) => other.startsWith(`${folder}/`) && other !== path);
         skills.push({ name: folder, description: meta.description, files: others });
     }

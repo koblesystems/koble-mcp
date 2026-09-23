@@ -1,11 +1,109 @@
 # koble-mcp
 
-A thin MCP server over the EBMS (Koble Systems) OData API. It owns **authentication, the
-list of companies it may use, and a few hard guards**, and nothing else. Which entity to touch, which
-fields to select, how to chunk a large order, when to read back, when to ask — all of that
-lives in skills. The three that ship here, in `skills/`, are `ebms-mrp`, `ebms-mrp-purchase-orders` and `ebms-mrp-batches`.
+EBMS (Koble Systems ERP) for Claude. Ask Claude to enter a sales order, raise or receive a purchase
+order, set up a product, manage a task, or plan what to buy and make — and it does it in EBMS,
+confirming each change with you and checking afterwards that EBMS stored what was sent.
 
-It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for comparison.
+It is two things in one install:
+
+- **A small MCP server** that owns the EBMS connection: your credentials, which companies it may
+  touch, and a few hard guards (nothing is ever posted, paid or sent; every write is verified).
+- **Skills** — the procedures, written down: how to build an order in chunks, what to confirm,
+  which EBMS quirks to avoid. They live in `skills/`, and the server also serves them to Claude
+  apps that cannot install skills themselves.
+
+## Install
+
+One command downloads the `koble` program (checked against the release's checksums), then
+`koble setup` asks for your EBMS serial number, a test company, your username and your password,
+checks that they work, stores the password in your system's credential store, and connects the
+Claude apps it finds. Run `koble doctor` any time to check everything.
+
+### Windows
+
+In **PowerShell** (Start menu → PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex
+```
+
+It installs `koble.exe` to `%LOCALAPPDATA%\Programs\koble` and adds that folder to your PATH.
+The password goes to Windows Credential Manager.
+
+> **If Windows blocks `koble.exe`.** Releases are not code-signed yet, so SmartScreen may show
+> "Windows protected your PC" — choose *More info → Run anyway*. On Windows 11 with **Smart App
+> Control** turned on, unsigned programs are blocked outright; until signed builds are published,
+> use a machine or VM without Smart App Control. Please don't turn it off just for this.
+
+### macOS
+
+In **Terminal**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash
+```
+
+It installs `koble` to `~/.local/bin` (Apple silicon). The password goes to the macOS Keychain.
+Intel Macs are not built yet.
+
+### Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash
+```
+
+x64 and arm64. The password goes to the Secret Service keyring when `secret-tool` is available,
+otherwise to a file in `~/.config/koble` that only you can read. Claude Desktop does not run on
+Linux; use Claude Code.
+
+### Claude Code
+
+Either run the installer above (setup installs the plugin for you), or add it from Claude Code:
+
+```bash
+claude plugin marketplace add koblesystems/koble-mcp
+claude plugin install koble-mcp@koblesystems
+```
+
+Then ask Claude to **"set up Koble"** (or run `/koble-mcp:koble-setup`): it installs the program,
+saves your settings, and has you type the password into `koble login` yourself — the password
+never goes through the chat.
+
+### Let an AI agent install it
+
+Point any coding agent at [install.md](install.md). It is written to be followed step by step.
+
+### After installing
+
+- **Claude Desktop:** quit and reopen it.
+- **Claude Code:** start a new session (or run `/mcp`).
+- Ask: *"Which EBMS companies can you see?"* — Claude should name them.
+
+Settings live in `~/.config/koble` (`%APPDATA%\koble` on Windows). `koble update` installs the
+newest release; `koble setup` again changes any answer.
+
+## Using it
+
+Ask in your own words — *"order 10 tubes from Bike Parts Co"*, *"what's open for the bike shop?"*,
+*"run MRP for the next 60 days"* — or start a named workflow:
+
+| Workflow | Claude Code | Claude Desktop |
+|---|---|---|
+| Plan what to buy and make | `/mcp__koble-mcp__mrp-plan` | the prompt menu (＋) → koble-mcp |
+| Create the POs / batches an MRP worksheet approved | `/mcp__koble-mcp__mrp-purchase-orders`, `…__mrp-batches` | same |
+| Sales order, purchase order, receiving, what's on order | `…__sales-order`, `…__purchase-order`, `…__receive`, `…__on-order` | same |
+| Products and tasks | `…__product`, `…__task` | same |
+
+With the plugin, each skill is also a command in Claude Code, e.g. `/koble-mcp:ebms-mrp`.
+
+**What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view`, `po_from_csv` and
+`batches_from_csv` never write to EBMS. Purchase orders and batches are only created by the second
+and third skills, one at a time, after you say yes to each. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
+this server builds itself, and a request that would land anywhere else is refused before it is
+sent. Leave it set while testing. The `PROCESS` field is refused in every request body, and
+`ebms_command` runs only a short list of actions, none of which posts, pays or sends.
+
+Testing it? [TESTING.md](TESTING.md) has a checklist and what to send back.
 
 ## Tools
 
@@ -15,6 +113,8 @@ It is the successor to the tool-per-task design in `ebms-mcp`, which is kept for
 | `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | anything but `ENTITY` or `ENTITY('key')`; a key containing `/ \ ? %` or `..` |
 | `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV`/`INMFG`/`TASK` whose `EXTERNALID` already exists; the same path rules |
 | `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); any action that is not on the allow-list (`MarkAllAsShipped`, `RecalculateAllPrices`, `CalculateFreight`, `ChangeCustomer` by default); `PROCESS` in the body |
+| `ebms_guide` | Serves the skills: the list, one skill, or one reference file. Lets Claude Desktop use them without uploading anything. | — (read-only; only the files it shipped with) |
+| `mrp_plan`, `mrp_item_view`, `po_from_csv`, `batches_from_csv` | Planning and worksheet reading (see *Planning*). | — (read-only) |
 
 Every result names the company it ran against. Every failure carries `uncertain` and says
 what it means:
@@ -34,7 +134,7 @@ hold even against text a model was tricked into using.
 
 **Actions are allowed by name, not refused by name.** EBMS has many bound actions that post,
 process, pay or send (`ProcessScanner`, `Post`, `Unpost`, `RecordPayment`, `Send`, …); a list of
-those could never be complete, so `ebms_command` runs only `EBMS_ALLOWED_COMMANDS`.
+those could never be complete, so `ebms_command` runs only `EBMS_ALLOWED_COMMANDS` — by default `MarkAllAsShipped`, `RecalculateAllPrices`, `CalculateFreight`, `ChangeCustomer` and `LinkInvoice`.
 
 ## Every write is verified
 
@@ -179,76 +279,24 @@ write to it, so the skills' rule of showing the exact request and getting a yes 
 write is what protects it — together with the guards below, which are the mistakes a
 confirmation step does not catch.
 
-## Getting started (for someone testing this)
+## Developing
 
-You need Node 22 or newer, Claude Desktop (or Claude Code), and an EBMS login for the company
-you will test against. Nothing here needs a Mac.
-
-1. **Get the code and build it.**
-   ```bash
-   git clone https://github.com/koblesystems/koble-mcp.git
-   cd koble-mcp
-   npm install
-   npm run check        # builds, then runs the tests; none of them touch the network
-   ```
-2. **Register the server** in Claude Desktop: Settings → Developer → Edit Config, and add this
-   under `mcpServers` (the file is strict JSON — no comments, no trailing commas). Use the full
-   path to `index.js` on your machine; on Windows double the backslashes.
-   ```json
-   "koble-mcp": {
-     "command": "node",
-     "args": ["/full/path/to/koble-mcp/index.js"],
-     "env": {
-       "EBMS_SERIAL_NUMBER": "your serial number",
-       "EBMS_USERNAME": "your EBMS user",
-       "EBMS_PASSWORD": "your EBMS password",
-       "EBMS_SANDBOX": "ID of a test company, if you have one"
-     }
-   }
-   ```
-   Restart Claude Desktop. Ask Claude "which EBMS companies can you see?" — it should list them by
-   name. You do not need to know a company ID; the server discovers them from the serial number.
-3. **Install the skills** in `skills/`. In Claude Desktop, zip each folder and add it under
-   Settings → Capabilities → Skills. In Claude Code, copy the folders into `~/.claude/skills/`.
-
-   | Skill | For |
-   |---|---|
-   | `ebms-api` | The foundation: how to call the tools, OData syntax, and this install's quirks. Install it with any of the others. |
-   | `ebms-sales-orders` | Building, changing and shipping sales orders |
-   | `ebms-purchase-orders` | Raising and changing purchase orders by hand, and receiving |
-   | `ebms-products` | Creating and editing products, units, vendor records |
-   | `ebms-tasks` | Tasks and work orders: raising, assigning, phases, time |
-   | `ebms-mrp` | Planning what to buy and make (read-only) |
-   | `ebms-mrp-purchase-orders` | Creating purchase orders from an approved MRP worksheet |
-   | `ebms-mrp-batches` | Creating manufacturing batches from an approved MRP worksheet |
-4. **Try it.** "Run MRP for the next 30 days." Claude should ask you to confirm the time frame and
-   the company, take half a minute or more, and give you the path of a worksheet CSV in
-   `Documents/Koble MRP`.
-
-**What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view`, `po_from_csv` and
-`batches_from_csv` never write to EBMS. Purchase orders and batches are only created by the second
-and third skills, one at a time, after you say yes to each. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
-this server builds itself, and a request that would land anywhere else is refused before it is
-sent. Leave it set while testing. The `PROCESS` field is refused in every request body, and
-`ebms_command` runs only a short list of actions, none of which posts, pays or sends.
-
-**What to look for, and tell us.** Numbers that disagree with what you know to be true, and why;
-products planned that should not be (or the reverse); units that come out wrong; anything the plan
-leaves out that matters in your business; how long a run takes on real data; and whether the
-worksheet is something a buyer would actually use. The `Because` column and `mrp_item_view` are
-there so you can check any number. Known gaps: no vendor lead times (EBMS does not publish them
-through its API yet), no per-warehouse planning, no warehouse transfers, and batches are created pending only — lots, serial numbers, recording production and processing stay in EBMS.
-
-## Setup
+Needs Node 22.
 
 ```bash
+git clone https://github.com/koblesystems/koble-mcp.git
+cd koble-mcp
 npm install
-cp .env.example .env    # fill it in; the file is gitignored
-npm run check           # build + tests, none of which touch the network
+npm run check                      # builds, then runs the tests; none of them touch the network
+node cli.js setup                  # the same setup, run from source
+node scripts/build-single.mjs      # the single-file koble for this platform, in dist/
 ```
 
-The server reads its settings from the process environment; supply them through the MCP
-client's `env` block (or `node --env-file=.env index.js`).
+The server reads `EBMS_*` settings from its environment when they are set (see `.env.example`),
+and otherwise from what `koble setup` stored — so an existing configuration that passes them in
+an MCP client's `env` block keeps working. A release is cut by pushing a tag `vX.Y.Z` that matches
+`package.json`; the release workflow builds `koble` for Windows, macOS and Linux and publishes it
+with `checksums.txt`.
 
 ## Design rules
 

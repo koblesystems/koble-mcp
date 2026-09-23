@@ -13,6 +13,7 @@ test("every skill folder is served, by the name in its front matter", () => {
     const names = guide.skills.map((s) => s.name);
     for (const name of ["ebms-api", "ebms-sales-orders", "ebms-purchase-orders", "ebms-products", "ebms-tasks", "ebms-mrp", "ebms-mrp-purchase-orders", "ebms-mrp-batches"]) assert.ok(names.includes(name), name);
     assert.ok(guide.skills.every((s) => s.description.length > 50), "every skill has a description");
+    assert.ok(!names.includes("koble-setup"), "the installer skill is for Claude Code, not served to every host");
     assert.match(skillSummary(guide), /ebms-tasks: Create and manage/);
 });
 

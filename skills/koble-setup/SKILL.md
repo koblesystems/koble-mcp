@@ -1,0 +1,107 @@
+---
+name: koble-setup
+description: Install, connect, update or repair koble — the program that connects Claude to EBMS (Koble Systems ERP). Downloads it, saves the EBMS serial number, test company and username, has the user enter their password privately, connects Claude Desktop and Claude Code, and runs its health check. Use whenever someone wants to set up, install, connect or update Koble or EBMS for Claude, when the ebms_* tools are missing or failing to sign in, or when they ask whether their EBMS connection is working — "set up Koble", "connect Claude to EBMS", "koble isn't working", "update koble".
+---
+
+# Set up koble
+
+`koble` is a single program. Once set up, every Claude app on this computer can use EBMS through
+it. This skill runs the steps for the user from Claude Code's terminal.
+
+**The EBMS password never passes through this chat.** Don't ask for it, and don't type it anywhere.
+The user types it into `koble login` in their own terminal, where it is hidden and goes straight to
+the system's credential store. If they paste it into the chat anyway, don't use it, and suggest
+they change it in EBMS, since it has now been shared.
+
+## 1. Is it installed?
+
+Run `koble version`. If that prints a version, skip to step 3.
+
+## 2. Install it
+
+This downloads a program from github.com/koblesystems/koble-mcp and verifies it against the
+release's published checksums. Say that, and ask before running it.
+
+- **macOS or Linux:**
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | KOBLE_SKIP_SETUP=1 bash
+  ```
+  It installs to `~/.local/bin/koble`. If that folder is not on PATH, the installer says so. Use
+  the full path for the rest of this skill, and tell the user which line to add to their shell
+  profile.
+- **Windows (PowerShell):**
+  ```powershell
+  $env:KOBLE_SKIP_SETUP = '1'; irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex
+  ```
+  It installs to `%LOCALAPPDATA%\Programs\koble\koble.exe` and adds that folder to the user's
+  PATH. Use the full path until a new terminal is opened.
+
+`KOBLE_SKIP_SETUP=1` stops the installer starting the interactive setup, which cannot run inside
+Claude's terminal. Step 3 does the same thing with flags instead.
+
+If Windows blocks `koble.exe` (Smart App Control or SmartScreen), the program is not yet
+code-signed. Tell the user, and point them to the README's Windows notes. Do not try to switch
+off Windows security settings.
+
+## 3. Save the settings
+
+Ask the user for three things, in one message:
+
+1. **The EBMS serial number**, the number at the start of their `…koblesystems.dev` address.
+   Don't repeat it back in full.
+2. **A test company**, if they have one, for trying things out. While set, every write can reach
+   only that company. Recommend it for a first setup. `none` allows writes to every company.
+3. **Their EBMS username.**
+
+Then run:
+
+```bash
+koble setup --serial <serial> --username <username> --sandbox <company or none> --skip-password --yes
+```
+
+It lists the companies the serial reaches, so a wrong serial shows up at once. It also connects
+Claude Desktop (backing up its config first) and installs this plugin in Claude Code if needed.
+Read its output to the user in plain words.
+
+## 4. The password — the user types it
+
+Tell the user, in these words or close to them:
+
+> Open a terminal window (on Windows, PowerShell) and run `koble login`. Type your EBMS password
+> when it asks; nothing will show as you type. It checks the password with EBMS before saving it.
+
+Wait until they say it's done. `koble login` prints "Signed in to …" when it worked.
+
+## 5. Check everything
+
+```bash
+koble doctor --json
+```
+
+Each check is `ok`, `warn`, `fail` or `info`, with a `fix` when something needs doing. Report
+the failures and warnings in plain words, and do what each `fix` says. Where the fix is
+`koble login`, that is the user's step, not yours. Then tell them:
+
+- **Claude Desktop:** quit and reopen it. The EBMS tools appear under the connectors, and the
+  named workflows appear in its prompt menu.
+- **Claude Code:** start a new session, or run `/mcp`. Type `/` to see the workflows, e.g.
+  `/mcp__koble-mcp__mrp-plan`.
+
+## Updating
+
+`koble update`, then restart the Claude apps. `koble doctor` also says when an update is
+available.
+
+## When something is wrong
+
+Run `koble doctor --json` first, every time. It checks, in order: the saved settings, whether
+EBMS is reachable, the stored password, a real sign-in, testing mode, Claude Desktop and Claude
+Code. The first failure is usually the cause of the rest. Common ones:
+
+| Doctor says | Do |
+|---|---|
+| Settings: none saved | step 3 |
+| EBMS: company list not reachable | Check the serial number and the internet connection. |
+| Password: not stored, or Sign-in failing | The user runs `koble login`. |
+| Claude Desktop: not connected, or runs something else | `koble connect` |
+| Claude Desktop: config is not valid JSON | Don't edit it yourself. Show the user the path and ask them to fix or move the file, then `koble connect`. |
