@@ -11,7 +11,7 @@
     "check": "npm run build && npm test",
     "start": "node index.js"
   },
-  "license": "ISC",
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^26.1.1",
     "typescript": "^7.0.2"
@@ -19,5 +19,13 @@
   "dependencies": {
     "@modelcontextprotocol/server": "^2.0.0-beta.4",
     "zod": "^4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/koblesystems/koble-mcp.git"
+  },
+  "homepage": "https://github.com/koblesystems/koble-mcp",
+  "bugs": {
+    "url": "https://github.com/koblesystems/koble-mcp/issues"
   }
 }

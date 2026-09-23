@@ -186,7 +186,7 @@ you will test against. Nothing here needs a Mac.
 
 1. **Get the code and build it.**
    ```bash
-   git clone https://github.com/dsbowman/koble-mcp.git
+   git clone https://github.com/koblesystems/koble-mcp.git
    cd koble-mcp
    npm install
    npm run check        # builds, then runs the tests; none of them touch the network
@@ -264,3 +264,7 @@ client's `env` block (or `node --env-file=.env index.js`).
 - **Credentials stay in the process.** They are read once, per company, and never enter a
   result, an error or the log.
 - **stdout belongs to JSON-RPC.** Log with `console.error` only.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Security reports: see [SECURITY.md](SECURITY.md).
