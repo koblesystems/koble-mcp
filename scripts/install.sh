@@ -44,7 +44,9 @@ curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" || fail "release $versi
 expected=$(awk -v f="$asset" '$2 == f || $2 == "*" f { print $1 }' "$tmp/checksums.txt")
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$asset" | awk '{ print $1 }')
 else actual=$(shasum -a 256 "$tmp/$asset" | awk '{ print $1 }'); fi
-[ -n "$expected" ] && [ "$expected" = "$actual" ] || fail "the download does not match checksums.txt; nothing was installed"
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+  fail "the download does not match checksums.txt; nothing was installed"
+fi
 
 mkdir -p "$dir"
 install -m 755 "$tmp/$asset" "$dir/koble"
