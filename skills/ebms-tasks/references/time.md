@@ -6,7 +6,7 @@ Read `../SKILL.md` first for the ground rules.
 gets billed for. Confirm the worker, the date, the hours and the work code back to the user
 before every single entry, and never batch several past one yes.
 
-**Unverified.** Writing a time entry has not been tested on this install.
+Verified on SBX, 2026-09-23, with a ZTEST task: an entry was booked, then removed.
 
 ## What a time entry looks like
 
@@ -50,20 +50,30 @@ ebms_write  company: sbx   method: PATCH   path: TASK('<task AUTOID>')
             readBack: {"record": "ACT_TIME,HOURS,BILL_TIME,STATUS"}
 ```
 
-EBMS's documentation shows exactly this shape, with dates as `MM/DD/YYYY`.
+Dates go in as `05/13/2026` or `2026-05-13`.
 
-Then read the verification, and read the task's `PYTMDET` rows back as well:
-
-- **A plain `PYTMDETs` array adds rows.** It is a create array, not a replace — but that is an
-  assumption worth testing on the first entry, by counting the rows before and after.
-- `ACT_TIME` on the task is read-only and accumulates from these rows. `HOURS` and `BILL_TIME`
-  are the task's own figures; `UPDATE_BT` asks EBMS to refresh billable time from actual time.
+- **A plain `PYTMDETs` array adds rows**; it does not replace the ones already there. The new row
+  comes back in `verification.rows` with its AUTOID.
+- The task's `ACT_TIME` is read-only and rises by the hours booked. `HOURS` and `BILL_TIME` are
+  the task's own figures and are not touched; `UPDATE_BT` asks EBMS to refresh billable time from
+  actual time.
 
 ## Correcting a mistake
 
-There is no tested route. `PYTMDET` rows are addressable by AUTOID, so a PATCH or DELETE against
-one is possible in principle, and untested in practice. Say so: a wrong time entry is better
-fixed in EBMS, by the person whose payroll it is, than guessed at here.
+**A direct `DELETE` on a `PYTMDET` row is refused**: EBMS answers with its screen's confirmation
+question as an error ("This timecard line is attached to a task and contributes to that task
+time total. Are you sure…?"). Removing it **through the task** works:
+
+```
+ebms_write  company: sbx   method: PATCH   path: TASK('<task AUTOID>')
+            body: {"PYTMDETs@delta": [{"@id": "<time entry AUTOID>", "@removed": true}]}
+            readBack: {"record": "ACT_TIME"}
+```
+
+`ACT_TIME` drops back by the hours removed. This takes an entry off someone's timecard: confirm
+the worker, date and hours with the user first, and prefer that the person it belongs to fixes
+it in EBMS when there is any doubt. Changing the hours on an entry (`{"@id": …, "HOURS": 2}` in
+the same delta) has not been tested.
 
 ## Not available
 

@@ -2,8 +2,7 @@
 
 Read `../SKILL.md` first for the ground rules.
 
-**Unverified.** Neither route below has been tested on this install, and the command route is
-blocked today. Say so before trying either.
+Verified on SBX, 2026-09-23: `LinkInvoice` makes a real link; writing `DOCUMENT` does not.
 
 ## What a linked task looks like
 
@@ -21,38 +20,27 @@ On SBX, tasks that carry work for a sales order read like this:
 So the link is really `DOC_AID` plus an optional `DOC_STAMP`, and both are read-only — which is
 why EBMS provides a command for this.
 
-## Route 1: the `LinkInvoice` command (blocked today)
-
-EBMS's own way:
+## Link it with `LinkInvoice`
 
 ```
-entity: TASK   key: <task AUTOID>   command: LinkInvoice
-body:   {"SalesInvoiceAutoID": "<ARINV AUTOID>",
-         "SalesDetailTimestamp": "<order line TIMESTAMP>"}
+ebms_command  company: sbx   entity: TASK   key: <task AUTOID>
+              command: LinkInvoice
+              body: {"SalesInvoiceAutoID": "<ARINV AUTOID>"}
 ```
 
-`SalesDetailTimestamp` is optional, and the line it names must already carry the service code the
-task bills as.
+Add `"SalesDetailTimestamp": "<order line TIMESTAMP>"` to tie the task to one line; the line it
+names must already carry the service code the task bills as. That variant has not been tested.
 
-**`LinkInvoice` is not on the server's command allow-list, so `ebms_command` refuses it.** Adding
-it is a deliberate change to the server, not something to work around. Tell the user the link has
-to be made in EBMS for now.
+The command answers with its dialog and nothing else, so **read the task back** and check that
+`DOC_AID` is now the order's AUTOID and `DOCUMENT` its invoice number. EBMS also fills in
+`DOC_TYPE` `S`.
 
-## Route 2: writing `DOCUMENT` (untested)
+## Do not write `DOCUMENT` to link
 
-`DOCUMENT` is writable, so a PATCH may be enough for a whole-order link:
-
-```
-ebms_write  company: sbx   method: PATCH   path: TASK('<task AUTOID>')
-            body: {"DOCUMENT": "1193", "CUST_ID": "SMIJOH"}
-            readBack: {"record": "DOCUMENT,DOC_AID,DOC_STAMP,DOC_TYPE,CUST_ID"}
-```
-
-The question the read-back answers: **does EBMS derive `DOC_AID` and `DOC_TYPE` from the number,
-or does it store a number that points nowhere?** If `DOC_AID` comes back empty, the link did not
-really happen — say so plainly and stop, rather than reporting a success.
-
-Linking to a specific **line** cannot be done this way at all: `DOC_STAMP` is read-only.
+`DOCUMENT` is writable, and a PATCH setting it returns 200 with `DOCUMENT` stored and `DOC_TYPE`
+set to `S` — but **`DOC_AID` stays empty**. It is a half-link: the number shows on the task, and
+nothing actually points at the order. If you find a task in that state, `LinkInvoice` repairs
+it.
 
 ## Going the other way
 

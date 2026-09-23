@@ -7,6 +7,10 @@ test("values compare the way EBMS stores them", () => {
     assert.equal(sameValue(1, 0), false);
     assert.equal(sameValue("PO-1", "PO-1      "), true);
     assert.equal(sameValue("a\nb", "a\r\nb"), true);
+    // Seen live on TASK.DUE_BY: sent in EBMS's documented MM/DD/YYYY, stored as ISO midnight.
+    assert.equal(sameValue("09/25/2026", "2026-09-25T00:00:00Z"), true);
+    assert.equal(sameValue("9/5/2026", "2026-09-05T00:00:00Z"), true);
+    assert.equal(sameValue("09/25/2026", "2026-09-26T00:00:00Z"), false);
     assert.equal(sameValue("", null), true);
     assert.equal(sameValue(true, false), false);
     assert.equal(sameValue(12.5, "12.50"), true);

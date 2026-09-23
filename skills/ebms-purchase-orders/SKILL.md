@@ -58,9 +58,16 @@ created; after that, change it here.
 - **`ETA_DATE` is EBMS's, not yours.** A date sent on a line came back as a different date or as
   nothing, on four purchase orders. Don't send it; read back what EBMS chose and tell the user
   when a line is expected after it is needed.
-- **`ACCOUNT` is filled in** from the vendor or company defaults on a line with a product
+- **`ACCOUNT` is filled in** from the product's purchase account on a line with a product
   (`60000-000` on SBX).
-- `TOTAL`, `SUBTOTAL` and `TOTAL_PO` are computed. `TOP_TOTAL` is silently dropped — never send it.
+- **A line with no `UNIT_VIS` gets the product's own `COST`**, per stock unit.
+- **Totals follow what has been received, like the sales side follows shipped.** `TOTAL_PO` is
+  the ordered amount. `SUBTOTAL` and `TOTAL` are the *invoice* amounts — what has been received
+  (plus the header's `FREIGHT` and `TAX` in `TOTAL`) — so a brand-new PO shows a `TOTAL_PO` of
+  104.50 and a `TOTAL` of 7.50. Report `TOTAL_PO` as "the order comes to".
+- **A line's `COST` is its received amount**: 0 until something arrives, then received quantity
+  × unit cost. That is why it reads 0 on a new line. Never write it on a line with a product.
+- `TOP_TOTAL` is silently dropped — never send it.
 
 ## Status
 
@@ -99,11 +106,16 @@ expand: Details($select=AUTOID,TIMESTAMP,INVEN,DESCR,O_QUAN_VIS,SHIP_VIS,B_QUAN_
 ordered, and `UNIT_VIS` the **unit cost** — the purchase document's fields are not the sales
 document's.
 
-## Not yet verified
+## Verified, and what is not
 
-Say so if a request depends on these: `MarkAllAsReceived` and `CreateBackOrder` (both bound
-actions, neither on the server's command allow-list, neither tested — see `references/receive.md`);
-`FREIGHT` on a PATCH rather than a create; timings on `APINV` (measured on `ARINV` only, and the
-document shape is the same, but that is an assumption); multi-warehouse purchase orders; drop-ship
-and special-order lines (`PURC_METH` other than stocked); vendor creation; serialized or
-lot-tracked receiving; and paying or posting anything.
+Verified end to end on SBX (EBMS 1.8.148, 2026-09-23) with a ZTEST product and PO#186, both
+deleted afterwards: creating a PO with a product line in a purchase unit and a charge line;
+addressing it by AUTOID and by `INVOICE`; changing quantity and unit cost, removing a line and
+adding one in one PATCH; `FREIGHT` on a PATCH; receiving part of a line in a larger unit and all
+of another; on-hand moving with it; reversing the receipt; and deleting the PO.
+
+Say so if a request depends on these: `MarkAllAsReceived` and `CreateBackOrder` (neither on the
+server's command allow-list, neither tested — see `references/receive.md`); timings on `APINV`
+(measured on `ARINV` only); multi-warehouse purchase orders; drop-ship and special-order lines
+(`PURC_METH` other than stocked); vendor creation; serialized or lot-tracked receiving; and
+paying or posting anything.

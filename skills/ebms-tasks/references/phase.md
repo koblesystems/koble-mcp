@@ -46,8 +46,9 @@ may not show, and offer to set it back.
 `PIPE_RANK` is the task's position within its phase, for ordering a board. Leave it alone unless
 the user asks.
 
-## Unverified
+## Verified
 
-Writing `PIPE_PHASE` has not been tested here; that it accepts any string is recorded from
-earlier testing of this install and is exactly why the read-back check above is not optional.
-Whether moving a phase also changes `STATUS` is unknown — report what comes back.
+On SBX, 2026-09-23: moving a ZTEST `Bike_Repair` task to `Waiting on Parts` stored that phase and
+EBMS derived the matching `PHASE_AID` from `TAPIPELINE`. `STATUS` did not change (`Open`).
+That an invalid string is also accepted comes from earlier testing of this install, and is why
+the read-back check above is not optional.

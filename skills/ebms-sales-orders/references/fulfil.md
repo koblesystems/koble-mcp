@@ -19,13 +19,18 @@ instead.
      does not have a dialog".
    - **Specific quantities:** the user says what shipped on each line.
 
-3. **Guard the quantities. EBMS checks neither of these:**
+3. **Shipping moves stock now, not when the order is processed.** On SBX (2026-09-23),
+   `MarkAllAsShipped` on an unprocessed ZTEST order took the product's `T_ON_HAND` from 0 to −7
+   at once — the 4 on a line plus the 3 in a materials list. Deleting the order put it back. Say
+   so when recording a shipment: it is not a draft.
+
+4. **Guard the quantities. EBMS checks neither of these:**
    - **Never ship more than ordered** unless the user explicitly says so. EBMS accepts 7 shipped
      against 5 ordered and invoices all 7, and `MarkAllAsShipped` won't correct it.
    - **Partial shipment?** Ask whether the rest is back-ordered. If yes, set
      `B_QUAN_VIS` = ordered − shipped yourself; EBMS leaves it at 0.
 
-4. **Record the shipment:**
+5. **Record the shipment:**
    ```
    ebms_write  company: sbx
                method: PATCH
@@ -39,11 +44,11 @@ instead.
    On an order with more than 50 lines, split the delta into pieces of 50 or fewer, as in
    `change.md`. These are modifies, so resending one after an `uncertain` result is safe.
 
-5. **Report the shipment from `verification.rows`:** shipped and back-ordered quantity per line,
+6. **Report the shipment from `verification.rows`:** shipped and back-ordered quantity per line,
    and `TOTAL` — the amount that will be invoiced when someone processes it. `TOTAL_SO` is the
    ordered total and does not move.
 
-6. **Then stop, and say what is left.** For example: *"Order 1193 is recorded as shipped: 2 of 3
+7. **Then stop, and say what is left.** For example: *"Order 1193 is recorded as shipped: 2 of 3
    mugs, 1 back-ordered, $87.00 to invoice. Processing it into an invoice is done in EBMS —
    this server won't post a document."*
 

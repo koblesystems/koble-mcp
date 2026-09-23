@@ -51,11 +51,11 @@ Read `../SKILL.md` first for the ground rules.
 
 ## Things that behave differently from a sales order
 
-- **`TOP_TOTAL` is silently dropped** on POST and PATCH alike. `TAX` and `FREIGHT` persist and
-  `TOTAL` recomputes from them. `FREIGHT` on a PATCH specifically has not been tested — check the
-  read-back rather than assuming.
-- **A line's `COST` stays 0** when the line was written over OData, so the document's `SUBTOTAL`
-  can understate until EBMS recomputes it. Do not "fix" that by writing `COST`.
+- **`TOP_TOTAL` is silently dropped** on POST and PATCH alike. `TAX` and `FREIGHT` persist on
+  both (`FREIGHT` on a PATCH verified 2026-09-23) and flow into `TOTAL` and `TOTAL_PO`.
+- **A line's `COST` is its received amount**, 0 until something arrives. `SUBTOTAL` and `TOTAL`
+  follow received quantities; `TOTAL_PO` is the ordered value. Do not "fix" a 0 by writing `COST`.
+- An added line with no `UNIT_VIS` is costed at the product's own `COST` per stock unit.
 - **`DESCR_H` truncates at 30 characters** without complaint.
 - Changing the vendor on an existing PO is not possible here: there is no `ChangeVendor` command
   on the server's allow-list, and `ID` cannot be PATCHed on a saved document. Raise a new PO.

@@ -107,9 +107,14 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
   line; EBMS derives the rest. On a **description-only** line (no `INVEN`, quantity 0),
   `COST` *is* the amount and is mirrored into `UNIT_VIS` — that is the documented way to
   carry a freight or miscellaneous charge.
-- **A matched line's `COST` stays 0 when the line was written over OData**, so the
-  document's `SUBTOTAL` understates until EBMS recomputes it. Don't "fix" it by writing
-  `COST` — see above.
+- **A matched purchase line's `COST` is its *received* amount** — 0 until something arrives,
+  then received × unit cost. (Corrected 2026-09-23: earlier notes said it "stays 0 over OData";
+  it was 0 because nothing had been received.) `SUBTOTAL` and `TOTAL` on `APINV` follow received
+  quantities the same way, as the sales side's `TOTAL` follows shipped; `TOTAL_PO` is the ordered
+  value. Don't "fix" a 0 by writing `COST` — see above.
+- **A description-only purchase line is marked received on create** (`SHIP_VIS` 1), so its
+  `COST` counts in `SUBTOTAL` immediately. Send `DESCR`, `COST` and `ACCOUNT` only: a `UNIT_VIS`
+  of 0 is overwritten with the amount.
 - **`APVENDOR` does not auto-number.** A POST with no `ID` is accepted and creates a vendor
   whose natural key is the **empty string**: a record that no natural-key lookup will ever
   find. Vendor IDs are user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`); always send
@@ -122,6 +127,40 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
   PATCH that returns 2xx. Read back and compare for anything that matters.
 - `TREE_ID` (inventory folder) is accepted unpadded (`"16"`) even though EBMS space-pads
   it internally.
+
+## Stock moves before processing
+
+Verified on SBX, 2026-09-23, with a ZTEST product:
+
+- **Shipping an unprocessed sales order changes `T_ON_HAND` at once** (`MarkAllAsShipped`
+  took it from 0 to −7, materials included). Deleting the order restored it.
+- **Receiving on an unprocessed purchase order does too** (`SHIP_VIS` 1 on a CASE line of 12,
+  plus 4 each, raised it by 16). Setting `SHIP_VIS` back to 0 reversed it exactly.
+- `SHIP_VIS` on a purchase line is in the **line's** unit, not the stock unit.
+
+## Tasks and time
+
+Verified on SBX, 2026-09-23, with a ZTEST task:
+
+- `POST TASK` assigns `ID`; `STATUS` and `ASSIGN_EMP` are derived (from the `TASTATUS` logic
+  expressions and from `EMP_ID`). Completing a task may approve it in the same step
+  (`APPROVED_C` set by EBMS, `STATUS` `Approved`), at least for a task manager.
+- Dates are accepted as `MM/DD/YYYY` and as `YYYY-MM-DD`, and stored as ISO midnight.
+- **Writing `DOCUMENT` is a half-link**: stored, `DOC_TYPE` set to `S`, `DOC_AID` left empty.
+  The `LinkInvoice` command makes the real link.
+- A valid `PIPE_PHASE` makes EBMS derive `PHASE_AID` from `TAPIPELINE`.
+- `PYTMDETs: [...]` on a task PATCH adds time rows. **`DELETE PYTMDET(...)` is refused** with
+  the client's "Are you sure…?" prompt returned as an error; `PYTMDETs@delta` with `@removed`
+  through the task works. **A task with time cannot be deleted** ("You cannot delete a task
+  that has time entered").
+
+## Products created through the API
+
+- A new product gets a single blank main unit (`INVENUNT` `UNIT` "", `Smaller`, multiplier 0)
+  and blank `EACH_UNIT` / `DEF_UNIT`.
+- Units and vendor records can be added as child collections on a product PATCH
+  (`INVENUNTs`, `INVENDORs`). Adding a vendor record does not set `PRI_VENDOR`. Deleting the
+  product removes both.
 
 ## Other
 

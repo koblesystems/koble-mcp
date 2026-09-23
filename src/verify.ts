@@ -43,8 +43,13 @@ export function sameValue(sent: unknown, stored: unknown): boolean {
     if (typeof sent === "number" && typeof stored === "string" && stored.trim() !== "" && !Number.isNaN(Number(stored))) return Math.abs(sent - Number(stored)) < TOLERANCE;
     if (typeof sent === "boolean" || typeof stored === "boolean") return sent === stored;
     const text = (value: unknown): string => (value === null || value === undefined ? "" : String(value).replace(/\r\n/g, "\n").trim());
-    // A date sent as a day and stored as midnight of that day is the same date.
-    const dayOf = (value: string): string | null => (/^\d{4}-\d{2}-\d{2}(T00:00:00(\.0+)?(Z|[+-]00:00)?)?$/.test(value) ? value.slice(0, 10) : null);
+    // A date sent as a day and stored as midnight of that day is the same date. EBMS documents
+    // MM/DD/YYYY for input and stores ISO, so both spellings of a day are compared as a day.
+    const dayOf = (value: string): string | null => {
+        if (/^\d{4}-\d{2}-\d{2}(T00:00:00(\.0+)?(Z|[+-]00:00)?)?$/.test(value)) return value.slice(0, 10);
+        const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
+        return us ? `${us[3]}-${us[1]!.padStart(2, "0")}-${us[2]!.padStart(2, "0")}` : null;
+    };
     const a = text(sent);
     const b = text(stored);
     if (dayOf(a) !== null && dayOf(a) === dayOf(b)) return true;

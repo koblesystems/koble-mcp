@@ -1,12 +1,12 @@
 ---
 name: ebms-tasks
-description: Create and manage EBMS / Koble tasks and work orders (TASK) — raising a task for a customer or a job, assigning it to a worker, setting its type, priority, due date and note, moving it through its pipeline phase, linking it to a sales order or an order line, recording hours against it, and marking it complete. Use whenever someone wants a task, work order, ticket or job card made, assigned, scheduled, updated, moved to another phase or closed, wants to know what is open or who is working on what, or wants time booked against a task — "make a task for Mike to fix the Smith bike by Friday", "what's open for the bike shop", "log 3 hours on that ticket", "move it to waiting on parts". Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
+description: Create and manage EBMS / Koble tasks and work orders (TASK) — raising a task for a customer or a job, assigning it to a worker, setting its type, priority, due date and note, moving it through its pipeline phase, linking it to a sales order or an order line, recording hours against it, and marking it complete. Use whenever someone wants a task, work order, ticket or job card made, assigned, scheduled, updated, moved to another phase or closed, wants to know what is open or who is working on what, or wants time booked against a task — "make a task for Mike to fix the Smith bike by Friday", "what's open for the bike shop", "log 3 hours on that ticket", "move it to waiting on parts". Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get, ebms_write and ebms_command).
 ---
 
 # EBMS tasks and work orders
 
 Workflows for `TASK` and the records around it. Everything runs through the koble-mcp tools
-`ebms_get` and `ebms_write`; how to call them, and how to read a write's verification, is in the
+`ebms_get`, `ebms_write` and `ebms_command`; how to call them, and how to read a write's verification, is in the
 **ebms-api** skill — load it first. `references/entities/TASK.md` there lists every field.
 
 If those tools are not available, say the koble-mcp server is not connected and stop.
@@ -31,7 +31,7 @@ If those tools are not available, say the koble-mcp server is not connected and 
 
 ## The shape of a task
 
-- **`ID` is a 10-character key EBMS assigns** (`K7Q2M9X4LA`), not something you choose.
+- **`ID` is a 10-character key EBMS assigns on create** (`H3J6K9L2MC`). Never send one.
 - **`TASK` also holds templates.** Rows whose `ID` starts with `($)` — `($)SALES`, `($)WORKCON` —
   are task templates, one per type, not real tasks. **Exclude them from every search** with
   `not startswith(ID,'($)')`. SBX has 1,742 rows and 1,726 real tasks.
@@ -40,7 +40,7 @@ If those tools are not available, say the koble-mcp server is not connected and 
   the task reads `Open`, `Pending`, `Waiting for Parts`, `Completed`, `Approved`, `Billed` or
   `Closed`. Never try to write `STATUS`.
 - **`ASSIGN_EMP` is read-only too** — a pipe-wrapped summary (`|RIVALE|`) of the task's assigned
-  workers. `EMP_ID` is the writable one.
+  workers. Setting `EMP_ID` fills it in; nothing else is needed to assign one worker.
 - `DOCUMENT` is the linked document's number, with `DOC_AID`, `DOC_STAMP` and `DOC_TYPE`
   read-only beside it. See `references/link.md`.
 
@@ -88,17 +88,17 @@ Three read quirks to plan around:
 - **A collection filter across the child workers 500s** — `TAEMPs/any(...)` fails on this build.
   Read `TAEMP` separately if you need to search by assigned worker beyond `EMP_ID`.
 
-## Not yet verified
+## Verified, and what is not
 
-**Every write in this skill is unverified.** `GET` on `TASK` and `PYEMP` is confirmed; creating,
-changing and deleting a task, assigning a worker, linking a document and entering time are all
-documented but untested on this install. Say so before the first write of a session, and treat
-the verification on every write as the real answer.
+Verified end to end on SBX (EBMS 1.8.148, 2026-09-23) with a ZTEST task that was deleted
+afterwards: creating a task (EBMS assigns `ID`, derives `STATUS` and `ASSIGN_EMP`); changing it;
+`DUE_BY` as either `09/25/2026` or `2026-09-25`; a valid `PIPE_PHASE` (EBMS derives
+`PHASE_AID`); linking to a sales order with `LinkInvoice`; booking time through `PYTMDETs`;
+removing that time again; completing the task; and deleting it.
 
-Specifically unknown: whether `ID` is assigned on a create (EBMS does **not** auto-number
-vendors, so this is a real question); the date format `DUE_BY` accepts; whether `EMP_ID` alone
-assigns a worker or `TAEMPs` rows are needed; what `STATUS` becomes after `COMPLETED` is set;
-whether `LinkInvoice` is required to attach a sales order or `DOCUMENT` is enough; and whether a
-time entry needs `WORK_CODE`. None of the task commands (`ClockIn`, `ClockOut`, `EnterTime`,
-`LinkInvoice`, `NewPYTMDET`, `UploadFile`, `Email`, `Text`, `Call`) are on the server's
-allow-list, so none can be run today.
+Still unknown: multiple workers through `TAEMPs`; whether a time entry can be saved without a
+`WORK_CODE`; linking to a specific order **line** (`SalesDetailTimestamp`); and what `STATUS`
+a completed task reads for a user who is not a task manager.
+
+Of the task commands, only `LinkInvoice` is on the server's allow-list. `ClockIn`, `ClockOut`,
+`EnterTime`, `NewPYTMDET`, `UploadFile`, `Email`, `Text` and `Call` are refused.

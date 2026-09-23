@@ -30,7 +30,7 @@ const envSchema = z.object({
 });
 
 /** The bound actions the skills use. None of them posts, pays or sends anything. */
-const DEFAULT_ALLOWED_COMMANDS = ["MarkAllAsShipped", "RecalculateAllPrices", "CalculateFreight", "ChangeCustomer"];
+const DEFAULT_ALLOWED_COMMANDS = ["MarkAllAsShipped", "RecalculateAllPrices", "CalculateFreight", "ChangeCustomer", "LinkInvoice"];
 
 export interface CompanyInfo {
     id: string;

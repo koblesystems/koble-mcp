@@ -134,6 +134,19 @@ test("a command without a body sends no body at all, and actions off the allow-l
     assert.equal(sent.length, 1);
 });
 
+test("LinkInvoice is allowed and carries its dialog body; the task clock commands are not", async () => {
+    fresh();
+    script.push(() => json(200, { SalesInvoiceAutoID: "SO1" }));
+    const ok = await call("ebms_command", { company: "sbx", entity: "TASK", key: "T1", command: "LinkInvoice", body: { SalesInvoiceAutoID: "SO1" } });
+    assert.equal(ok.status, 200);
+    assert.deepEqual(sent[0]?.body, { SalesInvoiceAutoID: "SO1" });
+    for (const command of ["ClockIn", "ClockOut", "EnterTime", "NewPYTMDET", "MarkAllAsReceived", "CreateBackOrder"]) {
+        const denied = await call("ebms_command", { company: "sbx", entity: "TASK", key: "T1", command });
+        assert.match(String((denied.error as { message: string }).message), /not one of the actions this server runs/, command);
+    }
+    assert.equal(sent.length, 1);
+});
+
 test("reads work on a company outside the sandbox, report truncation, and warn without a select", async () => {
     fresh();
     script.push(() => json(200, { "@odata.count": 120, value: [{ AUTOID: "1" }] }));

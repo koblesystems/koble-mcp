@@ -2,8 +2,7 @@
 
 Read `../SKILL.md` first for the ground rules and the lookup tables.
 
-**Every write on this page is unverified against a live install.** Say so before the first one,
-and let the write's verification be the answer rather than this page.
+Verified on SBX, 2026-09-23, with a ZTEST task created, changed, completed and deleted.
 
 ## Raise a task
 
@@ -50,8 +49,7 @@ and let the write's verification be the answer rather than this page.
                readBack: {"record": "ID,STATUS,CREATE_D,ASSIGN_EMP,PIPE_PHASE"}
    ```
 
-   EBMS's own documentation shows dates as `MM/DD/YYYY` here. If that is refused, try
-   `YYYY-MM-DD` and record which one worked.
+   Both `09/25/2026` and `2026-09-25` are accepted; EBMS stores midnight of that day.
 
 6. **Report what came back**: the `ID` EBMS assigned, the `STATUS` it derived, and anything in
    `mismatches` — a field EBMS quietly dropped will show up there rather than as an error.
@@ -65,8 +63,8 @@ ebms_write  company: sbx   method: PATCH   path: TASK('<AUTOID>')
 ```
 
 Address the task by quoted AUTOID, or by its quoted `ID` (`TASK('K7Q2M9X4LA')`). Reassigning is
-just `EMP_ID`; whether that is enough on its own, or whether the `TAEMPs` child rows also need
-writing, is unverified — read `ASSIGN_EMP` back and say what it shows.
+just `EMP_ID`: EBMS rebuilds `ASSIGN_EMP` from it. Several workers on one task would go through
+the `TAEMPs` child rows, which have not been tested.
 
 ## Close a task
 
@@ -78,14 +76,17 @@ ebms_write  company: sbx   method: PATCH   path: TASK('<AUTOID>')
             readBack: {"record": "STATUS,COMPLETED,COMP_D,COMP_U"}
 ```
 
-On SBX, completed tasks read `STATUS` `Closed` or `Completed` depending on whether they were also
-approved (`APPROVED_C`), which is the logic expression on the `TASTATUS` rows doing its work.
-**Report the status EBMS derived** rather than telling the user what you expected.
+EBMS stamps `COMP_D` and `COMP_U` itself. **It may approve the task in the same step**: on SBX,
+completing the test task also set `APPROVED_C` and `STATUS` came back `Approved`, not
+`Completed` — most likely because the signed-in user is a task manager. Older tasks read
+`Closed`. The `TASTATUS` logic expressions decide, so **report the status EBMS derived** rather
+than the one you expected, and mention it when the task was approved as well as completed.
 
-Reopening is `{"COMPLETED": false}` — untested, like everything here.
+Reopening is `{"COMPLETED": false}` — not tested.
 
 ## Deleting a task
 
-Possible with `method: DELETE`, and the server verifies the record is gone. Untested, and a task
-usually carries time entries and history, so prefer completing it. Delete only if the user asks
-outright, confirms, and the task has no `PYTMDET` rows against it.
+`method: DELETE` works, and the server verifies the record is gone — but **EBMS refuses to
+delete a task that has time entered** ("You cannot delete a task that has time entered"). Prefer
+completing a task. Delete only if the user asks outright and confirms; if it has time, the time
+has to be removed first (`time.md`), which changes someone's timecard, so say that plainly.

@@ -108,9 +108,21 @@ ebms_get  path: INVENUNT   filter: ID eq 'MUG-12'
   that unit saves as quantity 0 at price 0, with a 200 and no warning. When a quantity comes back
   0, read the product's units before blaming stock. Seen live on TEAMJERSEY in SBX.
 - `ID` on an `INVENUNT` row is the product ID and is read-only.
+- **A product created through the API gets a blank main unit**: one `INVENUNT` row with `UNIT`
+  "" (`Smaller`, multiplier 0), and `EACH_UNIT` and `DEF_UNIT` both "". Lines for it then carry
+  `UNIT_MEAS` "". That works, but it is not what a product made in EBMS looks like; mention it.
 
-Creating or changing a unit is **not yet verified** — read them, explain what you find, and let
-the user change them in EBMS unless they ask you to try and accept that it is untested.
+**Add a unit through the product**, as a child collection (verified on SBX, 2026-09-23):
+
+```
+ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
+            body: {"INVENUNTs": [{"UNIT": "CASE", "MULTIPLY": "Larger", "MULTIPLIER": 12}]}
+```
+
+The new row comes back in `verification.rows` with its AUTOID. **Never create a `Larger` unit
+with a multiplier of 0** — that is exactly the broken unit that zeroes order lines. Changing or
+removing an existing unit has not been tested; a unit already used on documents is better changed
+in EBMS.
 
 ## Vendor records — `INVENDOR`
 
@@ -130,7 +142,19 @@ ebms_get  path: INVENDOR   filter: ID eq 'MUG-12'
   exists in the database but does not come back, which is why MRP plans without lead times.
 - `ORDER_AMT` is the reorder increment (order in multiples of this).
 
-Creating or changing a vendor record is **not yet verified**.
+**Add a vendor record through the product** (verified on SBX, 2026-09-23):
+
+```
+ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
+            body: {"INVENDORs": [{"VENDOR_ID": "BIKEPARTS", "PART_NO": "ZT-1",
+                                  "UNIT_MEAS": "CASE", "COST": 30}]}
+```
+
+`UNIT_MEAS` must be one of the product's units — add the unit first. Adding a vendor record does
+**not** set `PRI_VENDOR`; set that on the product separately if this vendor should be the
+primary. Changing an existing vendor record has not been tested.
+
+Deleting a product takes its units and vendor records with it.
 
 ## Stock levels and reordering
 
@@ -155,8 +179,7 @@ component's base unit**. Changing a bill of materials is **not yet verified**.
 ## Not yet verified
 
 Say so if a request depends on these: moving a product to another folder by changing `TREE_ID`;
-price levels (`INVPRICE`) and markup templates; **creating or changing** units of measure
-(`INVENUNT`), vendor records (`INVENDOR`) or bills of materials (`INVENDET`) — reading all three
-is verified, writing is not; serialized or lot-tracked setup; product images and documents; and
-changing a product's ID (the `ChangeID` action, which is not on the server's command
-allow-list).
+price levels (`INVPRICE`) and markup templates; **changing or removing** existing units or
+vendor records (adding them is verified); bills of materials (`INVENDET`) — reading is verified,
+writing is not; serialized or lot-tracked setup; product images and documents; and changing a
+product's ID (the `ChangeID` action, which is not on the server's command allow-list).

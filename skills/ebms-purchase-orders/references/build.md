@@ -25,11 +25,15 @@ Read `../SKILL.md` first for the ground rules.
      Include `UNIT_VIS` only when you have a real cost. `PART_NO` (the vendor's own number, max 24
      characters) is worth sending when you have it — it is what matches the vendor's invoice back
      to this line later.
-   - Charge line for freight or a fee — a **description-only** line, no product:
-     `{"DESCR": "Freight", "O_QUAN_VIS": 0, "UNIT_VIS": 0, "COST": 42.50, "ACCOUNT": "<G/L account>"}`.
-     On a line with no product, `COST` **is** the amount and EBMS mirrors it into `UNIT_VIS`. Ask
-     the user for the G/L account, or use the vendor's `GL_CODE` and say that is where it came
-     from — without an account EBMS aborts the whole document with a 422.
+   - Charge line for a fee — a **description-only** line, no product:
+     `{"DESCR": "Handling fee", "COST": 42.50, "ACCOUNT": "<G/L account>"}`. On a line with no
+     product, `COST` **is** the amount; EBMS mirrors it into `UNIT_VIS` and marks the line received
+     straight away, so it counts in `SUBTOTAL` at once. Don't send `UNIT_VIS` or `O_QUAN_VIS` on it
+     — a `UNIT_VIS` of 0 is overwritten and shows up as a mismatch. Ask the user for the G/L
+     account, or use the vendor's `GL_CODE` and say that is where it came from — without an
+     account EBMS aborts the whole document with a 422.
+   - **Freight is usually better on the header** as `FREIGHT`, which persists on a create and a
+     PATCH alike and lands in `TOTAL` and `TOTAL_PO`.
    - **Never send `COST` on a line that has a product.** On a `10 @ 7.50` line, a `COST` of 75
      rewrote the *unit cost* to 75. Quantity and unit cost are the only safe things to write
      there; EBMS derives the rest.
@@ -66,6 +70,8 @@ Read `../SKILL.md` first for the ground rules.
    - The PO number is `record.INVOICE` (`PO#183`) with `PO_NO` (`183`) — give both, since the
      person will see `183` on the screen.
    - Lines come from `verification.rows`: quantity, unit, unit cost, as EBMS stored them.
+   - **"The order comes to" is `TOTAL_PO`.** `TOTAL` and `SUBTOTAL` only count what has been
+     received, so on a new PO they are near zero. Don't report them as the order's value.
    - **Read each line's `ETA_DATE`** — EBMS sets it from the vendor's lead time. Say which lines
      have no expected date and which are expected later than the user needs them. That is their
      cue to call the vendor.
