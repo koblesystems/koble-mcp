@@ -11,6 +11,7 @@ import type { z } from "zod/v4";
 import { describeCompanies, loadSettings, setDiscoveredCompanies, setDiscoveryError } from "./src/config.js";
 import { discoverCompanies } from "./src/ebms/companies.js";
 import { loadGuide, skillSummary } from "./src/guide.js";
+import { registerPrompts } from "./src/prompts.js";
 import { registerGuideTools } from "./src/tools/guide-tools.js";
 import { registerMrpTools } from "./src/tools/mrp-tools.js";
 import { registerProxyTools } from "./src/tools/proxy-tools.js";
@@ -63,6 +64,7 @@ registerProxyTools(register);
 registerMrpTools(register);
 registerWorksheetTools(register);
 registerGuideTools(register, guide);
+registerPrompts((name, config, callback) => server.registerPrompt(name, config as never, callback as never));
 
 async function main(): Promise<void> {
     await server.connect(new StdioServerTransport());
