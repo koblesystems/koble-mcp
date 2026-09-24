@@ -15,7 +15,7 @@ import { resetAuth, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { EbmsError } from "../ebms/errors.js";
 import { VERSION } from "../version.js";
-import { claudeCodeHasPlugin, claudeCodeInstalled, claudeCodeServer, connectClaudeCode, connectDesktop, desktopEntry, desktopLog, desktopRunning, findDesktopConfig, readDesktopLog, type Launch } from "./hosts.js";
+import { claudeCodeHasPlugin, claudeCodeInstalled, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, desktopLog, desktopRunning, findDesktopConfig, readDesktopLog, type Launch } from "./hosts.js";
 import { accountFor, loadPassword, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
 
 export type Flags = Record<string, string | boolean>;
@@ -210,15 +210,20 @@ export async function connect(flags: Flags): Promise<number> {
             if (desktopRunning()) say("Claude Desktop is still running; connecting anyway. If koble does not appear in it, quit it and run `koble connect` again.");
         } else say(`Claude Desktop is open. Quit it completely (${where}) and run \`koble connect\` again, or it may undo this change.`);
     }
-    const desktop = connectDesktop(launch);
-    if (desktop.status === "not-installed") say("Claude Desktop: not installed here — skipped.");
-    else if (desktop.status === "invalid") say(`Claude Desktop: ${desktop.reason}`);
-    else {
-        const verb = desktop.status === "unchanged" ? "already connected" : desktop.status === "added" ? "connected" : "updated";
-        say(`Claude Desktop: ${verb}.${desktop.replaced.length ? ` Replaced the older entry ${desktop.replaced.join(", ")}.` : ""}${desktop.backup ? ` Backup of the old config: ${desktop.backup}` : ""}`);
-        if (desktop.status !== "unchanged") say("  Quit and reopen Claude Desktop to load it.");
+    const paths = desktopConfigPaths();
+    if (paths.length === 0) say("Claude Desktop: not installed here — skipped.");
+    let changed = false;
+    for (const path of paths) {
+        const desktop = connectDesktop(launch, path);
+        const where = paths.length > 1 ? ` (${path})` : "";
+        if (desktop.status === "invalid") say(`Claude Desktop${where}: ${desktop.reason}`);
+        else if (desktop.status !== "not-installed") {
+            const verb = desktop.status === "unchanged" ? "already connected" : desktop.status === "added" ? "connected" : "updated";
+            say(`Claude Desktop${where}: ${verb}.${desktop.replaced.length ? ` Replaced the older entry ${desktop.replaced.join(", ")}.` : ""}${desktop.backup ? ` Backup: ${desktop.backup}` : ""}`);
+            if (desktop.status !== "unchanged") changed = true;
+        }
     }
-    if (flags["no-claude-code"] === true) return 0;
+    if (changed) say("  Quit Claude Desktop completely and reopen it to load it.");
     const code = connectClaudeCode(launch);
     for (const line of code.lines) say(`Claude Code: ${line}`);
     if (code.ok) say("  Start a new Claude Code session (or run /mcp) to load it.");
@@ -257,8 +262,14 @@ export async function doctor(flags: Flags): Promise<number> {
         }
     }
 
-    const entry = desktopEntry();
     const self = selfLaunch();
+    const configs = desktopConfigPaths();
+    const others = configs.slice(1).filter((path) => {
+        const e = desktopEntry(path);
+        return typeof e !== "object" || e.command !== self.command;
+    });
+    if (others.length) add({ status: "warn", label: "Claude Desktop", detail: `not connected in ${others.join(", ")}`, fix: "koble connect" });
+    const entry = desktopEntry();
     if (entry === "not-installed") add({ status: "info", label: "Claude Desktop", detail: "not installed" });
     else if (entry === "invalid") add({ status: "fail", label: "Claude Desktop", detail: `config is not valid JSON (${findDesktopConfig()})`, fix: "fix or move the file, then koble connect" });
     else if (entry === "missing") add({ status: "fail", label: "Claude Desktop", detail: "not connected", fix: "koble connect" });

@@ -1,6 +1,6 @@
 {
   "name": "koble-mcp",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "EBMS (Koble) for Claude: sales orders, purchase orders, receiving, products, tasks and MRP, through a guarded MCP server. Run /koble-mcp:koble-setup to install and connect it.",
   "author": {
     "name": "Koble Systems",

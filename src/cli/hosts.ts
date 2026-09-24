@@ -6,9 +6,9 @@
  * written whole. Claude Code is connected through its own `claude` command.
  */
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 
 export const SERVER_NAME = "koble-mcp";
 export const MARKETPLACE = "koblesystems/koble-mcp";
@@ -19,30 +19,45 @@ export interface Launch {
     args: string[];
 }
 
-/** Candidate locations of Claude Desktop's config, most likely first. */
+/**
+ * Where Claude Desktop keeps its config on Windows. The packaged (Microsoft Store style) build reads
+ * the copy in its own package folder, LocalCache\Roaming\Claude, and ignores %APPDATA%\Claude once
+ * that copy exists — seen on a Windows VM, where "Edit config" opened the package folder's file.
+ * So both are written, the package folder's first.
+ */
+export function windowsDesktopPaths(roaming: string, localAppData: string, packages: string[]): string[] {
+    const packaged = packages.filter((name) => /^Claude_/i.test(name)).map((name) => join(localAppData, "Packages", name, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json"));
+    return [...packaged, join(roaming, "Claude", "claude_desktop_config.json")];
+}
+
+/** Every config file the installed Claude Desktop may read: the ones whose app folder exists. */
 export function desktopConfigPaths(): string[] {
-    if (process.platform === "darwin") return [join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json")];
+    if (process.platform === "darwin") {
+        const path = join(homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json");
+        return existsSync(dirname(path)) ? [path] : [];
+    }
     if (process.platform === "win32") {
         const roaming = process.env["APPDATA"] ?? join(homedir(), "AppData", "Roaming");
         const local = process.env["LOCALAPPDATA"] ?? join(homedir(), "AppData", "Local");
-        const paths = [join(roaming, "Claude", "claude_desktop_config.json")];
-        // The Microsoft Store build keeps its AppData inside its package folder.
+        let packages: string[] = [];
         try {
-            const packages = join(local, "Packages");
-            for (const name of spawnSync("cmd", ["/c", "dir", "/b", packages], { encoding: "utf8", windowsHide: true }).stdout.split(/\r?\n/)) {
-                if (/^Claude_/i.test(name.trim())) paths.push(join(packages, name.trim(), "LocalCache", "Roaming", "Claude", "claude_desktop_config.json"));
-            }
+            packages = readdirSync(join(local, "Packages"));
         } catch {
-            // no Store build
+            // no packaged apps
         }
-        return paths;
+        return windowsDesktopPaths(roaming, local, packages).filter((path) => {
+            // The package folder counts whether or not it has a config yet; %APPDATA%\Claude only if it exists.
+            const packaged = path.includes(`${sep}Packages${sep}`);
+            return packaged ? existsSync(path.slice(0, path.indexOf(`${sep}LocalCache${sep}`))) : existsSync(dirname(path));
+        });
     }
-    return [join(homedir(), ".config", "Claude", "claude_desktop_config.json")];
+    const path = join(homedir(), ".config", "Claude", "claude_desktop_config.json");
+    return existsSync(dirname(path)) ? [path] : [];
 }
 
-/** The config file of the Claude Desktop that is installed, if any: the first whose folder exists. */
+/** The file Claude Desktop reads first, for messages: the package folder's on the packaged build. */
 export function findDesktopConfig(): string | null {
-    return desktopConfigPaths().find((path) => existsSync(path) || existsSync(dirname(path))) ?? null;
+    return desktopConfigPaths()[0] ?? null;
 }
 
 export type DesktopResult =
@@ -113,8 +128,8 @@ export function desktopRunning(): boolean {
 }
 
 /** Claude Desktop's own log of starting koble-mcp: it exists only once Desktop has tried. */
-export function desktopLog(config = findDesktopConfig()): { path: string; lines: string[] } | null {
-    const dirs = process.platform === "darwin" ? [join(homedir(), "Library", "Logs", "Claude")] : config ? [join(dirname(config), "logs")] : [];
+export function desktopLog(): { path: string; lines: string[] } | null {
+    const dirs = process.platform === "darwin" ? [join(homedir(), "Library", "Logs", "Claude")] : desktopConfigPaths().map((config) => join(dirname(config), "logs"));
     for (const dir of dirs) {
         const path = join(dir, `mcp-server-${SERVER_NAME}.log`);
         if (existsSync(path)) return { path, lines: readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean).slice(-200) };

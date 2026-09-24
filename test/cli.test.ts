@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assetName, newer } from "../src/cli/commands.js";
-import { connectDesktop, readDesktopLog, SERVER_NAME } from "../src/cli/hosts.js";
+import { connectDesktop, readDesktopLog, SERVER_NAME, windowsDesktopPaths } from "../src/cli/hosts.js";
 import { accountFor, loadPassword, readConfig, savePassword, storedEnv, writeConfig } from "../src/cli/store.js";
 
 const launch = { command: "/opt/koble/koble", args: ["mcp"] };
@@ -78,4 +78,10 @@ test("Desktop's log: the most recent start decides, ready or the last error", ()
     assert.equal(failed.ok, false);
     assert.match(failed.detail, /ENOENT/);
     assert.equal(readDesktopLog(["2026-09-24T12:00:00Z [koble-mcp] [info] Message from client: method=\"tools/list\" error-free"]).ok, true, "protocol traffic is not an error");
+});
+
+test("Windows: the packaged build's own config comes first, then %APPDATA%", () => {
+    const paths = windowsDesktopPaths("R", "L", ["Microsoft.Foo_1", "Claude_pzs8sxrjxfjjc"]);
+    assert.deepEqual(paths, [join("L", "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude", "claude_desktop_config.json"), join("R", "Claude", "claude_desktop_config.json")]);
+    assert.deepEqual(windowsDesktopPaths("R", "L", []), [join("R", "Claude", "claude_desktop_config.json")]);
 });
