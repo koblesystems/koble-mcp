@@ -159,20 +159,70 @@ export function desktopEntry(path = findDesktopConfig()): Launch | "missing" | "
     }
 }
 
+/** Newest first: "2.1.280" before "2.1.275" before "2.1.9". */
+const byVersionDesc = (a: string, b: string): number => b.localeCompare(a, undefined, { numeric: true });
+
 /**
- * Runs Claude Code's own command. `claude.exe` (the native install) is found directly; `claude.cmd`
- * (an npm install on Windows) needs a shell, and then every argument is quoted for cmd.
+ * The copy of Claude Code that Claude Desktop bundles for its Code tab, for people who have Desktop
+ * but never installed the `claude` command. It reads and writes the same user settings as the
+ * command, so registering koble through it connects the Code tab.
+ */
+export function bundledClaudeCode(): string | null {
+    const roots = process.platform === "darwin" ? [join(homedir(), "Library", "Application Support", "Claude")] : desktopConfigPaths().map(dirname);
+    for (const root of roots) {
+        const base = join(root, "claude-code");
+        let versions: string[] = [];
+        try {
+            versions = readdirSync(base).sort(byVersionDesc);
+        } catch {
+            continue;
+        }
+        for (const version of versions) {
+            const candidates =
+                process.platform === "darwin"
+                    ? [join(base, version, "claude.app", "Contents", "MacOS", "claude"), join(base, version, "claude")]
+                    : process.platform === "win32"
+                      ? [join(base, version, "claude.exe"), join(base, version, "claude", "claude.exe"), join(base, version, "bin", "claude.exe")]
+                      : [join(base, version, "claude")];
+            const found = candidates.find((path) => existsSync(path));
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
+type ClaudeRunner = { command: string; label: string } | null;
+let runner: ClaudeRunner | undefined;
+
+/** How Claude Code is reached here: the `claude` command, or Desktop's bundled copy, or not at all. */
+export function claudeCodeRunner(): ClaudeRunner {
+    if (runner !== undefined) return runner;
+    const onPath = spawnSync("claude", ["--version"], { encoding: "utf8", windowsHide: true, timeout: 60_000 });
+    if (!onPath.error && onPath.status === 0) return (runner = { command: "claude", label: "Claude Code" });
+    if (process.platform === "win32") {
+        const viaShell = spawnSync("claude --version", { encoding: "utf8", windowsHide: true, timeout: 60_000, shell: true });
+        if (!viaShell.error && viaShell.status === 0) return (runner = { command: "claude", label: "Claude Code" });
+    }
+    const bundled = bundledClaudeCode();
+    return (runner = bundled ? { command: bundled, label: "Claude Code (Claude Desktop's Code tab)" } : null);
+}
+
+/**
+ * Runs Claude Code's own command. A full path or `claude.exe` runs directly; `claude.cmd` (an npm
+ * install on Windows) needs a shell, and then every argument is quoted for cmd.
  */
 function claude(args: string[]): { status: number | null; out: string } {
-    const direct = spawnSync("claude", args, { encoding: "utf8", windowsHide: true, timeout: 120_000 });
-    if (!(direct.error && process.platform === "win32")) return { status: direct.error ? null : direct.status, out: `${direct.stdout ?? ""}${direct.stderr ?? ""}` };
+    const found = claudeCodeRunner();
+    if (!found) return { status: null, out: "Claude Code is not installed." };
+    const direct = spawnSync(found.command, args, { encoding: "utf8", windowsHide: true, timeout: 120_000 });
+    if (!(direct.error && process.platform === "win32" && found.command === "claude")) return { status: direct.error ? null : direct.status, out: `${direct.stdout ?? ""}${direct.stderr ?? ""}` };
     const quoted = ["claude", ...args].map((a) => (/^[\w@.:\\/-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`)).join(" ");
     const viaShell = spawnSync(quoted, { encoding: "utf8", windowsHide: true, timeout: 120_000, shell: true });
     return { status: viaShell.error ? null : viaShell.status, out: `${viaShell.stdout ?? ""}${viaShell.stderr ?? ""}` };
 }
 
 export function claudeCodeInstalled(): boolean {
-    return claude(["--version"]).status === 0;
+    return claudeCodeRunner() !== null;
 }
 
 export function claudeCodeHasPlugin(): boolean {

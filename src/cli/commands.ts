@@ -15,7 +15,7 @@ import { resetAuth, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { EbmsError } from "../ebms/errors.js";
 import { VERSION } from "../version.js";
-import { claudeCodeHasPlugin, claudeCodeInstalled, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, desktopLog, desktopRunning, findDesktopConfig, readDesktopLog, type Launch } from "./hosts.js";
+import { claudeCodeHasPlugin, claudeCodeInstalled, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, desktopLog, desktopRunning, findDesktopConfig, readDesktopLog, type Launch } from "./hosts.js";
 import { accountFor, loadPassword, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
 
 export type Flags = Record<string, string | boolean>;
@@ -225,7 +225,8 @@ export async function connect(flags: Flags): Promise<number> {
     }
     if (changed) say("  Quit Claude Desktop completely and reopen it to load it.");
     const code = connectClaudeCode(launch);
-    for (const line of code.lines) say(`Claude Code: ${line}`);
+    const codeLabel = claudeCodeRunner()?.label ?? "Claude Code";
+    for (const line of code.lines) say(`${codeLabel}: ${line}`);
     if (code.ok) say("  Start a new Claude Code session (or run /mcp) to load it.");
     return 0;
 }
@@ -283,8 +284,9 @@ export async function doctor(flags: Flags): Promise<number> {
     }
     else add({ status: "warn", label: "Claude Desktop", detail: `runs ${[entry.command, ...(entry.args ?? [])].join(" ")}`, fix: "koble connect, to point it at this koble" });
 
-    if (!claudeCodeInstalled()) add({ status: "info", label: "Claude Code", detail: "not installed" });
+    if (!claudeCodeInstalled()) add({ status: "info", label: "Claude Code", detail: "not installed (neither the claude command nor Claude Desktop's Code tab)" });
     else {
+        if (claudeCodeRunner()?.command !== "claude") add({ status: "info", label: "Claude Code", detail: "using the copy inside Claude Desktop (its Code tab)" });
         const server = claudeCodeServer();
         // `claude mcp get` prints the arguments joined by spaces, so compare the whole command line.
         const runsSelf = server !== null && [server.command, ...server.args].join(" ") === [self.command, ...self.args].join(" ");
