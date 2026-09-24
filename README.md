@@ -100,6 +100,20 @@ Point any coding agent at [install.md](install.md). It is written to be followed
 Settings live in `~/.config/koble` (`%APPDATA%\koble` on Windows). `koble update` installs the
 newest release; `koble setup` again changes any answer.
 
+### `/` commands in Claude Desktop's chat
+
+Claude Code and Desktop's Code tab get the skills as `/` commands automatically. Desktop's regular
+chat only shows skills from plugins on your Claude account, so there is one upload:
+
+```
+koble plugin
+```
+
+saves `koble.plugin` (checked against the release's checksums) to your Downloads folder. Upload it
+in **Claude Desktop → Settings → Customize → Plugins**. The skills then appear under `/`, grouped as
+**Koble**, in every Claude chat on your account. After `koble update`, run `koble plugin` again and
+upload the new file. `koble doctor` says whether it is on your account.
+
 ### Uninstall
 
 ```
@@ -118,7 +132,7 @@ Desktop first, or it may write koble back into its config. `--yes` skips the que
 Ask in your own words — *"order 10 tubes from Bike Parts Co"*, *"what's open for the bike shop?"*,
 *"run MRP for the next 60 days"* — or start a named workflow:
 
-| Workflow | Claude Code (and Desktop's Code tab) | Claude Desktop chat |
+| Workflow | Claude Code (and Desktop's Code tab) | Claude Desktop chat (＋ menu; or `/` once `koble.plugin` is uploaded) |
 |---|---|---|
 | Plan what to buy and make | `/ebms-mrp` | ＋ menu → koble-mcp → **mrp-plan** |
 | Create the POs / batches an MRP worksheet approved | `/ebms-mrp-purchase-orders`, `/ebms-mrp-batches` | ＋ → **mrp-purchase-orders**, **mrp-batches** |

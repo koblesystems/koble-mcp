@@ -1,7 +1,7 @@
 /**
  * `koble` — the command people install. `koble setup` once; after that Claude starts `koble mcp`.
  */
-import { connect, doctor, help, login, setup, uninstall, update, version, type Flags } from "./src/cli/commands.js";
+import { connect, doctor, help, login, plugin, setup, uninstall, update, version, type Flags } from "./src/cli/commands.js";
 import { storedEnv } from "./src/cli/store.js";
 import { configure } from "./src/config.js";
 import { startServer } from "./src/server.js";
@@ -40,6 +40,8 @@ async function main(): Promise<number> {
             return doctor(flags);
         case "update":
             return update(flags);
+        case "plugin":
+            return plugin(flags);
         case "uninstall":
             return uninstall(flags);
         case "version":

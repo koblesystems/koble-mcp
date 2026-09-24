@@ -35,16 +35,21 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
       - uses: actions/download-artifact@v4
         with:
           path: out
           merge-multiple: true
+      - name: The skills as a plugin to upload (koble.plugin)
+        run: node scripts/build-plugin.mjs && cp dist/koble.plugin out/
       - name: Checksums
-        run: cd out && sha256sum koble-* > checksums.txt && cat checksums.txt
+        run: cd out && sha256sum koble-* koble.plugin > checksums.txt && cat checksums.txt
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           pre=""; case "$GITHUB_REF_NAME" in *-*) pre="--prerelease";; esac
           gh release create "$GITHUB_REF_NAME" $pre --title "koble $GITHUB_REF_NAME" --generate-notes \
-            out/koble-* out/checksums.txt scripts/install.sh scripts/install.ps1
+            out/koble-* out/koble.plugin out/checksums.txt scripts/install.sh scripts/install.ps1

@@ -194,6 +194,45 @@ export function readDesktopLog(lines: string[]): { ok: boolean; detail: string }
     return last ?? { ok: true, detail: "Claude Desktop has a log for it, with no errors" };
 }
 
+/**
+ * Whether the koble plugin has been uploaded to the Claude account, from the copy of the account's
+ * plugins Claude Desktop keeps on this computer (local-agent-mode-sessions/<…>/<…>/rpm/manifest.json).
+ * Null when Desktop has no such copy, so nothing can be said either way.
+ */
+export function accountHasKoblePlugin(): boolean | null {
+    const roots = process.platform === "darwin" ? [join(homedir(), "Library", "Application Support", "Claude")] : desktopConfigPaths().map(dirname);
+    let sawManifest = false;
+    for (const root of roots) {
+        const base = join(root, "local-agent-mode-sessions");
+        let first: string[] = [];
+        try {
+            first = readdirSync(base);
+        } catch {
+            continue;
+        }
+        for (const a of first) {
+            let second: string[] = [];
+            try {
+                second = readdirSync(join(base, a));
+            } catch {
+                continue;
+            }
+            for (const b of second) {
+                const manifest = join(base, a, b, "rpm", "manifest.json");
+                if (!existsSync(manifest)) continue;
+                sawManifest = true;
+                try {
+                    const plugins = (JSON.parse(readFileSync(manifest, "utf8")) as { plugins?: Array<{ name?: string }> }).plugins ?? [];
+                    if (plugins.some((p) => p.name === "koble")) return true;
+                } catch {
+                    // unreadable copy
+                }
+            }
+        }
+    }
+    return sawManifest ? false : null;
+}
+
 /** What Claude Desktop is configured to run for koble-mcp, for the doctor. */
 export function desktopEntry(path = findDesktopConfig()): Launch | "missing" | "invalid" | "not-installed" {
     if (!path) return "not-installed";

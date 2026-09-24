@@ -85,7 +85,8 @@ the failures and warnings in plain words, and do what each `fix` says. Where the
 `koble login`, that is the user's step, not yours. Then tell them:
 
 - **Claude Desktop:** quit and reopen it. The EBMS tools appear under the connectors, and the
-  named workflows appear in its prompt menu.
+  named workflows in the ＋ menu. For the skills as `/` commands in its chat, the user runs
+  `koble plugin` and uploads the saved file in Settings → Customize → Plugins.
 - **Claude Code:** start a new session, or run `/mcp`. Type `/ebms` to see the skills, e.g.
   `/ebms-mrp`.
 - **Codex, Cursor, VS Code, Gemini CLI, Windsurf:** restart the app or start a new session.
