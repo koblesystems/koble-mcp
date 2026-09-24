@@ -93,6 +93,45 @@ export function connectDesktop(launch: Launch, path = findDesktopConfig()): Desk
     return { status: current === undefined && replaced.length === 0 ? "added" : "updated", path, backup, replaced };
 }
 
+/**
+ * Whether Claude Desktop is running. It keeps its settings in the same config file and writes the
+ * file back from memory, so an edit made while it runs can be silently undone.
+ */
+export function desktopRunning(): boolean {
+    try {
+        if (process.platform === "darwin") return /\/Claude\.app\/Contents\/MacOS\/Claude$/m.test(spawnSync("ps", ["-axo", "comm"], { encoding: "utf8" }).stdout ?? "");
+        if (process.platform === "win32") {
+            // claude.exe is also Claude Code's name, so only count the Desktop app by where it lives.
+            const script = "Get-Process -Name claude -ErrorAction SilentlyContinue | Where-Object { $_.Path -match 'WindowsApps|AnthropicClaude' } | Measure-Object | Select-Object -ExpandProperty Count";
+            const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { encoding: "utf8", windowsHide: true, timeout: 30_000 });
+            return Number(r.stdout.trim()) > 0;
+        }
+    } catch {
+        // cannot tell
+    }
+    return false;
+}
+
+/** Claude Desktop's own log of starting koble-mcp: it exists only once Desktop has tried. */
+export function desktopLog(config = findDesktopConfig()): { path: string; lines: string[] } | null {
+    const dirs = process.platform === "darwin" ? [join(homedir(), "Library", "Logs", "Claude")] : config ? [join(dirname(config), "logs")] : [];
+    for (const dir of dirs) {
+        const path = join(dir, `mcp-server-${SERVER_NAME}.log`);
+        if (existsSync(path)) return { path, lines: readFileSync(path, "utf8").split(/\r?\n/).filter(Boolean).slice(-200) };
+    }
+    return null;
+}
+
+/** What the log says about the most recent start: ready, or the last error. */
+export function readDesktopLog(lines: string[]): { ok: boolean; detail: string } {
+    let last: { ok: boolean; detail: string } | null = null;
+    for (const line of lines) {
+        if (/koble-mcp .*ready/.test(line)) last = { ok: true, detail: "Claude Desktop started it" };
+        else if (/\b(error|failed|exited|disconnected|ENOENT|not recognized)\b/i.test(line) && !/Message from (client|server)/.test(line)) last = { ok: false, detail: line.replace(/^\S+\s+\[[^\]]*\]\s*(\[\w+\]\s*)?/, "").slice(0, 200) };
+    }
+    return last ?? { ok: true, detail: "Claude Desktop has a log for it, with no errors" };
+}
+
 /** What Claude Desktop is configured to run for koble-mcp, for the doctor. */
 export function desktopEntry(path = findDesktopConfig()): Launch | "missing" | "invalid" | "not-installed" {
     if (!path) return "not-installed";
@@ -105,28 +144,70 @@ export function desktopEntry(path = findDesktopConfig()): Launch | "missing" | "
     }
 }
 
-const claude = (args: string[]) => spawnSync("claude", args, { encoding: "utf8", windowsHide: true, timeout: 120_000, shell: process.platform === "win32" });
+/**
+ * Runs Claude Code's own command. `claude.exe` (the native install) is found directly; `claude.cmd`
+ * (an npm install on Windows) needs a shell, and then every argument is quoted for cmd.
+ */
+function claude(args: string[]): { status: number | null; out: string } {
+    const direct = spawnSync("claude", args, { encoding: "utf8", windowsHide: true, timeout: 120_000 });
+    if (!(direct.error && process.platform === "win32")) return { status: direct.error ? null : direct.status, out: `${direct.stdout ?? ""}${direct.stderr ?? ""}` };
+    const quoted = ["claude", ...args].map((a) => (/^[\w@.:\\/-]+$/.test(a) ? a : `"${a.replace(/"/g, '\\"')}"`)).join(" ");
+    const viaShell = spawnSync(quoted, { encoding: "utf8", windowsHide: true, timeout: 120_000, shell: true });
+    return { status: viaShell.error ? null : viaShell.status, out: `${viaShell.stdout ?? ""}${viaShell.stderr ?? ""}` };
+}
 
 export function claudeCodeInstalled(): boolean {
-    try {
-        return claude(["--version"]).status === 0;
-    } catch {
-        return false;
-    }
+    return claude(["--version"]).status === 0;
 }
 
 export function claudeCodeHasPlugin(): boolean {
     const r = claude(["plugin", "list"]);
-    return r.status === 0 && r.stdout.includes(SERVER_NAME);
+    return r.status === 0 && r.out.includes(SERVER_NAME);
 }
 
-/** Adds the plugin marketplace and installs the plugin: the server, the skills and the setup skill in one. */
-export function connectClaudeCode(): { ok: boolean; detail: string } {
-    if (!claudeCodeInstalled()) return { ok: false, detail: "Claude Code is not installed." };
-    if (claudeCodeHasPlugin()) return { ok: true, detail: "the koble-mcp plugin is already installed." };
-    const add = claude(["plugin", "marketplace", "add", MARKETPLACE]);
-    if (add.status !== 0 && !/already/i.test(`${add.stdout}${add.stderr}`)) return { ok: false, detail: `adding the marketplace failed: ${(add.stderr || add.stdout).trim().split("\n")[0]}` };
-    const install = claude(["plugin", "install", PLUGIN]);
-    if (install.status !== 0) return { ok: false, detail: `installing the plugin failed: ${(install.stderr || install.stdout).trim().split("\n")[0]}` };
-    return { ok: true, detail: "installed the koble-mcp plugin (server and skills)." };
+export interface ClaudeCodeServer {
+    command: string;
+    args: string[];
+    /** Claude Code's own health check: it starts the server and reports whether it connected. */
+    connected: boolean;
+    issue: string | null;
+}
+
+/** What Claude Code has registered as koble-mcp, from `claude mcp get`, or null if nothing. */
+export function claudeCodeServer(): ClaudeCodeServer | null {
+    const r = claude(["mcp", "get", SERVER_NAME]);
+    if (r.status !== 0 || !/Command:/.test(r.out)) return null;
+    const field = (name: string): string => new RegExp(`^\\s*${name}:[ \\t]*(.*)$`, "m").exec(r.out)?.[1]?.trim() ?? "";
+    const status = field("Status");
+    return { command: field("Command"), args: field("Args").split(/\s+/).filter(Boolean), connected: /connected/i.test(status) && !/fail/i.test(status), issue: field("Issue") || (/fail/i.test(status) ? status : null) };
+}
+
+/**
+ * Registers this koble with Claude Code by its full path, for every project (user scope), so it
+ * starts whatever PATH the terminal or editor had; then installs or updates the plugin, which
+ * brings the skills and the setup skill.
+ */
+export function connectClaudeCode(launch: Launch): { ok: boolean; lines: string[] } {
+    if (!claudeCodeInstalled()) return { ok: false, lines: ["not installed here — skipped."] };
+    const lines: string[] = [];
+    claude(["mcp", "remove", SERVER_NAME, "--scope", "user"]);
+    const add = claude(["mcp", "add", "--scope", "user", SERVER_NAME, "--", launch.command, ...launch.args]);
+    if (add.status !== 0) return { ok: false, lines: [`registering the server failed: ${add.out.trim().split("\n")[0]}`] };
+    lines.push("server registered for all projects.");
+
+    if (claudeCodeHasPlugin()) {
+        claude(["plugin", "marketplace", "update", "koblesystems"]);
+        const up = claude(["plugin", "update", PLUGIN]);
+        lines.push(up.status === 0 ? "skills plugin up to date." : `updating the skills plugin failed: ${up.out.trim().split("\n")[0]}`);
+    } else {
+        const market = claude(["plugin", "marketplace", "add", MARKETPLACE]);
+        if (market.status !== 0 && !/already/i.test(market.out)) lines.push(`adding the plugin marketplace failed: ${market.out.trim().split("\n")[0]}`);
+        const install = claude(["plugin", "install", PLUGIN]);
+        lines.push(install.status === 0 ? "skills plugin installed." : `installing the skills plugin failed: ${install.out.trim().split("\n")[0]}`);
+    }
+
+    const check = claudeCodeServer();
+    if (check?.connected) lines.push("Claude Code started koble-mcp and it connected.");
+    else if (check) lines.push(`Claude Code could not start it: ${check.issue ?? "no detail"}`);
+    return { ok: check?.connected === true, lines };
 }

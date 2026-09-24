@@ -15,7 +15,7 @@ import { resetAuth, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { EbmsError } from "../ebms/errors.js";
 import { VERSION } from "../version.js";
-import { claudeCodeHasPlugin, claudeCodeInstalled, connectClaudeCode, connectDesktop, desktopEntry, findDesktopConfig, type Launch } from "./hosts.js";
+import { claudeCodeHasPlugin, claudeCodeInstalled, claudeCodeServer, connectClaudeCode, connectDesktop, desktopEntry, desktopLog, desktopRunning, findDesktopConfig, readDesktopLog, type Launch } from "./hosts.js";
 import { accountFor, loadPassword, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
 
 export type Flags = Record<string, string | boolean>;
@@ -202,6 +202,14 @@ export async function login(flags: Flags): Promise<number> {
 
 export async function connect(flags: Flags): Promise<number> {
     const launch = selfLaunch();
+    // Claude Desktop writes its config file back from memory, so a change made while it runs can vanish.
+    if (findDesktopConfig() && desktopRunning()) {
+        const where = process.platform === "win32" ? "right-click the Claude icon by the clock and choose Quit" : "Claude menu → Quit Claude";
+        if (process.stdin.isTTY && flags["yes"] !== true) {
+            for (let tries = 0; tries < 3 && desktopRunning(); tries += 1) await ask(`Claude Desktop is open. Quit it completely (${where}), then press Enter`);
+            if (desktopRunning()) say("Claude Desktop is still running; connecting anyway. If koble does not appear in it, quit it and run `koble connect` again.");
+        } else say(`Claude Desktop is open. Quit it completely (${where}) and run \`koble connect\` again, or it may undo this change.`);
+    }
     const desktop = connectDesktop(launch);
     if (desktop.status === "not-installed") say("Claude Desktop: not installed here — skipped.");
     else if (desktop.status === "invalid") say(`Claude Desktop: ${desktop.reason}`);
@@ -211,11 +219,9 @@ export async function connect(flags: Flags): Promise<number> {
         if (desktop.status !== "unchanged") say("  Quit and reopen Claude Desktop to load it.");
     }
     if (flags["no-claude-code"] === true) return 0;
-    if (!claudeCodeInstalled()) say("Claude Code: not installed here — skipped.");
-    else {
-        const code = connectClaudeCode();
-        say(`Claude Code: ${code.detail}`);
-    }
+    const code = connectClaudeCode(launch);
+    for (const line of code.lines) say(`Claude Code: ${line}`);
+    if (code.ok) say("  Start a new Claude Code session (or run /mcp) to load it.");
     return 0;
 }
 
@@ -256,11 +262,27 @@ export async function doctor(flags: Flags): Promise<number> {
     if (entry === "not-installed") add({ status: "info", label: "Claude Desktop", detail: "not installed" });
     else if (entry === "invalid") add({ status: "fail", label: "Claude Desktop", detail: `config is not valid JSON (${findDesktopConfig()})`, fix: "fix or move the file, then koble connect" });
     else if (entry === "missing") add({ status: "fail", label: "Claude Desktop", detail: "not connected", fix: "koble connect" });
-    else if (entry.command === self.command && JSON.stringify(entry.args) === JSON.stringify(self.args)) add({ status: "ok", label: "Claude Desktop", detail: "connected to this koble" });
+    else if (entry.command === self.command && JSON.stringify(entry.args) === JSON.stringify(self.args)) {
+        const log = desktopLog();
+        if (!log) add({ status: "warn", label: "Claude Desktop", detail: "connected, but Claude Desktop has not started it yet", fix: "quit Claude Desktop completely and reopen it" });
+        else {
+            const seen = readDesktopLog(log.lines);
+            add(seen.ok ? { status: "ok", label: "Claude Desktop", detail: `connected; ${seen.detail}` } : { status: "fail", label: "Claude Desktop", detail: `connected, but starting it failed: ${seen.detail}`, fix: `send the end of ${log.path}` });
+        }
+    }
     else add({ status: "warn", label: "Claude Desktop", detail: `runs ${[entry.command, ...(entry.args ?? [])].join(" ")}`, fix: "koble connect, to point it at this koble" });
 
     if (!claudeCodeInstalled()) add({ status: "info", label: "Claude Code", detail: "not installed" });
-    else add(claudeCodeHasPlugin() ? { status: "ok", label: "Claude Code", detail: "plugin installed" } : { status: "warn", label: "Claude Code", detail: "plugin not installed", fix: "koble connect" });
+    else {
+        const server = claudeCodeServer();
+        // `claude mcp get` prints the arguments joined by spaces, so compare the whole command line.
+        const runsSelf = server !== null && [server.command, ...server.args].join(" ") === [self.command, ...self.args].join(" ");
+        if (!server) add({ status: "fail", label: "Claude Code", detail: "koble-mcp is not registered", fix: "koble connect" });
+        else if (!runsSelf) add({ status: "warn", label: "Claude Code", detail: `runs ${[server.command, ...server.args].join(" ")}`, fix: "koble connect, to point it at this koble" });
+        else if (!server.connected) add({ status: "fail", label: "Claude Code", detail: `registered, but it does not start: ${server.issue ?? "no detail"}`, fix: "koble connect; if it persists, send this line" });
+        else add({ status: "ok", label: "Claude Code", detail: "connected to this koble" });
+        if (!claudeCodeHasPlugin()) add({ status: "warn", label: "Skills plugin", detail: "not installed in Claude Code (the tools work; the skills come from the server's guide)", fix: "koble connect" });
+    }
 
     if (flags["brief"] !== true) {
         const latest = await latestRelease(flags["pre"] === true).catch(() => null);

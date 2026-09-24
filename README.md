@@ -292,7 +292,7 @@ node cli.js setup                  # the same setup, run from source
 node scripts/build-single.mjs      # the single-file koble for this platform, in dist/
 ```
 
-The root `.mcp.json` is the plugin's server entry (Claude Code only picks one up from the plugin root); if you open this repo in Claude Code it will offer to start `koble mcp` for the project, which you can decline.
+The Claude Code plugin brings only the skills. `koble connect` registers the server itself, by its full path, so it never depends on PATH.
 
 The server reads `EBMS_*` settings from its environment when they are set (see `.env.example`),
 and otherwise from what `koble setup` stored — so an existing configuration that passes them in

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "koble-mcp": {
-      "command": "koble",
-      "args": ["mcp"]
-    }
-  }
-}

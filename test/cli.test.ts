@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assetName, newer } from "../src/cli/commands.js";
-import { connectDesktop, SERVER_NAME } from "../src/cli/hosts.js";
+import { connectDesktop, readDesktopLog, SERVER_NAME } from "../src/cli/hosts.js";
 import { accountFor, loadPassword, readConfig, savePassword, storedEnv, writeConfig } from "../src/cli/store.js";
 
 const launch = { command: "/opt/koble/koble", args: ["mcp"] };
@@ -69,4 +69,13 @@ test("release names and version order", () => {
     assert.equal(newer("v0.1.0", "0.1.0-rc.2"), true, "a release beats its candidates");
     assert.equal(newer("v0.1.0-rc.10", "0.1.0-rc.9"), true);
     assert.equal(newer("v0.1.0-rc.1", "0.1.0"), false);
+});
+
+test("Desktop's log: the most recent start decides, ready or the last error", () => {
+    const ok = readDesktopLog(["2026-09-24T11:10:51Z [koble-mcp] [info] Initializing server...", "koble-mcp 0.1.0 ready. Companies: SBX."]);
+    assert.equal(ok.ok, true);
+    const failed = readDesktopLog(["koble-mcp 0.1.0 ready.", "2026-09-24T12:00:00Z [koble-mcp] [error] spawn C:\\x\\koble.exe ENOENT"]);
+    assert.equal(failed.ok, false);
+    assert.match(failed.detail, /ENOENT/);
+    assert.equal(readDesktopLog(["2026-09-24T12:00:00Z [koble-mcp] [info] Message from client: method=\"tools/list\" error-free"]).ok, true, "protocol traffic is not an error");
 });
