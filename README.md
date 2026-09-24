@@ -111,7 +111,10 @@ chat shows skills from plugins on your Claude account, and this repository is a 
 The skills then appear under `/` as **Koble** in every Claude chat on your account, and update
 themselves from this repository. (They follow the repository, so they can be a little newer than
 your `koble`; they only use its tools, so that is fine — `koble update` keeps the two close.)
-`koble doctor` says whether the plugin is on your account.
+`koble doctor` says whether the plugin is on your account. Desktop's **Code** tab shows it too, so
+once it is there `koble connect` stops copying the skills into Claude Code's folder (and removes the
+copies it made) — otherwise every skill would appear twice. The `claude` command in a terminal
+does not see account plugins; used on its own, it keeps koble's copies.
 
 If your account cannot add a marketplace from GitHub, `koble plugin` saves the same skills as a
 `koble.plugin` file to upload there instead — one or the other, not both.

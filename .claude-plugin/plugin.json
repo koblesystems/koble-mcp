@@ -1,7 +1,7 @@
 {
   "name": "koble-mcp",
   "displayName": "Koble",
-  "version": "0.1.0-rc.6",
+  "version": "0.1.0-rc.7",
   "description": "EBMS (Koble Systems ERP) for Claude: sales orders, purchase orders, receiving, products, tasks and MRP. The skills need the koble program on your computer \u2014 ask Claude to \"set up Koble\".",
   "author": {
     "name": "Koble Systems",

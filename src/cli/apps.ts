@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { skillFiles } from "../guide.js";
 import { VERSION } from "../version.js";
-import { claudeCodeHasPlugin, claudeCodeHasServer, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, disconnectClaudeCode, mergeServerEntry, readServerEntry, removeServerEntry, SERVER_NAME, type Launch, type MergeResult, type RemoveResult } from "./hosts.js";
+import { accountHasKoblePlugin, claudeCodeHasPlugin, claudeCodeHasServer, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, disconnectClaudeCode, mergeServerEntry, readServerEntry, removeServerEntry, SERVER_NAME, type Launch, type MergeResult, type RemoveResult } from "./hosts.js";
 
 export interface AppStatus {
     status: "ok" | "warn" | "fail" | "info";
@@ -232,7 +232,11 @@ const claudeCode: App = {
     connect: (launch) => {
         const result = connectClaudeCode(launch);
         const lines = [...result.lines];
-        if (claudeCodeHasPlugin()) lines.push("the koble-mcp plugin supplies the skills, so they were not copied again.");
+        if (accountHasKoblePlugin() === true) {
+            // Desktop's Code tab shows the account's plugins as well as the skills folder, so copies would appear twice.
+            const removed = removeClaudeSkills();
+            lines.push(`the Koble plugin on your Claude account supplies the skills${removed.length ? `; removed the ${removed.length} copies koble had made, so they no longer appear twice` : ""}.`);
+        } else if (claudeCodeHasPlugin()) lines.push("the koble-mcp plugin supplies the skills, so they were not copied again.");
         else lines.push(...installClaudeSkills());
         return lines;
     },
@@ -255,7 +259,9 @@ const claudeCode: App = {
         if (!server) return { status: "fail", detail: "koble-mcp is not registered", fix: "koble connect" };
         if ([server.command, ...server.args].join(" ") !== [launch.command, ...launch.args].join(" ")) return { status: "warn", detail: `runs ${[server.command, ...server.args].join(" ")}`, fix: "koble connect, to point it at this koble" };
         if (!server.connected) return { status: "fail", detail: `registered, but it does not start: ${server.issue ?? "no detail"}`, fix: "koble connect; if it persists, send this line" };
-        const skills = claudeCodeHasPlugin() ? "skills from the plugin" : claudeSkillsInstalled() ? "skills installed" : "no skills (run koble connect)";
+        const account = accountHasKoblePlugin() === true;
+        if (account && markedSkills().length > 0) return { status: "warn", detail: "the skills appear twice in Desktop's Code tab (koble's copies and the Koble plugin)", fix: "koble connect" };
+        const skills = account ? "skills from the Koble plugin" : claudeCodeHasPlugin() ? "skills from the plugin" : claudeSkillsInstalled() ? "skills installed" : "no skills (run koble connect)";
         return { status: "ok", detail: `connected to this koble; ${skills}${claudeCodeRunner()?.command !== "claude" ? " (via Claude Desktop's Code tab)" : ""}` };
     },
 };
