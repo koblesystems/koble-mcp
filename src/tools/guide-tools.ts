@@ -19,7 +19,7 @@ export function registerGuideTools(register: ToolRegistrar, guide: Guide): void 
         },
         async (args) => {
             try {
-                const how = "Where a skill says to load another skill, call ebms_guide with skill set to its name. Where it says to open references/x.md, call ebms_guide with file set to '<skill>/references/x.md'.";
+                const how = "Where a skill says to load another skill, call ebms_guide with skill set to its name. Where it says to open references/x.md, call ebms_guide with file set to '<skill>/references/x.md'; a script such as scripts/x.py is fetched the same way.";
                 if (args.file !== undefined) {
                     const text = guide.read(args.file);
                     if (text === undefined) throw new Error(`No file ${args.file}. Files are listed by ebms_guide with the skill's name.`);

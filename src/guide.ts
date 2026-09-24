@@ -1,6 +1,7 @@
 /**
  * The skills, served by the server itself, so an MCP host that cannot install skills (Claude
- * Desktop keeps them in the user's account, uploaded by hand) still gets every procedure.
+ * Desktop keeps them in the user's account, uploaded by hand) still gets every procedure, and the
+ * scripts some of them run (`scripts/*.py`).
  *
  * The files are loaded once, into memory, from the `skills/` folder beside the server — or, in the
  * single-file build, from the assets embedded in it. A request is looked up by exact name in that
@@ -42,7 +43,7 @@ function fromFolder(root: string): Map<string, string> {
         for (const name of readdirSync(dir).sort()) {
             const full = join(dir, name);
             if (statSync(full).isDirectory()) walk(full);
-            else if (name.endsWith(".md")) files.set(relative(root, full).split(sep).join("/"), readFileSync(full, "utf8"));
+            else if (/\.(md|py)$/.test(name)) files.set(relative(root, full).split(sep).join("/"), readFileSync(full, "utf8"));
         }
     };
     walk(root);

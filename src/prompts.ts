@@ -90,6 +90,14 @@ export const PROMPTS: PromptSpec[] = [
         skill: "ebms-tasks",
         ask: (a) => (a["task"]?.trim() ? `I want to update task ${a["task"].trim()}.` : `I want to create a task.${given("It is for:", a["what"])}`),
     },
+    {
+        name: "task-reflow",
+        title: "Tasks: reschedule so nobody overlaps",
+        description: "Re-plan the tasks in a date range so each worker's day fits working hours with no overlaps; shows the plan first and can undo it.",
+        args: { dates: "Which dates, e.g. this week or next week.", workers: "Everyone, or which workers." },
+        skill: "ebms-task-reflow",
+        ask: (a) => `Reflow the task schedule.${given("Dates:", a["dates"])}${given("Workers:", a["workers"])}`,
+    },
 ];
 
 export function promptText(spec: PromptSpec, args: Record<string, string | undefined>): string {

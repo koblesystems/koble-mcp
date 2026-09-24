@@ -11,7 +11,7 @@ const call = async (args: Record<string, unknown>) => { const r = await tools["e
 
 test("every skill folder is served, by the name in its front matter", () => {
     const names = guide.skills.map((s) => s.name);
-    for (const name of ["ebms-api", "ebms-sales-orders", "ebms-purchase-orders", "ebms-products", "ebms-tasks", "ebms-mrp", "ebms-mrp-purchase-orders", "ebms-mrp-batches"]) assert.ok(names.includes(name), name);
+    for (const name of ["ebms-api", "ebms-sales-orders", "ebms-purchase-orders", "ebms-products", "ebms-tasks", "ebms-task-reflow", "ebms-mrp", "ebms-mrp-purchase-orders", "ebms-mrp-batches"]) assert.ok(names.includes(name), name);
     assert.ok(guide.skills.every((s) => s.description.length > 50), "every skill has a description");
     assert.ok(!names.includes("koble-setup"), "the installer skill is for Claude Code, not served to every host");
     assert.match(skillSummary(guide), /ebms-tasks: Create and manage/);
@@ -28,6 +28,12 @@ test("every references/… file a skill mentions exists, so the guide never send
             }
         }
     }
+});
+
+test("a skill's scripts are served with it, as text", async () => {
+    const skill = guide.skills.find((s) => s.name === "ebms-task-reflow");
+    assert.ok(skill?.files.includes("ebms-task-reflow/scripts/reflow.py"));
+    assert.match((await call({ file: "ebms-task-reflow/scripts/reflow.py" })).text, /^#!\/usr\/bin\/env python3/);
 });
 
 test("the tool lists, returns a skill with its files, and returns one file", async () => {

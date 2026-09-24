@@ -144,6 +144,7 @@ Ask in your own words — *"order 10 tubes from Bike Parts Co"*, *"what's open f
 | Sales orders | `/ebms-sales-orders` | ＋ → **sales-order** |
 | Purchase orders, receiving, what's on order | `/ebms-purchase-orders` | ＋ → **purchase-order**, **receive**, **on-order** |
 | Products, tasks | `/ebms-products`, `/ebms-tasks` | ＋ → **product**, **task** |
+| Reschedule a week's tasks so nobody overlaps | `/ebms-task-reflow` | ＋ → **task-reflow** |
 | Check or repair the install | `/koble-setup` | run `koble doctor` in a terminal |
 
 The server's named workflows also appear in Claude Code as `/mcp__koble-mcp__mrp-plan` and so on,

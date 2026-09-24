@@ -36,7 +36,7 @@ const walk = (dir) => {
     for (const entry of readdirSync(dir).sort()) {
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) walk(full);
-        else if (entry.endsWith(".md")) files.push(relative(skillsDir, full).split(sep).join("/"));
+        else if (/\.(md|py)$/.test(entry)) files.push(relative(skillsDir, full).split(sep).join("/"));
     }
 };
 walk(skillsDir);

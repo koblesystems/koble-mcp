@@ -50,9 +50,17 @@ export function sameValue(sent: unknown, stored: unknown): boolean {
         const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(value);
         return us ? `${us[3]}-${us[1]!.padStart(2, "0")}-${us[2]!.padStart(2, "0")}` : null;
     };
+    // Times of day are written as HH:MM:SS and read back as ISO durations (TASK.START_TIME: "PT9H30M").
+    const secondsOf = (value: string): number | null => {
+        const clock = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value);
+        if (clock) return Number(clock[1]) * 3600 + Number(clock[2]) * 60 + Number(clock[3] ?? 0);
+        const iso = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(value);
+        return iso && value !== "PT" ? Number(iso[1] ?? 0) * 3600 + Number(iso[2] ?? 0) * 60 + Number(iso[3] ?? 0) : null;
+    };
     const a = text(sent);
     const b = text(stored);
     if (dayOf(a) !== null && dayOf(a) === dayOf(b)) return true;
+    if (secondsOf(a) !== null && secondsOf(a) === secondsOf(b)) return true;
     return a === b;
 }
 

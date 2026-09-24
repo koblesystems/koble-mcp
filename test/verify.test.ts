@@ -18,6 +18,11 @@ test("values compare the way EBMS stores them", () => {
     assert.equal(sameValue(0, 0.004), true);
     assert.equal(sameValue("2026-10-05", "2026-10-05T00:00:00Z"), true);
     assert.equal(sameValue("2026-10-05", "2026-10-06T00:00:00Z"), false);
+    // Seen live on TASK.START_TIME: sent as HH:MM:SS, stored as an ISO duration.
+    assert.equal(sameValue("09:00:00", "PT9H"), true);
+    assert.equal(sameValue("13:30:00", "PT13H30M"), true);
+    assert.equal(sameValue("09:00:00", "PT9H30M"), false);
+    assert.equal(sameValue("00:00:00", null), false);
 });
 
 test("a body splits into scalars, deltas and create arrays; control keys are ignored", () => {

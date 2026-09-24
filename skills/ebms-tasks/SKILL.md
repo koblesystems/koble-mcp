@@ -28,6 +28,7 @@ If those tools are not available, say the koble-mcp server is not connected and 
 | Attach a task to a sales order or an order line | `references/link.md` |
 | Move a task through its pipeline | `references/phase.md` |
 | Book hours against a task | `references/time.md` |
+| Reschedule many tasks at once so no worker overlaps | the **ebms-task-reflow** skill |
 
 ## The shape of a task
 
