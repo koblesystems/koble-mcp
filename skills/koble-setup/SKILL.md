@@ -13,6 +13,24 @@ The user types it into `koble login` in their own terminal, where it is hidden a
 the system's credential store. If they paste it into the chat anyway, don't use it, and suggest
 they change it in EBMS, since it has now been shared.
 
+## If you cannot run commands here
+
+In a Claude chat (not Claude Code), you have no terminal on the person's computer. Don't pretend
+to run anything. Instead:
+
+1. Check whether the `ebms_companies` tool is available. If it is, koble is installed and
+   connected; call it and report the companies. For a health check, ask them to run
+   `koble doctor` in a terminal and paste the result.
+2. If it is not, give them the one line for their system and say what it does (downloads the
+   koble program from github.com/koblesystems/koble-mcp, checks it, and asks for the EBMS serial
+   number, a test company, their username and password):
+   - Windows, in PowerShell: `irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex`
+   - macOS or Linux, in Terminal: `curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash`
+3. Tell them to quit Claude Desktop completely (tray icon or menu → Quit) and reopen it
+   afterwards.
+
+The rest of this skill is for Claude Code, which can run the commands itself.
+
 ## 1. Is it installed?
 
 Run `koble version`. If that prints a version, skip to step 3.

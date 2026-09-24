@@ -1,10 +1,16 @@
 {
   "name": "koblesystems",
-  "owner": { "name": "Koble Systems", "url": "https://koblesystems.com" },
-  "metadata": { "description": "Koble Systems plugins for Claude Code" },
+  "owner": {
+    "name": "Koble Systems",
+    "url": "https://koblesystems.com"
+  },
+  "metadata": {
+    "description": "Koble Systems plugins for Claude Code"
+  },
   "plugins": [
     {
       "name": "koble-mcp",
+      "displayName": "Koble",
       "source": "./",
       "description": "EBMS (Koble) for Claude: sales orders, purchase orders, receiving, products, tasks and MRP.",
       "category": "productivity",

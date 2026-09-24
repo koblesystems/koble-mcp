@@ -103,16 +103,18 @@ newest release; `koble setup` again changes any answer.
 ### `/` commands in Claude Desktop's chat
 
 Claude Code and Desktop's Code tab get the skills as `/` commands automatically. Desktop's regular
-chat only shows skills from plugins on your Claude account, so there is one upload:
+chat shows skills from plugins on your Claude account, and this repository is a plugin marketplace:
 
-```
-koble plugin
-```
+1. Claude Desktop → **Settings → Customize → Plugins → Add marketplace → Add from a repository**
+2. Enter `koblesystems/koble-mcp` and install **Koble**.
 
-saves `koble.plugin` (checked against the release's checksums) to your Downloads folder. Upload it
-in **Claude Desktop → Settings → Customize → Plugins**. The skills then appear under `/`, grouped as
-**Koble**, in every Claude chat on your account. After `koble update`, run `koble plugin` again and
-upload the new file. `koble doctor` says whether it is on your account.
+The skills then appear under `/` as **Koble** in every Claude chat on your account, and update
+themselves from this repository. (They follow the repository, so they can be a little newer than
+your `koble`; they only use its tools, so that is fine — `koble update` keeps the two close.)
+`koble doctor` says whether the plugin is on your account.
+
+If your account cannot add a marketplace from GitHub, `koble plugin` saves the same skills as a
+`koble.plugin` file to upload there instead — one or the other, not both.
 
 ### Uninstall
 

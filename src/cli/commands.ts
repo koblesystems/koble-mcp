@@ -247,7 +247,8 @@ export async function connect(flags: Flags): Promise<number> {
     say("");
     say("Restart each app to load koble: quit and reopen Claude Desktop and Cursor, start a new Claude Code or Codex session.");
     if (apps.some((app) => app.id === "claude-desktop") && accountHasKoblePlugin() !== true) {
-        say("For the skills as / commands in Claude Desktop's chat too, run `koble plugin` and upload the file it saves.");
+        say("For the skills as / commands in Claude Desktop's chat too: Settings → Customize → Plugins → Add marketplace →");
+        say("  Add from a repository → koblesystems/koble-mcp, then install Koble. It updates itself from GitHub.");
     }
     return 0;
 }
@@ -295,8 +296,8 @@ export async function doctor(flags: Flags): Promise<number> {
             // Connected in its config; its own log says whether it actually started koble.
             const log = desktopLog();
             const uploaded = accountHasKoblePlugin();
-            if (uploaded === false) add({ status: "info", label: "Desktop chat /", detail: "the koble skills plugin is not uploaded to your Claude account", fix: "koble plugin" });
-            else if (uploaded === true) add({ status: "ok", label: "Desktop chat /", detail: "the koble skills plugin is on your Claude account" });
+            if (uploaded === false) add({ status: "info", label: "Desktop chat /", detail: "the Koble plugin is not on your Claude account", fix: "Settings → Customize → Plugins → Add marketplace → Add from a repository → koblesystems/koble-mcp" });
+            else if (uploaded === true) add({ status: "ok", label: "Desktop chat /", detail: "the Koble plugin is on your Claude account" });
             if (!log) add({ status: "warn", label: app.name, detail: "connected, but Claude Desktop has not started it yet", fix: "quit Claude Desktop completely and reopen it" });
             else {
                 const seen = readDesktopLog(log.lines);
@@ -403,7 +404,9 @@ export async function plugin(_flags: Flags): Promise<number> {
     writeFileSync(path, bytes);
     say(`Saved ${path}`);
     say("");
-    say("Upload it once to your Claude account:");
+    say("Easier, and it updates itself: in Claude Desktop, Settings → Customize → Plugins → Add marketplace → Add from a repository → koblesystems/koble-mcp, then install Koble.");
+    say("");
+    say("Or upload this file instead (not both, or the skills appear twice):");
     say("  Claude Desktop → Settings → Customize → Plugins → upload koble.plugin");
     say("The EBMS skills then appear under / in every Claude chat, grouped as \"Koble\". After a `koble update`, run `koble plugin` again and upload the new file.");
     return 0;
@@ -500,7 +503,7 @@ export function help(): number {
   koble connect   Connect the AI apps again (--apps claude-desktop,claude-code,codex,cursor,vscode,gemini,windsurf)
   koble doctor    Check every part and say how to fix what is broken   (--json for a machine-readable report)
   koble update    Download and install the latest release              (--pre to include release candidates)
-  koble plugin    Save koble.plugin to Downloads, to upload so the skills are / commands in Claude Desktop's chat
+  koble plugin    Save koble.plugin to Downloads (for accounts that cannot add a marketplace from GitHub)
   koble uninstall Remove koble from every app, its settings, password and program (asks first; --yes to skip)
   koble mcp       Run the MCP server (what Claude starts; not for typing by hand)
   koble version

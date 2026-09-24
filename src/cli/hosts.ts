@@ -223,7 +223,8 @@ export function accountHasKoblePlugin(): boolean | null {
                 sawManifest = true;
                 try {
                     const plugins = (JSON.parse(readFileSync(manifest, "utf8")) as { plugins?: Array<{ name?: string }> }).plugins ?? [];
-                    if (plugins.some((p) => p.name === "koble")) return true;
+                    // "koble-mcp" from the koblesystems marketplace, or an uploaded koble.plugin.
+                    if (plugins.some((p) => p.name === "koble" || p.name === "koble-mcp")) return true;
                 } catch {
                     // unreadable copy
                 }

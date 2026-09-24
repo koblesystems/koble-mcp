@@ -1,7 +1,8 @@
 {
   "name": "koble-mcp",
-  "version": "0.1.0-rc.5",
-  "description": "EBMS (Koble) for Claude: sales orders, purchase orders, receiving, products, tasks and MRP. Run /koble-mcp:koble-setup to install the koble program and connect it.",
+  "displayName": "Koble",
+  "version": "0.1.0-rc.6",
+  "description": "EBMS (Koble Systems ERP) for Claude: sales orders, purchase orders, receiving, products, tasks and MRP. The skills need the koble program on your computer \u2014 ask Claude to \"set up Koble\".",
   "author": {
     "name": "Koble Systems",
     "url": "https://koblesystems.com"
