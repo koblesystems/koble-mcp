@@ -27,6 +27,8 @@ export interface StoredConfig {
     companies?: string | undefined;
     /** While testing: the only company writes may go to. */
     sandbox?: string | undefined;
+    /** The AI apps chosen at setup (ids from apps.ts); unset means every one installed. */
+    apps?: string[] | undefined;
 }
 
 const configPath = (): string => join(configDir(), "config.json");

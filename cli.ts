@@ -14,7 +14,7 @@ function parseFlags(args: string[]): Flags {
         const [key = "", inline] = arg.slice(2).split("=", 2);
         const next = args[i + 1];
         if (inline !== undefined) flags[key] = inline;
-        else if (["serial", "username", "sandbox"].includes(key) && next !== undefined && !next.startsWith("--")) {
+        else if (["serial", "username", "sandbox", "apps"].includes(key) && next !== undefined && !next.startsWith("--")) {
             flags[key] = next;
             i += 1;
         } else flags[key] = true;

@@ -15,7 +15,8 @@ import { resetAuth, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { EbmsError } from "../ebms/errors.js";
 import { VERSION } from "../version.js";
-import { claudeCodeHasPlugin, claudeCodeInstalled, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, desktopLog, desktopRunning, findDesktopConfig, readDesktopLog, type Launch } from "./hosts.js";
+import { APPS, appById, type App } from "./apps.js";
+import { desktopLog, desktopRunning, readDesktopLog, type Launch } from "./hosts.js";
 import { accountFor, loadPassword, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
 
 export type Flags = Record<string, string | boolean>;
@@ -172,8 +173,18 @@ export async function setup(flags: Flags): Promise<number> {
     }
 
     if (flags["no-connect"] !== true) {
+        const found = APPS.filter((app) => app.installed());
+        let picked = typeof flags["apps"] === "string" ? flags["apps"].split(",").map((s) => s.trim()) : found.map((app) => app.id);
+        if (interactive && typeof flags["apps"] !== "string" && found.length > 0) {
+            say("");
+            say("Which AI apps should koble connect to?");
+            APPS.forEach((app, i) => say(`  ${i + 1}. ${app.name}${app.installed() ? "" : "  (not found on this computer)"}`));
+            const answer = await ask("Numbers separated by commas, or Enter for every app found", found.map((app) => String(APPS.indexOf(app) + 1)).join(","));
+            picked = answer.split(",").map((n) => APPS[Number(n.trim()) - 1]?.id).filter((id): id is string => id !== undefined);
+        }
+        writeConfig({ ...(readConfig() ?? config), apps: picked });
         say("");
-        await connect(flags);
+        await connect({ ...flags, apps: picked.join(",") });
     }
     say("");
     return doctor({ ...flags, brief: true });
@@ -200,34 +211,37 @@ export async function login(flags: Flags): Promise<number> {
     return fail("Three attempts failed. Check the username with `koble setup` and try `koble login` again.");
 }
 
+/** The apps to connect: --apps, else the ones chosen at setup, else every one installed here. */
+function chosenApps(flags: Flags): App[] {
+    const wanted = typeof flags["apps"] === "string" ? flags["apps"].split(",").map((s) => s.trim()).filter(Boolean) : readConfig()?.apps;
+    if (wanted && wanted.length) return wanted.map((id) => appById(id)).filter((app): app is App => app !== undefined);
+    return APPS.filter((app) => app.installed());
+}
+
 export async function connect(flags: Flags): Promise<number> {
     const launch = selfLaunch();
-    // Claude Desktop writes its config file back from memory, so a change made while it runs can vanish.
-    if (findDesktopConfig() && desktopRunning()) {
-        const where = process.platform === "win32" ? "right-click the Claude icon by the clock and choose Quit" : "Claude menu → Quit Claude";
-        if (process.stdin.isTTY && flags["yes"] !== true) {
-            for (let tries = 0; tries < 3 && desktopRunning(); tries += 1) await ask(`Claude Desktop is open. Quit it completely (${where}), then press Enter`);
-            if (desktopRunning()) say("Claude Desktop is still running; connecting anyway. If koble does not appear in it, quit it and run `koble connect` again.");
-        } else say(`Claude Desktop is open. Quit it completely (${where}) and run \`koble connect\` again, or it may undo this change.`);
+    const apps = chosenApps(flags);
+    if (apps.length === 0) {
+        say("No AI apps found to connect. Install Claude Desktop, Claude Code, Codex, Cursor, VS Code, Gemini CLI or Windsurf, then run koble connect.");
+        return 0;
     }
-    const paths = desktopConfigPaths();
-    if (paths.length === 0) say("Claude Desktop: not installed here — skipped.");
-    let changed = false;
-    for (const path of paths) {
-        const desktop = connectDesktop(launch, path);
-        const where = paths.length > 1 ? ` (${path})` : "";
-        if (desktop.status === "invalid") say(`Claude Desktop${where}: ${desktop.reason}`);
-        else if (desktop.status !== "not-installed") {
-            const verb = desktop.status === "unchanged" ? "already connected" : desktop.status === "added" ? "connected" : "updated";
-            say(`Claude Desktop${where}: ${verb}.${desktop.replaced.length ? ` Replaced the older entry ${desktop.replaced.join(", ")}.` : ""}${desktop.backup ? ` Backup: ${desktop.backup}` : ""}`);
-            if (desktop.status !== "unchanged") changed = true;
+    for (const app of apps) {
+        if (!app.installed()) {
+            say(`${app.name}: not installed here — skipped.`);
+            continue;
         }
+        if (app.id === "claude-desktop" && desktopRunning()) {
+            // Claude Desktop writes its config file back from memory, so a change made while it runs can vanish.
+            const where = process.platform === "win32" ? "right-click the Claude icon by the clock and choose Quit" : "Claude menu → Quit Claude";
+            if (process.stdin.isTTY && flags["yes"] !== true) {
+                for (let tries = 0; tries < 3 && desktopRunning(); tries += 1) await ask(`Claude Desktop is open. Quit it completely (${where}), then press Enter`);
+                if (desktopRunning()) say("Claude Desktop is still running; connecting anyway. If koble does not appear in it, quit it and run `koble connect` again.");
+            } else say(`Claude Desktop is open. Quit it completely (${where}) and run \`koble connect\` again, or it may undo this change.`);
+        }
+        for (const line of app.connect(launch)) say(`${app.name}: ${line}`);
     }
-    if (changed) say("  Quit Claude Desktop completely and reopen it to load it.");
-    const code = connectClaudeCode(launch);
-    const codeLabel = claudeCodeRunner()?.label ?? "Claude Code";
-    for (const line of code.lines) say(`${codeLabel}: ${line}`);
-    if (code.ok) say("  Start a new Claude Code session (or run /mcp) to load it.");
+    say("");
+    say("Restart each app to load koble: quit and reopen Claude Desktop and Cursor, start a new Claude Code or Codex session.");
     return 0;
 }
 
@@ -264,38 +278,24 @@ export async function doctor(flags: Flags): Promise<number> {
     }
 
     const self = selfLaunch();
-    const configs = desktopConfigPaths();
-    const others = configs.slice(1).filter((path) => {
-        const e = desktopEntry(path);
-        return typeof e !== "object" || e.command !== self.command;
-    });
-    if (others.length) add({ status: "warn", label: "Claude Desktop", detail: `not connected in ${others.join(", ")}`, fix: "koble connect" });
-    const entry = desktopEntry();
-    if (entry === "not-installed") add({ status: "info", label: "Claude Desktop", detail: "not installed" });
-    else if (entry === "invalid") add({ status: "fail", label: "Claude Desktop", detail: `config is not valid JSON (${findDesktopConfig()})`, fix: "fix or move the file, then koble connect" });
-    else if (entry === "missing") add({ status: "fail", label: "Claude Desktop", detail: "not connected", fix: "koble connect" });
-    else if (entry.command === self.command && JSON.stringify(entry.args) === JSON.stringify(self.args)) {
-        const log = desktopLog();
-        if (!log) add({ status: "warn", label: "Claude Desktop", detail: "connected, but Claude Desktop has not started it yet", fix: "quit Claude Desktop completely and reopen it" });
-        else {
-            const seen = readDesktopLog(log.lines);
-            add(seen.ok ? { status: "ok", label: "Claude Desktop", detail: `connected; ${seen.detail}` } : { status: "fail", label: "Claude Desktop", detail: `connected, but starting it failed: ${seen.detail}`, fix: `send the end of ${log.path}` });
+    for (const app of chosenApps(flags)) {
+        if (!app.installed()) {
+            add({ status: "info", label: app.name, detail: "not installed" });
+            continue;
         }
+        const result = app.check(self);
+        if (app.id === "claude-desktop" && result.status === "ok") {
+            // Connected in its config; its own log says whether it actually started koble.
+            const log = desktopLog();
+            if (!log) add({ status: "warn", label: app.name, detail: "connected, but Claude Desktop has not started it yet", fix: "quit Claude Desktop completely and reopen it" });
+            else {
+                const seen = readDesktopLog(log.lines);
+                add(seen.ok ? { status: "ok", label: app.name, detail: `connected; ${seen.detail}` } : { status: "fail", label: app.name, detail: `connected, but starting it failed: ${seen.detail}`, fix: `send the end of ${log.path}` });
+            }
+        } else add({ label: app.name, ...result });
     }
-    else add({ status: "warn", label: "Claude Desktop", detail: `runs ${[entry.command, ...(entry.args ?? [])].join(" ")}`, fix: "koble connect, to point it at this koble" });
-
-    if (!claudeCodeInstalled()) add({ status: "info", label: "Claude Code", detail: "not installed (neither the claude command nor Claude Desktop's Code tab)" });
-    else {
-        if (claudeCodeRunner()?.command !== "claude") add({ status: "info", label: "Claude Code", detail: "using the copy inside Claude Desktop (its Code tab)" });
-        const server = claudeCodeServer();
-        // `claude mcp get` prints the arguments joined by spaces, so compare the whole command line.
-        const runsSelf = server !== null && [server.command, ...server.args].join(" ") === [self.command, ...self.args].join(" ");
-        if (!server) add({ status: "fail", label: "Claude Code", detail: "koble-mcp is not registered", fix: "koble connect" });
-        else if (!runsSelf) add({ status: "warn", label: "Claude Code", detail: `runs ${[server.command, ...server.args].join(" ")}`, fix: "koble connect, to point it at this koble" });
-        else if (!server.connected) add({ status: "fail", label: "Claude Code", detail: `registered, but it does not start: ${server.issue ?? "no detail"}`, fix: "koble connect; if it persists, send this line" });
-        else add({ status: "ok", label: "Claude Code", detail: "connected to this koble" });
-        if (!claudeCodeHasPlugin()) add({ status: "warn", label: "Skills plugin", detail: "not installed in Claude Code (the tools work; the skills come from the server's guide)", fix: "koble connect" });
-    }
+    const others = APPS.filter((app) => !chosenApps(flags).includes(app) && app.installed());
+    if (others.length) add({ status: "info", label: "Not connected", detail: `${others.map((a) => a.name).join(", ")} (koble connect --apps to add them)` });
 
     if (flags["brief"] !== true) {
         const latest = await latestRelease(flags["pre"] === true).catch(() => null);
@@ -305,7 +305,7 @@ export async function doctor(flags: Flags): Promise<number> {
     if (flags["json"] === true) say(JSON.stringify({ version: VERSION, checks }, null, 2));
     else {
         const mark = { ok: "  ok ", warn: " warn", fail: " FIX ", info: "     " } as const;
-        for (const c of checks) say(`${mark[c.status]}  ${c.label.padEnd(15)} ${c.detail}${c.fix ? `  ->  ${c.fix}` : ""}`);
+        for (const c of checks) say(`${mark[c.status]}  ${c.label.padEnd(18)} ${c.detail}${c.fix ? `  ->  ${c.fix}` : ""}`);
     }
     return checks.some((c) => c.status === "fail") ? 1 : 0;
 }
@@ -381,15 +381,15 @@ export function version(): number {
 export function help(): number {
     say(`koble ${VERSION} — EBMS for Claude
 
-  koble setup     Serial number, test company, username and password; connects Claude Desktop and Claude Code
+  koble setup     Serial number, test company, username, password, and which AI apps to connect
   koble login     Enter or change the EBMS password (typed hidden, stored in the system's credential store)
-  koble connect   Connect Claude Desktop and Claude Code again
+  koble connect   Connect the AI apps again (--apps claude-desktop,claude-code,codex,cursor,vscode,gemini,windsurf)
   koble doctor    Check every part and say how to fix what is broken   (--json for a machine-readable report)
   koble update    Download and install the latest release              (--pre to include release candidates)
   koble mcp       Run the MCP server (what Claude starts; not for typing by hand)
   koble version
 
-setup flags: --serial, --username, --sandbox <company|none>, --skip-password, --password-stdin, --no-connect, --yes
+setup flags: --serial, --username, --sandbox <company|none>, --apps <ids>, --skip-password, --password-stdin, --no-connect, --yes
 Docs: https://github.com/${REPO}`);
     return 0;
 }

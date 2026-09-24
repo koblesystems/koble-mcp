@@ -59,9 +59,11 @@ Then run:
 koble setup --serial <serial> --username <username> --sandbox <company or none> --skip-password --yes
 ```
 
-It lists the companies the serial reaches, so a wrong serial shows up at once. It also connects
-Claude Desktop (backing up its config first) and installs this plugin in Claude Code if needed.
-Read its output to the user in plain words.
+It lists the companies the serial reaches, so a wrong serial shows up at once. It then connects
+every AI app it finds (Claude Desktop, Claude Code, Codex, Cursor, VS Code, Gemini CLI, Windsurf),
+backing up each config first, and copies the skills into Claude Code's skills folder. To choose
+the apps, add `--apps claude-desktop,claude-code,codex` (any of `claude-desktop`, `claude-code`,
+`codex`, `cursor`, `vscode`, `gemini`, `windsurf`). Read its output to the user in plain words.
 
 ## 4. The password — the user types it
 
@@ -84,8 +86,9 @@ the failures and warnings in plain words, and do what each `fix` says. Where the
 
 - **Claude Desktop:** quit and reopen it. The EBMS tools appear under the connectors, and the
   named workflows appear in its prompt menu.
-- **Claude Code:** start a new session, or run `/mcp`. Type `/` to see the workflows, e.g.
-  `/mcp__koble-mcp__mrp-plan`.
+- **Claude Code:** start a new session, or run `/mcp`. Type `/ebms` to see the skills, e.g.
+  `/ebms-mrp`.
+- **Codex, Cursor, VS Code, Gemini CLI, Windsurf:** restart the app or start a new session.
 
 ## Updating
 
@@ -103,5 +106,6 @@ Code. The first failure is usually the cause of the rest. Common ones:
 | Settings: none saved | step 3 |
 | EBMS: company list not reachable | Check the serial number and the internet connection. |
 | Password: not stored, or Sign-in failing | The user runs `koble login`. |
-| Claude Desktop: not connected, or runs something else | `koble connect` |
+| Any app: not connected, or runs something else | `koble connect` |
+| Claude Desktop: connected, but has not started it | The user quits Claude Desktop completely (tray icon or menu → Quit) and reopens it. |
 | Claude Desktop: config is not valid JSON | Don't edit it yourself. Show the user the path and ask them to fix or move the file, then `koble connect`. |

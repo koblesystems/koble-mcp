@@ -30,7 +30,7 @@ Quit and reopen Claude Desktop first (or start a new Claude Code session). Use t
 | # | Ask Claude | What should happen |
 |---|---|---|
 | 1 | "Which EBMS companies can you see?" | It names them, and says writes go only to the test company. |
-| 2 | Start **mrp-plan** from the prompt menu (Claude Code: `/mcp__koble-mcp__mrp-plan`) | It asks how far ahead and which vendors, then gives you a worksheet (CSV) in the chat. |
+| 2 | Claude Desktop: ＋ menu → koble-mcp → **mrp-plan**. Claude Code or Desktop's Code tab: `/ebms-mrp` | It asks how far ahead and which vendors, then gives you a worksheet (CSV) in the chat. |
 | 3 | "Why is it telling me to buy <an item from the worksheet>?" | A plain explanation from the plan, with the dates. |
 | 4 | "What's on order from <a vendor>?" | A list of open POs; nothing changed. |
 | 5 | "Raise a PO to <vendor> for 2 of <product>" | It shows the PO and **asks** before creating it; afterwards it reports the PO number and what EBMS stored. |

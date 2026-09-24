@@ -16,8 +16,23 @@ It is two things in one install:
 
 One command downloads the `koble` program (checked against the release's checksums), then
 `koble setup` asks for your EBMS serial number, a test company, your username and your password,
-checks that they work, stores the password in your system's credential store, and connects the
-Claude apps it finds. Run `koble doctor` any time to check everything.
+checks that they work, stores the password in your system's credential store, and connects the AI
+apps you choose from the ones it finds:
+
+| App | What koble sets up |
+|---|---|
+| Claude Desktop | the server, in the config Desktop actually reads (including the Windows Store build's own folder) |
+| Claude Code, and Claude Desktop's **Code** tab | the server, plus the skills as `/` commands — using Desktop's built-in Claude Code if the `claude` command isn't installed |
+| Codex (OpenAI) | the server, in `~/.codex/config.toml` |
+| Cursor, VS Code (Copilot), Gemini CLI, Windsurf | the server, in each app's MCP config |
+
+Every app also gets the procedures through the server itself (`ebms_guide`), so none of them needs
+anything uploaded. Run `koble doctor` any time to check everything, and `koble connect --apps …` to
+add an app later.
+
+> **ChatGPT.** The ChatGPT app can only connect to servers on the internet, not to a program on
+> your computer, so it needs a hosted version of koble that doesn't exist yet. OpenAI's Codex works
+> today.
 
 ### Windows
 
@@ -58,14 +73,17 @@ Linux; use Claude Code.
 
 ### Claude Code
 
-Either run the installer above (setup installs the plugin for you), or add it from Claude Code:
+The installer above connects Claude Code and copies the skills into its skills folder, so they are
+`/` commands straight away: `/ebms-mrp`, `/ebms-purchase-orders`, `/koble-setup` and the rest.
+
+If you'd rather start from inside Claude Code, add the plugin:
 
 ```bash
 claude plugin marketplace add koblesystems/koble-mcp
 claude plugin install koble-mcp@koblesystems
 ```
 
-Then ask Claude to **"set up Koble"** (or run `/koble-mcp:koble-setup`): it installs the program,
+and ask Claude to **"set up Koble"** (or run `/koble-mcp:koble-setup`): it installs the program,
 saves your settings, and has you type the password into `koble login` yourself — the password
 never goes through the chat.
 
@@ -87,14 +105,17 @@ newest release; `koble setup` again changes any answer.
 Ask in your own words — *"order 10 tubes from Bike Parts Co"*, *"what's open for the bike shop?"*,
 *"run MRP for the next 60 days"* — or start a named workflow:
 
-| Workflow | Claude Code | Claude Desktop |
+| Workflow | Claude Code (and Desktop's Code tab) | Claude Desktop chat |
 |---|---|---|
-| Plan what to buy and make | `/mcp__koble-mcp__mrp-plan` | the prompt menu (＋) → koble-mcp |
-| Create the POs / batches an MRP worksheet approved | `/mcp__koble-mcp__mrp-purchase-orders`, `…__mrp-batches` | same |
-| Sales order, purchase order, receiving, what's on order | `…__sales-order`, `…__purchase-order`, `…__receive`, `…__on-order` | same |
-| Products and tasks | `…__product`, `…__task` | same |
+| Plan what to buy and make | `/ebms-mrp` | ＋ menu → koble-mcp → **mrp-plan** |
+| Create the POs / batches an MRP worksheet approved | `/ebms-mrp-purchase-orders`, `/ebms-mrp-batches` | ＋ → **mrp-purchase-orders**, **mrp-batches** |
+| Sales orders | `/ebms-sales-orders` | ＋ → **sales-order** |
+| Purchase orders, receiving, what's on order | `/ebms-purchase-orders` | ＋ → **purchase-order**, **receive**, **on-order** |
+| Products, tasks | `/ebms-products`, `/ebms-tasks` | ＋ → **product**, **task** |
+| Check or repair the install | `/koble-setup` | run `koble doctor` in a terminal |
 
-With the plugin, each skill is also a command in Claude Code, e.g. `/koble-mcp:ebms-mrp`.
+The server's named workflows also appear in Claude Code as `/mcp__koble-mcp__mrp-plan` and so on,
+and in other apps wherever they list an MCP server's prompts.
 
 **What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view`, `po_from_csv` and
 `batches_from_csv` never write to EBMS. Purchase orders and batches are only created by the second

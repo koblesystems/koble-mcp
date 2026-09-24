@@ -58,7 +58,12 @@ function frontMatter(text: string): { name: string; description: string } | null
     return name ? { name, description: field("description") } : null;
 }
 
-export function loadGuide(files: Map<string, string> = fromEmbedded() ?? fromFolder(fileURLToPath(new URL("../skills/", import.meta.url)))): Guide {
+/** Every file under skills/, by its path there: the embedded copy in the single-file build, else the folder. */
+export function skillFiles(): Map<string, string> {
+    return fromEmbedded() ?? fromFolder(fileURLToPath(new URL("../skills/", import.meta.url)));
+}
+
+export function loadGuide(files: Map<string, string> = skillFiles()): Guide {
     const skills: SkillInfo[] = [];
     for (const [path, text] of files) {
         const [folder, file] = path.split("/");

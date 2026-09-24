@@ -6,7 +6,7 @@
  * written whole. Claude Code is connected through its own `claude` command.
  */
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
 
@@ -60,10 +60,11 @@ export function findDesktopConfig(): string | null {
     return desktopConfigPaths()[0] ?? null;
 }
 
-export type DesktopResult =
+export type MergeResult =
     | { status: "added" | "updated" | "unchanged"; path: string; backup: string | null; replaced: string[] }
     | { status: "not-installed" }
     | { status: "invalid"; path: string; reason: string };
+export type DesktopResult = MergeResult;
 
 /** Entries that are an older koble-mcp: by name, or by what they run. */
 function isOurs(name: string, entry: unknown): boolean {
@@ -73,28 +74,31 @@ function isOurs(name: string, entry: unknown): boolean {
     return /koble-mcp[\\/](index|cli)\.js|[\\/]koble(\.exe)?$/.test(words);
 }
 
-export function connectDesktop(launch: Launch, path = findDesktopConfig()): DesktopResult {
-    if (!path) return { status: "not-installed" };
+/**
+ * Puts koble-mcp into a JSON config's server list (`mcpServers` for most apps, `servers` for VS
+ * Code). The file is parsed first and left untouched if it does not parse; otherwise backed up,
+ * older koble entries replaced, everything else kept, and written whole.
+ */
+export function mergeServerEntry(path: string, key: string, entry: Record<string, unknown>, app: string): MergeResult {
     let config: Record<string, unknown> = {};
     if (existsSync(path)) {
         const text = readFileSync(path, "utf8");
         try {
-            const parsed = text.trim() ? (JSON.parse(text) as unknown) : {};
+            const parsed = text.trim() ? (JSON.parse(text.replace(/^﻿/, "")) as unknown) : {};
             if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("it is not a JSON object");
             config = parsed as Record<string, unknown>;
         } catch (error) {
-            return { status: "invalid", path, reason: `Claude Desktop's config is not valid JSON (${error instanceof Error ? error.message : String(error)}). Nothing was changed. Fix the file, or move it aside, and run koble connect again.` };
+            return { status: "invalid", path, reason: `${app}'s config is not plain JSON (${error instanceof Error ? error.message : String(error)}). Nothing was changed. Fix the file, or move it aside, and run koble connect again.` };
         }
     }
-    const servers = (config["mcpServers"] && typeof config["mcpServers"] === "object" ? config["mcpServers"] : {}) as Record<string, unknown>;
-    const wanted = { command: launch.command, args: launch.args };
+    const servers = (config[key] && typeof config[key] === "object" ? config[key] : {}) as Record<string, unknown>;
     const replaced = Object.keys(servers).filter((name) => name !== SERVER_NAME && isOurs(name, servers[name]));
     const current = servers[SERVER_NAME];
-    if (replaced.length === 0 && JSON.stringify(current) === JSON.stringify(wanted)) return { status: "unchanged", path, backup: null, replaced };
+    if (replaced.length === 0 && JSON.stringify(current) === JSON.stringify(entry)) return { status: "unchanged", path, backup: null, replaced };
 
     for (const name of replaced) delete servers[name];
-    servers[SERVER_NAME] = wanted;
-    config["mcpServers"] = servers;
+    servers[SERVER_NAME] = entry;
+    config[key] = servers;
 
     let backup: string | null = null;
     if (existsSync(path)) {
@@ -106,6 +110,22 @@ export function connectDesktop(launch: Launch, path = findDesktopConfig()): Desk
     writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`);
     renameSync(temp, path);
     return { status: current === undefined && replaced.length === 0 ? "added" : "updated", path, backup, replaced };
+}
+
+/** What a JSON config has as koble-mcp: the entry, or why not. */
+export function readServerEntry(path: string, key: string): Record<string, unknown> | "missing" | "invalid" {
+    if (!existsSync(path)) return "missing";
+    try {
+        const entry = ((JSON.parse(readFileSync(path, "utf8").replace(/^﻿/, "")) as Record<string, Record<string, unknown> | undefined>)[key] ?? {})[SERVER_NAME];
+        return (entry as Record<string, unknown> | undefined) ?? "missing";
+    } catch {
+        return "invalid";
+    }
+}
+
+export function connectDesktop(launch: Launch, path = findDesktopConfig()): DesktopResult {
+    if (!path) return { status: "not-installed" };
+    return mergeServerEntry(path, "mcpServers", { command: launch.command, args: launch.args }, "Claude Desktop");
 }
 
 /**
@@ -159,6 +179,30 @@ export function desktopEntry(path = findDesktopConfig()): Launch | "missing" | "
     }
 }
 
+/** The first file with this exact name under a folder, looking at most `depth` levels down. */
+function findFile(dir: string, name: string, depth: number): string | null {
+    let entries: string[] = [];
+    try {
+        entries = readdirSync(dir);
+    } catch {
+        return null;
+    }
+    if (entries.includes(name) && existsSync(join(dir, name)) && !statSync(join(dir, name)).isDirectory()) return join(dir, name);
+    if (depth <= 0) return null;
+    for (const entry of entries) {
+        const full = join(dir, entry);
+        try {
+            if (statSync(full).isDirectory()) {
+                const found = findFile(full, name, depth - 1);
+                if (found) return found;
+            }
+        } catch {
+            // unreadable
+        }
+    }
+    return null;
+}
+
 /** Newest first: "2.1.280" before "2.1.275" before "2.1.9". */
 const byVersionDesc = (a: string, b: string): number => b.localeCompare(a, undefined, { numeric: true });
 
@@ -184,7 +228,7 @@ export function bundledClaudeCode(): string | null {
                     : process.platform === "win32"
                       ? [join(base, version, "claude.exe"), join(base, version, "claude", "claude.exe"), join(base, version, "bin", "claude.exe")]
                       : [join(base, version, "claude")];
-            const found = candidates.find((path) => existsSync(path));
+            const found = candidates.find((path) => existsSync(path)) ?? findFile(join(base, version), process.platform === "win32" ? "claude.exe" : "claude", 4);
             if (found) return found;
         }
     }
@@ -249,8 +293,8 @@ export function claudeCodeServer(): ClaudeCodeServer | null {
 
 /**
  * Registers this koble with Claude Code by its full path, for every project (user scope), so it
- * starts whatever PATH the terminal or editor had; then installs or updates the plugin, which
- * brings the skills and the setup skill.
+ * starts whatever PATH the terminal or editor had. The skills are copied separately (apps.ts);
+ * a plugin someone installed themselves is only kept up to date.
  */
 export function connectClaudeCode(launch: Launch): { ok: boolean; lines: string[] } {
     if (!claudeCodeInstalled()) return { ok: false, lines: ["not installed here — skipped."] };
@@ -261,14 +305,10 @@ export function connectClaudeCode(launch: Launch): { ok: boolean; lines: string[
     lines.push("server registered for all projects.");
 
     if (claudeCodeHasPlugin()) {
+        // People who installed the plugin themselves keep it current; everyone else gets the skills copied (apps.ts).
         claude(["plugin", "marketplace", "update", "koblesystems"]);
         const up = claude(["plugin", "update", PLUGIN]);
-        lines.push(up.status === 0 ? "skills plugin up to date." : `updating the skills plugin failed: ${up.out.trim().split("\n")[0]}`);
-    } else {
-        const market = claude(["plugin", "marketplace", "add", MARKETPLACE]);
-        if (market.status !== 0 && !/already/i.test(market.out)) lines.push(`adding the plugin marketplace failed: ${market.out.trim().split("\n")[0]}`);
-        const install = claude(["plugin", "install", PLUGIN]);
-        lines.push(install.status === 0 ? "skills plugin installed." : `installing the skills plugin failed: ${install.out.trim().split("\n")[0]}`);
+        if (up.status !== 0) lines.push(`updating the koble-mcp plugin failed: ${up.out.trim().split("\n")[0]}`);
     }
 
     const check = claudeCodeServer();
