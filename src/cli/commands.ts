@@ -6,9 +6,11 @@
  * never a flag, never printed, and never passes through a chat.
  */
 import { createHash } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
+import { basename, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { configure, setDiscoveredCompanies, type CompanyInfo } from "../config.js";
 import { resetAuth, request } from "../ebms/client.js";
@@ -17,7 +19,8 @@ import { EbmsError } from "../ebms/errors.js";
 import { VERSION } from "../version.js";
 import { APPS, appById, type App } from "./apps.js";
 import { desktopLog, desktopRunning, readDesktopLog, type Launch } from "./hosts.js";
-import { accountFor, loadPassword, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
+import { outputDir } from "../mrp/files.js";
+import { accountFor, configDir, forgetPassword, loadPassword, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
 
 export type Flags = Record<string, string | boolean>;
 
@@ -373,6 +376,84 @@ export async function update(flags: Flags): Promise<number> {
     return 0;
 }
 
+// ------------------------------------------------------------------ uninstall
+
+/** Takes koble's folder off the user's PATH on Windows, the one change the installer made outside its own files. */
+function removeFromWindowsPath(dir: string): boolean {
+    const script = "$d = [Console]::In.ReadLine().TrimEnd('\\'); $p = [Environment]::GetEnvironmentVariable('Path', 'User'); if ($null -eq $p) { exit 0 }; $kept = ($p -split ';' | Where-Object { $_ -and ($_.TrimEnd('\\') -ne $d) }) -join ';'; if ($kept -ne $p) { [Environment]::SetEnvironmentVariable('Path', $kept, 'User'); 'changed' }";
+    const r = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")], { input: `${dir}\n`, encoding: "utf8", windowsHide: true, timeout: 30_000 });
+    return r.stdout.includes("changed");
+}
+
+/**
+ * Deletes this program. On macOS and Linux a running program can delete its own file. On Windows it
+ * cannot, so a hidden cmd waits a moment for koble to exit and then deletes it (and the folder,
+ * if that leaves it empty).
+ */
+function removeSelf(): string {
+    const exe = process.execPath;
+    if (!isSingleFile() || !/^koble(\.exe)?$/i.test(basename(exe))) return "";
+    if (process.platform !== "win32") {
+        rmSync(exe, { force: true });
+        return exe;
+    }
+    const dir = dirname(exe);
+    const command = `ping -n 3 127.0.0.1 >nul & del /f /q "${exe}" "${exe}.old" "${exe}.new" & rmdir "${dir}"`;
+    spawn("cmd.exe", ["/d", "/c", command], { detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true }).unref();
+    return exe;
+}
+
+export async function uninstall(flags: Flags): Promise<number> {
+    const config = readConfig();
+    const credential = config?.username ? loadPassword(accountFor(config)) : null;
+    const apps = APPS.filter((app) => app.installed()).map((app) => ({ app, parts: app.footprint() })).filter((x) => x.parts.length > 0);
+    const program = isSingleFile() ? process.execPath : null;
+
+    const plan: string[] = [];
+    for (const { app, parts } of apps) plan.push(`${app.name}: ${parts.join("; ")}`);
+    if (credential) plan.push(`your EBMS password, from ${credential.where}`);
+    if (existsSync(configDir())) plan.push(`koble's settings: ${configDir()}`);
+    if (program) plan.push(`the koble program: ${program}${process.platform === "win32" ? ", and its folder on your PATH" : ""}`);
+    else plan.push("(this koble runs from source: delete the folder yourself when you are done)");
+
+    say("koble uninstall will remove:");
+    for (const line of plan) say(`  - ${line}`);
+    say("");
+    say(`It keeps your MRP worksheets (${outputDir()}) and the config backups it made (files ending .koble-backup-…).`);
+    say("");
+    if (flags["yes"] !== true) {
+        if (!process.stdin.isTTY) return fail("Nothing was removed. Run `koble uninstall --yes` to remove it all without being asked.");
+        const answer = await ask("Remove all of this? Type yes to continue", "no");
+        if (!/^y(es)?$/i.test(answer)) {
+            say("Nothing was removed.");
+            return 0;
+        }
+    }
+
+    if (apps.some(({ app }) => app.id === "claude-desktop") && desktopRunning()) {
+        const where = process.platform === "win32" ? "right-click the Claude icon by the clock and choose Quit" : "Claude menu → Quit Claude";
+        if (process.stdin.isTTY && flags["yes"] !== true) {
+            for (let tries = 0; tries < 3 && desktopRunning(); tries += 1) await ask(`Claude Desktop is open and could write koble back. Quit it completely (${where}), then press Enter`);
+        } else say(`Claude Desktop is open; if koble-mcp is still listed in it afterwards, quit it (${where}) and run \`koble uninstall\` again.`);
+    }
+
+    for (const { app } of apps) for (const line of app.disconnect()) say(`${app.name}: ${line}`);
+    if (config?.username) {
+        forgetPassword(accountFor(config));
+        if (credential) say(`Password: removed from ${credential.where}.`);
+    }
+    if (existsSync(configDir())) {
+        rmSync(configDir(), { recursive: true, force: true });
+        say(`Settings: removed ${configDir()}.`);
+    }
+    if (program && process.platform === "win32" && removeFromWindowsPath(dirname(program))) say("PATH: removed koble's folder.");
+    const removed = removeSelf();
+    if (removed) say(`Program: ${process.platform === "win32" ? "removing" : "removed"} ${removed}.`);
+    say("");
+    say("koble is uninstalled. Restart the AI apps so they stop looking for it.");
+    return 0;
+}
+
 export function version(): number {
     say(`koble ${VERSION}`);
     return 0;
@@ -386,6 +467,7 @@ export function help(): number {
   koble connect   Connect the AI apps again (--apps claude-desktop,claude-code,codex,cursor,vscode,gemini,windsurf)
   koble doctor    Check every part and say how to fix what is broken   (--json for a machine-readable report)
   koble update    Download and install the latest release              (--pre to include release candidates)
+  koble uninstall Remove koble from every app, its settings, password and program (asks first; --yes to skip)
   koble mcp       Run the MCP server (what Claude starts; not for typing by hand)
   koble version
 

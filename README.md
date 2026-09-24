@@ -100,6 +100,19 @@ Point any coding agent at [install.md](install.md). It is written to be followed
 Settings live in `~/.config/koble` (`%APPDATA%\koble` on Windows). `koble update` installs the
 newest release; `koble setup` again changes any answer.
 
+### Uninstall
+
+```
+koble uninstall
+```
+
+The same on every system. It lists everything koble added — its entry in each AI app's config,
+the skills it put in Claude Code, the stored password, its settings, and the program itself (and,
+on Windows, its folder on your PATH) — asks once, then removes exactly those. Each app config is
+backed up first, a config it cannot read safely is left alone with a note, and a skill of your own
+with the same name is never touched. Your MRP worksheets and the config backups stay. Quit Claude
+Desktop first, or it may write koble back into its config. `--yes` skips the question.
+
 ## Using it
 
 Ask in your own words — *"order 10 tubes from Bike Parts Co"*, *"what's open for the bike shop?"*,

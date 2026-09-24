@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { skillFiles } from "../guide.js";
 import { VERSION } from "../version.js";
-import { claudeCodeHasPlugin, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, mergeServerEntry, readServerEntry, SERVER_NAME, type Launch, type MergeResult } from "./hosts.js";
+import { claudeCodeHasPlugin, claudeCodeHasServer, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, disconnectClaudeCode, mergeServerEntry, readServerEntry, removeServerEntry, SERVER_NAME, type Launch, type MergeResult, type RemoveResult } from "./hosts.js";
 
 export interface AppStatus {
     status: "ok" | "warn" | "fail" | "info";
@@ -23,9 +23,19 @@ export interface App {
     installed(): boolean;
     connect(launch: Launch): string[];
     check(launch: Launch): AppStatus;
+    /** What koble put in this app, in words, for the uninstall plan; empty when there is nothing. */
+    footprint(): string[];
+    /** Takes all of it out again; says what happened. */
+    disconnect(): string[];
 }
 
 const sameLaunch = (entry: Record<string, unknown>, launch: Launch): boolean => entry["command"] === launch.command && JSON.stringify(entry["args"]) === JSON.stringify(launch.args);
+
+function describeRemove(result: RemoveResult, what: string): string[] {
+    if (result.status === "removed") return [`removed ${what}. Backup: ${result.backup}`];
+    if (result.status === "invalid") return [result.reason];
+    return [];
+}
 
 function describeMerge(result: MergeResult): string {
     if (result.status === "invalid") return result.reason;
@@ -41,6 +51,8 @@ function jsonApp(id: string, name: string, path: () => string, key: string, entr
         name,
         installed,
         connect: (launch) => [describeMerge(mergeServerEntry(path(), key, entry(launch), name))],
+        footprint: () => (typeof readServerEntry(path(), key) === "object" ? [`the koble-mcp entry in ${path()}`] : []),
+        disconnect: () => describeRemove(removeServerEntry(path(), key, name), `the koble-mcp entry from ${path()}`),
         check: (launch) => {
             const found = readServerEntry(path(), key);
             if (found === "invalid") return { status: "fail", detail: `config is not plain JSON (${path()})`, fix: "fix or move the file, then koble connect" };
@@ -70,16 +82,21 @@ const tomlString = (value: string): string => (value.includes("'") ? JSON.string
  * Replaces the [mcp_servers.koble-mcp] table (and any sub-table of it) in Codex's config.toml and
  * leaves every other line exactly as it was.
  */
-export function upsertCodexServer(text: string, launch: Launch): string {
+/** Codex's config.toml without koble's table and its sub-tables; every other line kept as it was. */
+export function stripCodexServer(text: string): string[] {
     const header = /^\s*\[\s*mcp_servers\s*\.\s*(?:koble-mcp|"koble-mcp")\s*(?:\.[^\]]*)?\]\s*$/;
-    const lines = text.split(/\r?\n/);
     const kept: string[] = [];
     let skipping = false;
-    for (const line of lines) {
+    for (const line of text.split(/\r?\n/)) {
         if (/^\s*\[/.test(line)) skipping = header.test(line);
         if (!skipping) kept.push(line);
     }
     while (kept.length > 0 && kept[kept.length - 1]?.trim() === "") kept.pop();
+    return kept;
+}
+
+export function upsertCodexServer(text: string, launch: Launch): string {
+    const kept = stripCodexServer(text);
     const block = [`[mcp_servers.${SERVER_NAME}]`, `command = ${tomlString(launch.command)}`, `args = [${launch.args.map(tomlString).join(", ")}]`];
     return `${[...kept, ...(kept.length ? [""] : []), ...block].join("\n")}\n`;
 }
@@ -112,6 +129,22 @@ const codex: App = {
         writeFileSync(`${path}.tmp-${process.pid}`, after);
         renameSync(`${path}.tmp-${process.pid}`, path);
         return [`connected.${backup ? ` Backup: ${backup}` : ""}`];
+    },
+    footprint: () => {
+        const path = join(codexHome(), "config.toml");
+        return existsSync(path) && codexCommandLine(readFileSync(path, "utf8")) !== null ? [`the koble-mcp table in ${path}`] : [];
+    },
+    disconnect: () => {
+        const path = join(codexHome(), "config.toml");
+        if (!existsSync(path)) return [];
+        const before = readFileSync(path, "utf8");
+        if (codexCommandLine(before) === null) return [];
+        const backup = `${path}.koble-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+        copyFileSync(path, backup);
+        const kept = stripCodexServer(before);
+        writeFileSync(`${path}.tmp-${process.pid}`, kept.length ? `${kept.join("\n")}\n` : "");
+        renameSync(`${path}.tmp-${process.pid}`, path);
+        return [`removed the koble-mcp table from ${path}. Backup: ${backup}`];
     },
     check: (launch) => {
         const path = join(codexHome(), "config.toml");
@@ -167,6 +200,26 @@ export function installClaudeSkills(dir = claudeSkillsDir(), files = skillFiles(
     return [`${copied} skills installed as / commands (e.g. /ebms-mrp).`, ...notes];
 }
 
+/** Removes only the skill folders koble put there (they carry its marker). */
+export function removeClaudeSkills(dir = claudeSkillsDir()): string[] {
+    let names: string[] = [];
+    try {
+        names = readdirSync(dir).filter((name) => existsSync(join(dir, name, MARKER)));
+    } catch {
+        return [];
+    }
+    for (const name of names) rmSync(join(dir, name), { recursive: true, force: true });
+    return names;
+}
+
+const markedSkills = (dir = claudeSkillsDir()): string[] => {
+    try {
+        return readdirSync(dir).filter((name) => existsSync(join(dir, name, MARKER)));
+    } catch {
+        return [];
+    }
+};
+
 export function claudeSkillsInstalled(dir = claudeSkillsDir()): string | null {
     const marker = join(dir, "ebms-api", MARKER);
     return existsSync(marker) ? readFileSync(marker, "utf8").trim() : null;
@@ -181,6 +234,20 @@ const claudeCode: App = {
         const lines = [...result.lines];
         if (claudeCodeHasPlugin()) lines.push("the koble-mcp plugin supplies the skills, so they were not copied again.");
         else lines.push(...installClaudeSkills());
+        return lines;
+    },
+    footprint: () => {
+        const parts: string[] = [];
+        if (claudeCodeHasServer()) parts.push("the koble-mcp server");
+        const skills = markedSkills();
+        if (skills.length) parts.push(`${skills.length} skills koble installed (${skills.join(", ")})`);
+        if (claudeCodeHasPlugin()) parts.push("the koble-mcp plugin and its marketplace");
+        return parts;
+    },
+    disconnect: () => {
+        const lines = disconnectClaudeCode();
+        const removed = removeClaudeSkills();
+        if (removed.length) lines.push(`removed ${removed.length} skills koble installed.`);
         return lines;
     },
     check: (launch) => {
@@ -201,6 +268,8 @@ const claudeDesktop: App = {
         const paths = desktopConfigPaths();
         return paths.map((path) => `${paths.length > 1 ? `${path}: ` : ""}${describeMerge(connectDesktop(launch, path))}`);
     },
+    footprint: () => desktopConfigPaths().filter((path) => typeof desktopEntry(path) === "object").map((path) => `the koble-mcp entry in ${path}`),
+    disconnect: () => desktopConfigPaths().flatMap((path) => describeRemove(removeServerEntry(path, "mcpServers", "Claude Desktop"), `the koble-mcp entry from ${path}`)),
     check: (launch) => {
         const missing = desktopConfigPaths().filter((path) => {
             const e = desktopEntry(path);

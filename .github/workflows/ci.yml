@@ -25,6 +25,22 @@ jobs:
       - name: Credential Manager round trip
         if: runner.os == 'Windows'
         run: node scripts/credential-selftest.mjs
+      - name: koble uninstall removes itself on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP 'koble-uninstall'
+          New-Item -ItemType Directory -Force $d | Out-Null
+          Copy-Item dist\koble-windows-x64.exe "$d\koble.exe"
+          $env:KOBLE_CONFIG_DIR = "$d\settings"; $env:KOBLE_CREDENTIAL_STORE = 'file'
+          New-Item -ItemType Directory -Force $env:KOBLE_CONFIG_DIR | Out-Null
+          Set-Content "$env:KOBLE_CONFIG_DIR\config.json" '{"serial":"000000000000000","username":"ci"}'
+          & "$d\koble.exe" uninstall --yes
+          if ($LASTEXITCODE -ne 0) { throw "uninstall exited $LASTEXITCODE" }
+          Start-Sleep -Seconds 8
+          if (Test-Path "$d\koble.exe") { throw 'koble.exe was not removed' }
+          if (Test-Path $env:KOBLE_CONFIG_DIR) { throw 'the settings folder was not removed' }
+          'koble uninstall removed itself and its settings'
       - name: install.ps1 parses in Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell

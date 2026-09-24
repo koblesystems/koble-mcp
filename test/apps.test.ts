@@ -51,3 +51,30 @@ test("skills: copied with a marker; a person's own skill of the same name is nev
     assert.ok(!existsSync(join(dir, "notes")) && !existsSync(join(dir, "ebms-retired")));
     assert.match(lines.join(" "), /2 skills installed.*left your own ebms-tasks skill alone/);
 });
+
+test("uninstall: the koble entry comes out of a JSON config, everything else stays, a backup is kept", async () => {
+    const { removeServerEntry } = await import("../src/cli/hosts.js");
+    const dir = scratch();
+    const path = join(dir, "claude_desktop_config.json");
+    writeFileSync(path, JSON.stringify({ mcpServers: { "koble-mcp": { command: "k", args: ["mcp"] }, koble: { command: "/old/koble", args: ["mcp"] }, other: { command: "o" } }, preferences: { theme: "dark" } }));
+    const r = removeServerEntry(path, "mcpServers", "Claude Desktop");
+    assert.equal(r.status, "removed");
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { mcpServers: { other: { command: "o" } }, preferences: { theme: "dark" } });
+    assert.equal(removeServerEntry(path, "mcpServers", "Claude Desktop").status, "absent", "a second run finds nothing to do");
+    const broken = join(dir, "broken.json");
+    writeFileSync(broken, "{ // not JSON");
+    assert.equal(removeServerEntry(broken, "mcpServers", "Cursor").status, "invalid");
+    assert.equal(readFileSync(broken, "utf8"), "{ // not JSON", "left exactly as it was");
+});
+
+test("uninstall: Codex keeps every other setting; only koble's skill folders are removed", async () => {
+    const { stripCodexServer, removeClaudeSkills } = await import("../src/cli/apps.js");
+    const text = upsertCodexServer('model = "gpt-5"\n\n[mcp_servers.other]\ncommand = "x"\n', launch);
+    assert.equal(stripCodexServer(text).join("\n"), 'model = "gpt-5"\n\n[mcp_servers.other]\ncommand = "x"');
+    const dir = scratch();
+    installClaudeSkills(dir, new Map([["ebms-api/SKILL.md", "api"], ["ebms-mrp/SKILL.md", "mrp"]]));
+    mkdirSync(join(dir, "my-own-skill"), { recursive: true });
+    writeFileSync(join(dir, "my-own-skill", "SKILL.md"), "mine");
+    assert.deepEqual(removeClaudeSkills(dir).sort(), ["ebms-api", "ebms-mrp"]);
+    assert.ok(existsSync(join(dir, "my-own-skill", "SKILL.md")) && !existsSync(join(dir, "ebms-api")));
+});

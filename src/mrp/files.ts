@@ -8,7 +8,7 @@ import { parseCsv, toCsv, type RunManifest, type SheetRow } from "./csv.js";
 const RUN_ID = /^mrp-[a-z0-9_-]+-\d{8}-\d{4,6}$/i;
 
 /** KOBLE_OUTPUT_DIR, or "Koble MRP" in the user's Documents folder. */
-const outputDir = (given?: string): string => resolve(given?.trim() || process.env["KOBLE_OUTPUT_DIR"] || join(homedir(), "Documents", "Koble MRP"));
+export const outputDir = (given?: string): string => resolve(given?.trim() || process.env["KOBLE_OUTPUT_DIR"] || join(homedir(), "Documents", "Koble MRP"));
 
 /**
  * Writes the worksheet, and the run record po_from_csv and batches_from_csv trust over anything

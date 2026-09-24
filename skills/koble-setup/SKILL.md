@@ -1,6 +1,6 @@
 ---
 name: koble-setup
-description: Install, connect, update or repair koble — the program that connects Claude to EBMS (Koble Systems ERP). Downloads it, saves the EBMS serial number, test company and username, has the user enter their password privately, connects Claude Desktop and Claude Code, and runs its health check. Use whenever someone wants to set up, install, connect or update Koble or EBMS for Claude, when the ebms_* tools are missing or failing to sign in, or when they ask whether their EBMS connection is working — "set up Koble", "connect Claude to EBMS", "koble isn't working", "update koble".
+description: Install, connect, update, repair or remove koble — the program that connects Claude to EBMS (Koble Systems ERP). Downloads it, saves the EBMS serial number, test company and username, has the user enter their password privately, connects Claude Desktop and Claude Code, and runs its health check. Use whenever someone wants to set up, install, connect or update Koble or EBMS for Claude, when the ebms_* tools are missing or failing to sign in, or when they ask whether their EBMS connection is working — "set up Koble", "connect Claude to EBMS", "koble isn't working", "update koble", "uninstall Koble".
 ---
 
 # Set up koble
@@ -109,3 +109,10 @@ Code. The first failure is usually the cause of the rest. Common ones:
 | Any app: not connected, or runs something else | `koble connect` |
 | Claude Desktop: connected, but has not started it | The user quits Claude Desktop completely (tray icon or menu → Quit) and reopens it. |
 | Claude Desktop: config is not valid JSON | Don't edit it yourself. Show the user the path and ask them to fix or move the file, then `koble connect`. |
+
+## Removing koble
+
+Run `koble uninstall` without `--yes` first and read its list to the user: it says exactly what it
+will remove (each app's koble-mcp entry, the skills it installed, the stored password, its
+settings, the program) and what it keeps (MRP worksheets, config backups). Ask them to quit Claude
+Desktop, then, with their go-ahead, run `koble uninstall --yes`. This skill is removed with it.

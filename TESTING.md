@@ -59,9 +59,9 @@ problems go through [SECURITY.md](SECURITY.md) instead.
 
 ## Removing it
 
-1. `koble setup` again, or delete the `koble-mcp` entry from Claude Desktop's config.
-2. Delete the program: `%LOCALAPPDATA%\Programs\koble` on Windows, `~/.local/bin/koble` elsewhere.
-3. Delete the settings folder: `%APPDATA%\koble` or `~/.config/koble`.
-4. Remove "koble-mcp" from Credential Manager (Windows) or the Keychain (macOS).
+```
+koble uninstall
+```
 
-A `koble uninstall` command that does all of this is planned.
+It shows everything it will remove and asks first. Please tell us if anything was left behind:
+an app that still lists koble-mcp, a leftover folder, or a Credential Manager / Keychain entry.

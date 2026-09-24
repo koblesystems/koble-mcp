@@ -112,6 +112,33 @@ export function mergeServerEntry(path: string, key: string, entry: Record<string
     return { status: current === undefined && replaced.length === 0 ? "added" : "updated", path, backup, replaced };
 }
 
+export type RemoveResult = { status: "removed"; path: string; backup: string } | { status: "absent" } | { status: "invalid"; path: string; reason: string };
+
+/** Takes koble-mcp (and any older koble entry) out of a JSON config; backs the file up first. */
+export function removeServerEntry(path: string, key: string, app: string): RemoveResult {
+    if (!existsSync(path)) return { status: "absent" };
+    let config: Record<string, unknown>;
+    try {
+        const text = readFileSync(path, "utf8").replace(/^﻿/, "");
+        const parsed = text.trim() ? (JSON.parse(text) as unknown) : {};
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("it is not a JSON object");
+        config = parsed as Record<string, unknown>;
+    } catch (error) {
+        return { status: "invalid", path, reason: `${app}'s config is not plain JSON (${error instanceof Error ? error.message : String(error)}); it was left alone. Remove the koble-mcp entry by hand.` };
+    }
+    const servers = config[key];
+    if (!servers || typeof servers !== "object") return { status: "absent" };
+    const ours = Object.keys(servers).filter((name) => isOurs(name, (servers as Record<string, unknown>)[name]));
+    if (ours.length === 0) return { status: "absent" };
+    for (const name of ours) delete (servers as Record<string, unknown>)[name];
+    const backup = `${path}.koble-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    copyFileSync(path, backup);
+    const temp = `${path}.tmp-${process.pid}`;
+    writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`);
+    renameSync(temp, path);
+    return { status: "removed", path, backup };
+}
+
 /** What a JSON config has as koble-mcp: the entry, or why not. */
 export function readServerEntry(path: string, key: string): Record<string, unknown> | "missing" | "invalid" {
     if (!existsSync(path)) return "missing";
@@ -272,6 +299,29 @@ export function claudeCodeInstalled(): boolean {
 export function claudeCodeHasPlugin(): boolean {
     const r = claude(["plugin", "list"]);
     return r.status === 0 && r.out.includes(SERVER_NAME);
+}
+
+/** Takes koble out of Claude Code: the user-level server, and the plugin and its marketplace if they were added. */
+export function disconnectClaudeCode(): string[] {
+    if (!claudeCodeRunner()) return [];
+    const lines: string[] = [];
+    if (claude(["mcp", "remove", SERVER_NAME, "--scope", "user"]).status === 0) lines.push("removed the koble-mcp server.");
+    if (claudeCodeHasPlugin()) {
+        const r = claude(["plugin", "uninstall", PLUGIN]);
+        lines.push(r.status === 0 ? "removed the koble-mcp plugin." : `removing the koble-mcp plugin failed: ${r.out.trim().split("\n")[0]}`);
+    }
+    const markets = claude(["plugin", "marketplace", "list"]);
+    if (markets.status === 0 && /\bkoblesystems\b/.test(markets.out)) {
+        const r = claude(["plugin", "marketplace", "remove", "koblesystems"]);
+        lines.push(r.status === 0 ? "removed the koblesystems plugin marketplace." : `removing the koblesystems marketplace failed: ${r.out.trim().split("\n")[0]}`);
+    }
+    return lines;
+}
+
+/** Whether Claude Code has koble registered at all, without starting it. */
+export function claudeCodeHasServer(): boolean {
+    const r = claude(["mcp", "list"]);
+    return r.status === 0 && new RegExp(`^${SERVER_NAME}:`, "m").test(r.out);
 }
 
 export interface ClaudeCodeServer {
