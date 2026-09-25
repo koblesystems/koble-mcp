@@ -1,0 +1,4 @@
+# Every pull request into master needs approval from one of these people before it can merge
+# (branch protection: "Require review from Code Owners"). Add or remove reviewers here; each one
+# needs write access to the repository for their approval to count.
+* @dsbowman @DanielGlick @jwhear @justinmillkoble
