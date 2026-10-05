@@ -117,6 +117,8 @@ export interface BeyondHorizon {
     demandQty: number;
     supplyQty: number;
     firstDemandDate: string | null;
+    /** The demand itself, by date, so stock left at the end of the time frame can be netted against it. */
+    demands: Array<{ qty: number; date: string }>;
     /** The receipts themselves, so a buyer can see what is already on order just past the time frame. */
     supplies: Array<{ kind: SupplyKind; ref: string; qty: number; date: string }>;
 }
@@ -371,13 +373,14 @@ export function runMrp(input: { today: string; through?: string | undefined; min
     const beyond = new Map<string, BeyondHorizon>();
     const noteBeyond = (item: string): BeyondHorizon => {
         let row = beyond.get(item);
-        if (!row) beyond.set(item, (row = { item, demandQty: 0, supplyQty: 0, firstDemandDate: null, supplies: [] }));
+        if (!row) beyond.set(item, (row = { item, demandQty: 0, supplyQty: 0, firstDemandDate: null, demands: [], supplies: [] }));
         return row;
     };
     for (const demand of input.demands) {
         if (inside(demand.date)) continue;
         const row = noteBeyond(demand.item);
         row.demandQty = round(row.demandQty + demand.qty);
+        row.demands.push({ qty: demand.qty, date: demand.date });
         row.firstDemandDate = row.firstDemandDate === null || demand.date < row.firstDemandDate ? demand.date : row.firstDemandDate;
     }
     for (const supply of input.supplies) {
@@ -386,7 +389,10 @@ export function runMrp(input: { today: string; through?: string | undefined; min
         row.supplyQty = round(row.supplyQty + supply.qty);
         row.supplies.push({ kind: supply.kind, ref: supply.ref, qty: supply.qty, date: supply.date });
     }
-    for (const row of beyond.values()) row.supplies.sort((a, b) => cmp(a.date, b.date) || cmp(a.ref, b.ref));
+    for (const row of beyond.values()) {
+        row.supplies.sort((a, b) => cmp(a.date, b.date) || cmp(a.ref, b.ref));
+        row.demands.sort((a, b) => cmp(a.date, b.date));
+    }
 
     const byId = new Map(input.items.map((item) => [item.id, item]));
     const { levels, cycles, broken } = lowLevelCodes(input.items);

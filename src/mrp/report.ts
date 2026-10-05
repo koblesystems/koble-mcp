@@ -9,15 +9,35 @@ const QUIET = new Set(["assumed-date", "past-due-demand"]);
 
 /**
  * Demand just past the time frame that a long lead time pulls inside it: a part needed in 100 days
- * with 120 days' lead has to be ordered now, though a 60-day plan does not reach its demand.
+ * with 120 days' lead has to be ordered now, though a 60-day plan does not reach its demand. Stock
+ * left above the minimum at the end of the time frame, and receipts due after it, are netted
+ * first; only the shortfall whose order-by date falls inside the time frame is reported.
  */
-export function orderBeforeFrameEnds(plan: Plan, snapshot: Snapshot): Array<{ item: string; neededFrom: string; qty: number; leadDays: number; orderBy: string }> {
-    if (!plan.through) return [];
+export interface OrderWindow { item: string; neededFrom: string; qty: number; leadDays: number; orderBy: string; make: boolean }
+export function orderBeforeFrameEnds(plan: Plan, snapshot: Snapshot): OrderWindow[] {
+    const through = plan.through;
+    if (!through) return [];
+    const ending = new Map(plan.items.map((item) => [item.item, item.endingBalance]));
+    const params = new Map(snapshot.items.map((item) => [item.id, item]));
     return plan.beyondHorizon.flatMap((row) => {
         const lead = snapshot.leadTimes.get(row.item);
-        if (!lead || !row.firstDemandDate || row.demandQty <= row.supplyQty) return [];
-        const orderBy = addDays(row.firstDemandDate, -lead.days);
-        return orderBy <= plan.through! ? [{ item: row.item, neededFrom: row.firstDemandDate, qty: row.demandQty, leadDays: lead.days, orderBy }] : [];
+        if (!lead) return [];
+        const item = params.get(row.item);
+        let balance = Math.max(0, (ending.get(row.item) ?? 0) - (item?.safetyStock ?? 0));
+        // Receipts before demand on the same day, as the engine nets them.
+        const events = [...row.supplies.map((s) => ({ date: s.date, qty: s.qty })), ...row.demands.map((d) => ({ date: d.date, qty: -d.qty }))].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.qty - a.qty));
+        let neededFrom: string | null = null;
+        let short = 0;
+        for (const event of events) {
+            balance += event.qty;
+            if (balance >= 0) continue;
+            if (addDays(event.date, -lead.days) > through) break;
+            neededFrom ??= event.date;
+            short += -balance;
+            balance = 0; // counted as ordered
+        }
+        if (neededFrom === null) return [];
+        return [{ item: row.item, neededFrom, qty: Math.round(short * 10_000) / 10_000, leadDays: lead.days, orderBy: addDays(neededFrom, -lead.days), make: item?.make === true }];
     });
 }
 

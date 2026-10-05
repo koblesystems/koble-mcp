@@ -47,9 +47,13 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         const recommendation = order.pastDue
             ? `${verb} ${order.qty} now: needed ${order.receiptDate}, but ${lead.days} days' lead time should have meant ${order.releaseDate}`
             : `${verb} ${order.qty} by ${order.releaseDate} to have them ${order.receiptDate}`;
-        return { Recommendation: recommendation, "Order By": order.releaseDate, "Lead Days": `${lead.days} (${LEAD_FROM[lead.from]})` };
+        return { Recommendation: recommendation, "Order By": order.releaseDate, "Lead Days": lead.days, "Lead From": LEAD_FROM[lead.from] };
     };
-    const windowNotes = new Map(orderBeforeFrameEnds(plan, snapshot).map((row) => [row.item, `${row.qty} needed from ${row.neededFrom} (after the time frame); with ${row.leadDays} days' lead time it must be ordered by ${row.orderBy}. Extend the time frame to plan it.`]));
+    const windowNotes = new Map(orderBeforeFrameEnds(plan, snapshot).map((row) => {
+        const verb = row.make ? "started" : "ordered";
+        const late = row.orderBy < snapshot.today ? `; that date has passed, so ${row.make ? "start" : "order"} now` : "";
+        return [row.item, `${row.qty} more needed from ${row.neededFrom}, after the time frame. With ${row.leadDays} days' lead time it must be ${verb} by ${row.orderBy}${late}. Extend the time frame to plan it.`];
+    }));
     const figures = (id: string): SheetRow => {
         const product = snapshot.products.get(id);
         const timeline = itemPlan.get(id)?.timeline.slice(1) ?? [];
@@ -91,7 +95,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 "Order Qty": order.qty,
                 Approve: "",
                 Because: because,
-                Notes: [makeable ? "" : "Cannot be created as a batch through EBMS's API: the product is not classified Track Count. Create it in EBMS.", product?.vendor ? "Also purchased; could be bought instead." : ""].filter(Boolean).join(" "),
+                Notes: [makeable ? "" : "Cannot be created as a batch through EBMS's API: the product is not classified Track Count. Create it in EBMS.", product?.vendor ? "Also purchased; could be bought instead." : "", windowNotes.get(order.item) ?? ""].filter(Boolean).join(" "),
             });
             continue;
         }
@@ -112,6 +116,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             Because: because,
             Notes: [
                 converted.warning ? "Check the unit before ordering." : "",
+                !snapshot.products.get(order.item)?.vendor && !snapshot.leadTimes.has(order.item) ? "No primary vendor, so no vendor lead time was used." : "",
                 later.has(order.item) ? "Already on order after the time frame (see On Order After Time Frame) — consider moving that order up instead of buying more." : "",
                 windowNotes.get(order.item) ?? "",
             ].filter(Boolean).join(" "),
@@ -131,6 +136,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 "Needed By": exception.to ?? "",
                 Document: exception.ref,
                 Because: exception.message,
+                Notes: windowNotes.get(exception.item) ?? "",
             });
         } else if (exception.type === "not-needed") {
             touched.add(exception.item);
@@ -143,6 +149,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 Recommendation: `Defer or cancel ${exception.ref} (${exception.qty})`,
                 Document: exception.ref,
                 Because: exception.message,
+                Notes: windowNotes.get(exception.item) ?? "",
             });
         }
     }
@@ -150,7 +157,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         if (touched.has(item.item)) continue;
         const hasActivity = item.timeline.length > 1 || (snapshot.products.get(item.item)?.min ?? 0) > 0;
         const window = windowNotes.get(item.item);
-        if (hasActivity || window) rows.push({ ...base, Type: "OK", Item: item.item, ...figures(item.item), Status: "Covered", Recommendation: window ? "Order soon for demand after the time frame" : "Nothing to do", ...(window ? { Notes: window } : {}) });
+        if (hasActivity || window) rows.push({ ...base, Type: "OK", Item: item.item, ...figures(item.item), Status: "Covered", Recommendation: window ? "Plan now for demand after the time frame" : "Nothing to do", ...(window ? { Notes: window } : {}) });
     }
     // The planner's scope: the plan is always worked out for everything, because demand flows
     // between items, but the worksheet holds only the rows they asked to see.

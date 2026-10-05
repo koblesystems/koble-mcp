@@ -151,7 +151,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
         async (args) => {
             try {
                 const id = resolveCompany(args.company);
-                const snapshot = await takeSnapshot(id, { today: today(), alsoMade: args.alsoMade, buyInstead: args.buyInstead });
+                const snapshot = await takeSnapshot(id, { today: today(), alsoMade: args.alsoMade, buyInstead: args.buyInstead, readLeadDays: false });
                 const item = args.item.trim();
                 if (!snapshot.products.has(item)) return jsonResult({ company: id, error: `No active product "${item}".` });
                 const onHandOnly = args.availability === "onHand";

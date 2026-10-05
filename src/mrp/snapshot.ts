@@ -102,11 +102,11 @@ export interface LeadTime { days: number; from: LeadSource }
 /**
  * A purchased item's lead time: what the user gave for it, else the product's record for its
  * primary vendor, else that vendor's default (EBMS sets a PO line's ETA from the same two, in that
- * order), else the user's blanket figure. LEAD_DAYS 0 means "not set" in EBMS. A made item, or one
+ * order, according to Koble's documentation), else the user's blanket figure. LEAD_DAYS 0 means "not set" in EBMS. A made item, or one
  * with no primary vendor, has no vendor lead time.
  */
 export function leadTimeFor(id: string, product: ProductInfo | undefined, made: boolean, vendorLeadDays: ReadonlyMap<string, number>, options: Pick<SnapshotOptions, "leadTimes" | "leadTimeDays">): LeadTime | undefined {
-    const yours = options.leadTimes?.[id];
+    const yours = options.leadTimes?.[id] ?? Object.entries(options.leadTimes ?? {}).find(([key]) => key.trim().toUpperCase() === id.toUpperCase())?.[1];
     if (yours !== undefined) return { days: yours, from: "you" };
     if (!made && product) {
         if (product.leadDays > 0) return { days: product.leadDays, from: "product" };
@@ -116,12 +116,18 @@ export function leadTimeFor(id: string, product: ProductInfo | undefined, made: 
     return options.leadTimeDays === undefined ? undefined : { days: options.leadTimeDays, from: "your default" };
 }
 
-/** EBMS builds before LEAD_DAYS was published refuse a $select that names it. */
+/**
+ * EBMS builds before LEAD_DAYS was published refuse a query that names it. A field EBMS does not
+ * have is a 400 "Invalid query" with the detail "Could not find a property named 'X' on type …"
+ * (seen on SBX for misspelt APVENDOR and INVENDOR fields).
+ */
 const lacksField = (error: unknown, field: string): boolean => error instanceof EbmsError && error.status === 400 && `${error.message} ${error.detail ?? ""}`.includes(`'${field}'`);
 
 export interface Snapshot {
     company: string;
     takenAt: string;
+    /** The planning day, local to the server. */
+    today: string;
     products: Map<string, ProductInfo>;
     /** Every planned item with a known lead time, and where it came from. */
     leadTimes: Map<string, LeadTime>;
@@ -155,6 +161,8 @@ export interface SnapshotOptions {
     buyInstead?: readonly string[] | undefined;
     leadTimeDays?: number | undefined;
     leadTimes?: Readonly<Record<string, number>> | undefined;
+    /** Default true. The item view does not date anything, so it skips the lead-day reads. */
+    readLeadDays?: boolean | undefined;
 }
 
 export async function takeSnapshot(company: string, options: SnapshotOptions): Promise<Snapshot> {
@@ -183,18 +191,23 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     // Lead days: on a product's vendor record (INVENDOR) and on the vendor (APVENDOR). Read
     // directly, only the rows that set one: as an $expand on the products they made that read
     // about five times slower on SBX, with the same values.
-    let leadDaysPublished = true;
+    const leadRows = async (entity: string, select: string): Promise<Row[] | null> => {
+        if (options.readLeadDays === false) return [];
+        try {
+            return await timed(`leadDays ${entity}`, () => readAll(company, entity, { $filter: "LEAD_DAYS gt 0", $select: select }));
+        } catch (error) {
+            if (!lacksField(error, "LEAD_DAYS")) throw error;
+            warnings.push(`This EBMS version does not publish ${entity}.LEAD_DAYS through its API, so those lead times are not used.`);
+            return null;
+        }
+    };
     const productLeadDays = new Map<string, number>();
     const vendorLeadDays = new Map<string, number>();
-    try {
-        const records = await timed("leadDays", () => readAll(company, "INVENDOR", { $filter: "LEAD_DAYS gt 0", $select: "ID,VENDOR_ID,LEAD_DAYS" }));
-        for (const row of records) productLeadDays.set(`${text(row["ID"])}|${text(row["VENDOR_ID"]).toUpperCase()}`, num(row["LEAD_DAYS"]));
-        for (const row of await readAll(company, "APVENDOR", { $filter: "LEAD_DAYS gt 0", $select: "ID,LEAD_DAYS" })) vendorLeadDays.set(text(row["ID"]).toUpperCase(), num(row["LEAD_DAYS"]));
-    } catch (error) {
-        if (!lacksField(error, "LEAD_DAYS")) throw error;
-        leadDaysPublished = false;
-        warnings.push("This EBMS version does not publish lead days through its API, so orders show when stock is needed, not when to order. Updating EBMS adds them.");
-    }
+    const productRecords = await leadRows("INVENDOR", "ID,VENDOR_ID,LEAD_DAYS");
+    for (const row of productRecords ?? []) productLeadDays.set(`${text(row["ID"])}|${text(row["VENDOR_ID"]).toUpperCase()}`, num(row["LEAD_DAYS"]));
+    const vendorRecords = await leadRows("APVENDOR", "ID,LEAD_DAYS");
+    for (const row of vendorRecords ?? []) vendorLeadDays.set(text(row["ID"]).toUpperCase(), num(row["LEAD_DAYS"]));
+    const leadDaysPublished = productRecords !== null || vendorRecords !== null;
     const bomRows = await timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
     const madeRows = await timed("made", () => readAll(company, "APINVDET", { $filter: BATCH_LINES, $select: "INVEN" }));
     const lineRows = await timed("sales", () =>
@@ -353,5 +366,5 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     if (keptSupplies.length !== supplies.length) skipped["incoming supply for an item that is not planned (service, non-stocked or inactive)"] = supplies.length - keptSupplies.length;
     if (undatedDemand > 0) warnings.push(`${undatedDemand} open demand line(s) have no ship date in EBMS and were planned as due today.`);
 
-    return { company, takenAt: new Date().toISOString(), products, leadTimes, leadDaysPublished, made, bom, items, demands: keptDemands, supplies: keptSupplies, skipped, warnings, timings };
+    return { company, takenAt: new Date().toISOString(), today: options.today, products, leadTimes, leadDaysPublished, made, bom, items, demands: keptDemands, supplies: keptSupplies, skipped, warnings, timings };
 }

@@ -29,13 +29,7 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
    decides what is reported and what goes on the worksheet. A vendor-scoped plan leaves out
    `MAKE` rows; say how many batches were planned elsewhere if the result mentions them.
 3. **The company**, if more than one is available. Confirm it by name (`ebms_companies`).
-4. **Lead times** come from EBMS: the product's record for its primary vendor
-   (`INVENDOR.LEAD_DAYS`), else the vendor's (`APVENDOR.LEAD_DAYS`); 0 means not set. A purchase
-   with one gets an order-by date, and one already too late is flagged. Don't ask for lead times
-   unless the result's `leadTimes` shows many items without one; then a planner may give a
-   figure: per product (`leadTimes`, which overrides EBMS) or for the rest (`leadTimeDays`, which
-   only fills gaps and also dates made items). Never invent one.
-5. **What a minimum means to them**, the first time you plan for a company. "When an item drops
+4. **What a minimum means to them**, the first time you plan for a company. "When an item drops
    under its minimum, do you reorder right then, or is the minimum a level to be back at by the
    end of the period?" Reorder right then is `minimumRule: "when-crossed"` (the default): the
    order is dated the day the item went under, and because that stock arrives early it can make
@@ -45,6 +39,13 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
    use the same rule every time and say which one the plan used.
 
 Leave `includeJobs` on unless they say job transfers should not count as demand.
+
+**Lead times are not a question.** They come from EBMS: the product's record for its primary
+vendor (`INVENDOR.LEAD_DAYS`), else the vendor's (`APVENDOR.LEAD_DAYS`); 0 means not set. A
+purchase with one gets an order-by date, and one already too late is flagged. Only if the
+result's `leadTimes` shows many items without one, offer to use a figure the planner gives: per
+product (`leadTimes`, which overrides EBMS) or for the rest (`leadTimeDays`, which only fills
+gaps and also dates made items). Never invent one.
 
 ## 2. Run it
 

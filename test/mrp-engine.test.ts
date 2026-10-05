@@ -161,7 +161,7 @@ test("the time frame: only demand due on or before it is bought for; what lies b
     const demands = [sales("A", 5, "2026-09-30", "SO-1"), sales("A", 8, "2026-10-20", "SO-2"), sales("A", 40, "2027-01-15", "SO-3")];
     const month = runMrp({ today, through: "2026-10-31", items, demands, supplies: [po("A", 100, "2027-02-01", "PO-late"), po("A", 7, "2026-11-01", "PO-next-day")] });
     assert.deepEqual(month.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}`), ["5 by 2026-09-30", "8 by 2026-10-20"]);
-    assert.deepEqual(month.beyondHorizon, [{ item: "A", demandQty: 40, supplyQty: 107, firstDemandDate: "2027-01-15", supplies: [{ kind: "purchase", ref: "PO-next-day", qty: 7, date: "2026-11-01" }, { kind: "purchase", ref: "PO-late", qty: 100, date: "2027-02-01" }] }]);
+    assert.deepEqual(month.beyondHorizon, [{ item: "A", demandQty: 40, supplyQty: 107, firstDemandDate: "2027-01-15", demands: [{ qty: 40, date: "2027-01-15" }], supplies: [{ kind: "purchase", ref: "PO-next-day", qty: 7, date: "2026-11-01" }, { kind: "purchase", ref: "PO-late", qty: 100, date: "2027-02-01" }] }]);
     assert.equal(month.exceptions.length, 0, "a PO outside the time frame is not called unneeded or expedited");
     const week = runMrp({ today, through: "2026-09-25", items, demands, supplies: [] });
     assert.deepEqual(week.plannedOrders, []);
