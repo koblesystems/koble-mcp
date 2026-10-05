@@ -95,6 +95,9 @@ const ALL: Col[] = [
     { key: "Order By", header: "Order by", width: 12, kind: "date" },
 ];
 
+/** Columns the reader cannot do without; the rest may be renamed or removed. */
+const REQUIRED = new Set<Column>(["Approve", "Order Qty", "Item", "Run", "Company", "Line", "Check", "Type"]);
+
 /** The tabs a person approves on, and the row type each holds. Read back in this order. */
 export const ACTION_SHEETS = [
     { name: "To order", type: "BUY", columns: ORDER },
@@ -239,17 +242,20 @@ export async function buildWorkbook(rows: readonly SheetRow[], context: Workbook
 
     if (buys.length > 0) {
         line(["Orders by vendor"], { font: { bold: true } });
-        const head = line(["Vendor", "Lines", "Approved", "Est cost approved", "Earliest order by"], { font: { bold: true } });
+        const head = line(["Vendor", "Lines", "Approved", "Est cost approved", "Act by"], { font: { bold: true } });
         head.eachCell((cell) => { cell.fill = HEADER_FILL; });
+        head.getCell(5).note = "The earliest order-by date, or the needed-by date where no lead time is known.";
+        head.getCell(3).note = "Lines set to Yes on the To order tab. Updates as you approve.";
         const col = (key: Column): string => `'To order'!$${letter(ORDER.findIndex((c) => c.key === key))}$2:$${letter(ORDER.findIndex((c) => c.key === key))}$${buys.length + 1}`;
         for (const vendor of [...new Set(buys.map((row) => String(row.Vendor ?? "")))]) {
             const mine = buys.filter((row) => String(row.Vendor ?? "") === vendor);
             const first = mine.map(urgency).sort()[0] ?? "";
             const r = summary.addRow([
                 vendor || "(no primary vendor)",
-                { formula: `COUNTIF(${col("Vendor")},A${summary.rowCount + 1})`, result: mine.length },
-                { formula: `COUNTIFS(${col("Vendor")},A${summary.rowCount + 1},${col("Approve")},"Yes")`, result: 0 },
-                { formula: `SUMIFS(${col("Est Cost")},${col("Vendor")},A${summary.rowCount + 1},${col("Approve")},"Yes")`, result: 0 },
+                // SUMPRODUCT compares exactly: COUNTIF would read * ? ~ < > = in a vendor ID as patterns.
+                { formula: `SUMPRODUCT(--(${col("Vendor")}=A${summary.rowCount + 1}))`, result: mine.length },
+                { formula: `SUMPRODUCT((${col("Vendor")}=A${summary.rowCount + 1})*(UPPER(${col("Approve")})="YES"))`, result: 0 },
+                { formula: `SUMPRODUCT((${col("Vendor")}=A${summary.rowCount + 1})*(UPPER(${col("Approve")})="YES"),${col("Est Cost")})`, result: 0 },
                 asDate(first) ?? "",
             ]);
             r.getCell(4).numFmt = "#,##0.00";
@@ -300,6 +306,10 @@ export async function readWorkbook(data: Buffer, want: "BUY" | "MAKE" = "BUY"): 
         const byHeader = new Map(spec.columns.map((c) => [c.header.toLowerCase(), c.key] as const));
         const keys: Array<Column | undefined> = [];
         sheet.getRow(1).eachCell({ includeEmpty: true }, (cell, n) => { keys[n] = byHeader.get(cellText(cell.value).trim().toLowerCase()); });
+        const required = spec.columns.filter((c) => REQUIRED.has(c.key));
+        const absent = required.filter((c) => !keys.includes(c.key)).map((c) => c.header);
+        if (absent.length > 0) { problems.push(`The "${spec.name}" tab has no ${absent.join(", ")} column in its first row (renamed, deleted, or a row added above the headers?). It does not look like an MRP worksheet as it was written.`); continue; }
+        const before = rows.length;
         for (let n = 2; n <= sheet.rowCount; n += 1) {
             // Every column either tab has, so the shared reader finds none missing (To make has no Vendor).
             const record: Record<string, string> = Object.fromEntries(ACTION_SHEETS.flatMap((s) => s.columns).map((c) => [c.key, ""]));
@@ -311,9 +321,12 @@ export async function readWorkbook(data: Buffer, want: "BUY" | "MAKE" = "BUY"): 
                 if (record[key]) any = true;
             });
             if (!any) continue;
+            // Something typed below the table, not a worksheet row: nothing ties it to the run.
+            if (!record["Run"] && !record["Line"] && !record["Check"] && !record["Item"]) continue;
             rows.push(record);
             where.push(`${spec.name} row ${n}`);
         }
+        if (rows.length === before) problems.push(`The "${spec.name}" tab has no rows: this plan had nothing of that kind.`);
     }
     return { rows, where, problems };
 }

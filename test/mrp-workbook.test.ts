@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { checkCode, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
-import { readWorksheet, saveWorksheet } from "../src/mrp/files.js";
+import { readWorksheet, recentWorksheets, saveWorksheet } from "../src/mrp/files.js";
 import { buildWorkbook, orderRows, readWorkbook } from "../src/mrp/workbook.js";
 
+// The run record is also saved in the usual folder; keep it out of the real Documents.
+process.env["KOBLE_OUTPUT_DIR"] = await mkdtemp(join(tmpdir(), "koble-out-"));
 const RUN = "mrp-sbx-20261005-120000";
 const base = { Run: RUN, Company: "SBX" };
 const rows: SheetRow[] = [
@@ -94,4 +96,63 @@ test("a changed Check cell, a renamed tab and a file that is not a workbook are 
     const junk = join(dir, "junk.xlsx");
     await writeFile(junk, "not a zip");
     assert.match((await readWorkbook(await readFile(junk))).problems[0] ?? "", /could not be opened/);
+});
+
+/** Saves the worksheet, lets `edit` change it the way a person would, and saves it again. */
+async function edited(edit: (book: ExcelJS.Workbook) => void, withRecord = true): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), "koble-wb-"));
+    const saved = await saveWorksheet(dir, `${RUN}.xlsx`, rows, manifest, context);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(saved.path);
+    edit(book);
+    await book.xlsx.writeFile(saved.path);
+    if (!withRecord) {
+        const { rm } = await import("node:fs/promises");
+        await rm(join(dir, "runs"), { recursive: true });
+        await rm(join(process.env["KOBLE_OUTPUT_DIR"] as string, "runs"), { recursive: true });
+    }
+    return saved.path;
+}
+
+test("a renamed Approve header is reported, not read as nothing approved", async () => {
+    const path = await edited((book) => { const order = book.getWorksheet("To order")!; order.getCell("A1").value = "Approved"; order.getCell("A2").value = "Yes"; });
+    const reading = await readWorksheet({ path }, "BUY");
+    assert.equal(reading.approved.length, 0);
+    assert.match(reading.problems.join(" "), /"To order" tab has no Approve column/);
+});
+
+test("a note typed under the table is ignored, not taken for a row from another run", async () => {
+    const path = await edited((book) => { const order = book.getWorksheet("To order")!; order.getCell("A2").value = "Yes"; order.getCell("O9").value = "checked with Bob"; });
+    const reading = await readWorksheet({ path }, "BUY");
+    assert.deepEqual(reading.problems, []);
+    assert.deepEqual(reading.approved.map((l) => l.item), ["CRANK"]);
+});
+
+test("in the workbook only Yes approves, matching the Summary's totals", async () => {
+    const path = await edited((book) => { const order = book.getWorksheet("To order")!; order.getCell("A2").value = "x"; order.getCell("A3").value = true; order.getCell("A4").value = "yes"; });
+    const reading = await readWorksheet({ path }, "BUY");
+    assert.ok(reading.problems.some((p) => p === 'To order row 2: Approve says "x". Choose Yes, No, or leave it blank.'));
+    assert.ok(reading.problems.some((p) => p.startsWith('To order row 3: Approve says "true"')));
+    const summary = (await (async () => { const b = new ExcelJS.Workbook(); await b.xlsx.readFile(path); return b.getWorksheet("Summary")!; })());
+    const formulas: string[] = [];
+    summary.eachRow((row) => row.eachCell((cell) => { const v = cell.value as ExcelJS.CellFormulaValue | null; if (v && typeof v === "object" && "formula" in v) formulas.push(v.formula); }));
+    assert.ok(formulas.some((f) => f === `SUMPRODUCT(('To order'!$D$2:$D$4=A13)*(UPPER('To order'!$A$2:$A$4)="YES"),'To order'!$M$2:$M$4)`), formulas.join("\n"));
+});
+
+test("the workbook wins over a CSV copy passed with it, and works without the run record", async () => {
+    const path = await edited((book) => { book.getWorksheet("To order")!.getCell("A3").value = "Yes"; }, false);
+    const reading = await readWorksheet({ path, csv: "Run,Line\nx,y" }, "BUY");
+    assert.equal(reading.fromManifest, false);
+    assert.deepEqual(reading.approved.map((l) => [l.item, l.vendor, l.qty]), [["SADDLE", "BIKEPARTS", 4]]);
+    assert.ok(reading.notes.some((n) => n.includes("the workbook was read instead")));
+});
+
+test("an empty tab says so and stops, and the newest worksheets are offered when none is named", async () => {
+    const empty = await saveWorksheet(await mkdtemp(join(tmpdir(), "koble-wb-")), `${RUN}.xlsx`, rows.filter((r) => r.Type !== "MAKE"), manifest, context);
+    assert.match((await readWorksheet({ path: empty.path }, "MAKE")).problems.join(" "), /"To make" tab has no rows/);
+    const out = await mkdtemp(join(tmpdir(), "koble-out-"));
+    await saveWorksheet(out, "mrp-sbx-20261001-090000 through 2026-10-31.xlsx", rows, { ...manifest, run: "mrp-sbx-20261001-090000" }, context);
+    await new Promise((r) => setTimeout(r, 20));
+    await saveWorksheet(out, `${RUN} through 2026-11-04.xlsx`, rows, manifest, context);
+    assert.deepEqual((await recentWorksheets(out)).map((p) => p.split("/").pop()), [`${RUN} through 2026-11-04.xlsx`, "mrp-sbx-20261001-090000 through 2026-10-31.xlsx"]);
 });

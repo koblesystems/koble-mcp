@@ -10,7 +10,7 @@ import { assertWriteCompany, resolveCompany } from "../config.js";
 import { odataString } from "../ebms/client.js";
 import { draftBatches, type BatchComponent } from "../mrp/batches.js";
 import { draftPurchaseOrders, type ApprovedLine, type SheetReading } from "../mrp/csv.js";
-import { readWorksheet } from "../mrp/files.js";
+import { readWorksheet, recentWorksheets } from "../mrp/files.js";
 import { BATCH_LINES, readAll, readByIds } from "../mrp/snapshot.js";
 import { baseUnitOf, fromBaseUnits, toBaseUnits, type UnitRow } from "../mrp/units.js";
 import type { McpToolResult, ToolRegistrar } from "./types.js";
@@ -26,12 +26,15 @@ const source = {
 };
 
 /** Problems that mean the file cannot be used at all, as opposed to one row of it. */
-const FATAL = ["does not look like", "but this call names", "mixes", "semicolons"];
+const FATAL = ["does not look like", "but this call names", "mixes", "semicolons", "could not be opened", "has no rows"];
 
 /** The steps both tools start with. Returns a finished result when there is nothing to draft from. */
 async function openWorksheet(args: { company: string; path?: string | undefined; csv?: string | undefined }, want: "BUY" | "MAKE"): Promise<{ company: string; reading: SheetReading; problems: string[] } | McpToolResult> {
     const company = resolveCompany(args.company);
-    if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path (the .xlsx workbook), or its CSV text." });
+    if (!args.path && !args.csv) {
+        const recent = await recentWorksheets();
+        return jsonResult({ needsInput: "Which worksheet? Ask the user, offering the newest ones below, and pass its path. Don't pick one yourself.", recentWorksheets: recent });
+    }
     const reading = await readWorksheet(args, want);
     const problems = [...reading.problems];
     try {

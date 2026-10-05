@@ -165,19 +165,23 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
  * The checks every worksheet goes through, whichever file it came in: `where` names a row for
  * messages ("Line 7" in a CSV, "To order row 7" in the workbook).
  */
-export function readRows(rows: ReadonlyArray<Record<string, string>>, manifest: RunManifest | null, want: "BUY" | "MAKE", where: (index: number) => string): SheetReading {
+export function readRows(rows: ReadonlyArray<Record<string, string>>, manifest: RunManifest | null, want: "BUY" | "MAKE", where: (index: number) => string, options: { approveMarks?: "lenient" | "yes-no" } = {}): SheetReading {
+    // The workbook's Approve is a Yes/No list and its totals count "Yes", so it accepts exactly that.
+    const strict = options.approveMarks === "yes-no";
+    const yes = strict ? /^yes$/i : YES;
+    const no = strict ? /^(|no)$/i : NO;
     const problems: string[] = [];
     const notes: string[] = [];
     const first = rows[0] ?? {};
     const missing = ["Run", "Company", "Line", "Check", "Type", "Item", "Vendor", "Order Qty", "Approve"].filter((name) => rows.length > 0 && !(name in first));
     if (rows.length === 0) problems.push("The file has no rows.");
     if (missing.length > 0) problems.push(`The file is missing column(s): ${missing.join(", ")}. It does not look like an MRP worksheet.`);
-    const runs = new Set(rows.map((row) => row["Run"] ?? ""));
-    const companies = new Set(rows.map((row) => (row["Company"] ?? "").toUpperCase()));
+    const runs = new Set(rows.map((row) => row["Run"] ?? "").filter(Boolean));
+    const companies = new Set(rows.map((row) => (row["Company"] ?? "").toUpperCase()).filter(Boolean));
     if (rows.length > 0 && missing.length === 0) {
-        if (runs.has("") || companies.has("")) problems.push("Some rows have a blank Run or Company cell. Those cells tie the file to its run and must not be changed; use the worksheet as it was written.");
-        if (runs.size > 1) problems.push(`The file mixes ${runs.size} runs (${[...runs].filter(Boolean).join(", ")}); use one worksheet at a time.`);
-        if (companies.size > 1) problems.push(`The file mixes companies (${[...companies].filter(Boolean).join(", ")}).`);
+        if (rows.some((row) => !row["Run"] || !row["Company"])) problems.push("Some rows have a blank Run or Company cell. Those cells tie the file to its run and must not be changed; use the worksheet as it was written.");
+        if (runs.size > 1) problems.push(`The file mixes ${runs.size} runs (${[...runs].join(", ")}); use one worksheet at a time.`);
+        if (companies.size > 1) problems.push(`The file mixes companies (${[...companies].join(", ")}).`);
     }
     const run = [...runs].find(Boolean) ?? "";
     const company = [...companies].find(Boolean) ?? "";
@@ -196,14 +200,14 @@ export function readRows(rows: ReadonlyArray<Record<string, string>>, manifest: 
         const known = manifest?.lines[line];
         const rowType = known?.type ?? type;
         const isBuy = rowType === want;
-        if (!YES.test(mark) && !NO.test(mark)) { problems.push(`${at}: Approve says "${mark}". Use Y to approve the row or leave it blank.`); return; }
+        if (!yes.test(mark) && !no.test(mark)) { problems.push(`${at}: Approve says "${mark}". ${strict ? "Choose Yes, No, or leave it blank." : "Use Y to approve the row or leave it blank."}`); return; }
         if (!isBuy) {
             // The other actionable kind is somebody else's job, not a mistake.
-            if (YES.test(mark) && rowType !== "BUY" && rowType !== "MAKE") problems.push(`${at}: ${row["Item"]} is marked approved but is a ${rowType} row; only BUY rows become purchase orders and MAKE rows become batches.`);
+            if (yes.test(mark) && rowType !== "BUY" && rowType !== "MAKE") problems.push(`${at}: ${row["Item"]} is marked approved but is a ${rowType} row; only BUY rows become purchase orders and MAKE rows become batches.`);
             return;
         }
         candidates += 1;
-        if (!YES.test(mark)) { notApproved += 1; return; }
+        if (!yes.test(mark)) { notApproved += 1; return; }
         if (blocked) return;
         if (!line) { problems.push(`${at}: the Line cell is blank, so the row cannot be tied to the run.`); return; }
         if (seenLines.has(line)) { problems.push(`${at}: worksheet line ${line} appears twice; the second copy was ignored.`); return; }

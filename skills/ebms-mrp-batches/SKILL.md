@@ -20,9 +20,10 @@ and stop.
 
 ## 1. Get the file, the company and the warehouse
 
-- Usually it is the workbook `mrp_plan` saved, with rows approved on its **To make** tab: pass
-  its path as `path`. A CSV attached or pasted works too: pass its text as `csv`, exactly as
-  received. The same worksheet can carry approved
+- It is the workbook `mrp_plan` saved, with rows approved (**Yes**) on its **To make** tab: pass
+  its path as `path`. Without a path, call `batches_from_csv` with none to list the newest
+  worksheets, and ask the user which. An older CSV worksheet still works, passed as `csv`
+  exactly as received. The same worksheet can carry approved
   `BUY` rows as well; those belong to the ebms-mrp-purchase-orders skill and are ignored here.
 - Confirm the company by name. It must be the company the worksheet was made for.
 - **Ask about the warehouse** if the company has more than one: "Which warehouse are these

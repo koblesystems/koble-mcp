@@ -128,7 +128,10 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 const byType: Record<string, number> = {};
                 for (const row of sheet.rows) byType[String(row.Type)] = (byType[String(row.Type)] ?? 0) + 1;
                 const decisions = sheet.rows.filter((row) => row.Type !== "OK");
-                const attached = args.inChat === false ? null : saved.csv.length <= ATTACH_LIMIT ? saved.csv : toCsv(decisions);
+                // A copy for reading: without the Check codes it cannot be handed back as an approved worksheet.
+                const copy = (rows: typeof sheet.rows) => toCsv(rows.map(({ Check: _check, ...row }) => row));
+                const full = copy(sheet.rows);
+                const attached = args.inChat === false ? null : full.length <= ATTACH_LIMIT ? full : copy(decisions);
                 const attach = attached !== null && attached.length <= ATTACH_LIMIT;
                 result["worksheet"] = {
                     fileName,
@@ -139,7 +142,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     tabs: "Summary, To order (grouped by vendor), To make, Follow up (receipts to chase or review), All items",
                     editableColumns: ["Approve", "Qty", "Vendor", "Notes"],
                     warnings: sheet.warnings,
-                    inChat: !attach ? "Not attached; the workbook is at savedAt." : attached === saved.csv ? "A CSV copy of every row is attached, for reading; the workbook at savedAt is what the user approves in." : `A CSV copy of the ${decisions.length} rows that need a decision is attached, for reading; the workbook at savedAt has everything.`,
+                    inChat: !attach ? "Not attached; the workbook is at savedAt." : attached === full ? "A CSV copy of every row is attached, for reading; the workbook at savedAt is what the user approves in." : `A CSV copy of the ${decisions.length} rows that need a decision is attached, for reading; the workbook at savedAt has everything.`,
                 };
                 result["ms"] = { ...snapshot.timings, total: Date.now() - started };
                 result["next"] = "Nothing was written to EBMS. Follow the ebms-mrp skill: give the user the workbook's path (savedAt), then summarise expedites, buys by vendor and makes.";
