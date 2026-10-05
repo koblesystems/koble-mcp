@@ -4,7 +4,8 @@
  * (INVENDOR), and those items' units (INVENUNT) so stock quantities become order quantities.
  */
 import { TYPE_ORDER, checkCode, type RunManifest, type SheetRow } from "./csv.js";
-import type { Plan } from "./engine.js";
+import type { Plan, PlannedOrder } from "./engine.js";
+import { orderBeforeFrameEnds } from "./report.js";
 import { readByIds, type Snapshot } from "./snapshot.js";
 import { baseUnitOf, fromBaseUnits, type UnitRow } from "./units.js";
 
@@ -38,6 +39,17 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
     const later = new Map(plan.beyondHorizon.filter((row) => row.supplies.length > 0).map((row) => [row.item, row.supplies.map((supply) => `${supply.ref}: ${supply.qty} on ${supply.date}`).join("; ")]));
     const laterDemand = new Map(plan.beyondHorizon.filter((row) => row.demandQty > 0).map((row) => [row.item, `${row.demandQty} from ${row.firstDemandDate}`]));
     const itemPlan = new Map(plan.items.map((item) => [item.item, item]));
+    const LEAD_FROM = { you: "you", product: "product vendor record", vendor: "vendor", "your default": "your default" } as const;
+    // When to place the order, once a lead time is known; with none, only when the stock is needed.
+    const timing = (order: PlannedOrder, verb: string): SheetRow => {
+        const lead = snapshot.leadTimes.get(order.item);
+        if (!lead) return { Recommendation: `${verb} ${order.qty} by ${order.receiptDate}` };
+        const recommendation = order.pastDue
+            ? `${verb} ${order.qty} now: needed ${order.receiptDate}, but ${lead.days} days' lead time should have meant ${order.releaseDate}`
+            : `${verb} ${order.qty} by ${order.releaseDate} to have them ${order.receiptDate}`;
+        return { Recommendation: recommendation, "Order By": order.releaseDate, "Lead Days": `${lead.days} (${LEAD_FROM[lead.from]})` };
+    };
+    const windowNotes = new Map(orderBeforeFrameEnds(plan, snapshot).map((row) => [row.item, `${row.qty} needed from ${row.neededFrom} (after the time frame); with ${row.leadDays} days' lead time it must be ordered by ${row.orderBy}. Extend the time frame to plan it.`]));
     const figures = (id: string): SheetRow => {
         const product = snapshot.products.get(id);
         const timeline = itemPlan.get(id)?.timeline.slice(1) ?? [];
@@ -72,7 +84,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             rows.push({
                 ...base, Type: "MAKE", Item: order.item, ...figures(order.item),
                 Status: stockOut ? "Stock-out" : "Below minimum",
-                Recommendation: `Make ${order.qty} by ${order.receiptDate}`,
+                ...timing(order, "Start"),
                 "Needed By": order.receiptDate,
                 "Recommended Qty (stock unit)": order.qty,
                 "Purchase Unit": baseUnitOf(order.item, unitRows) ?? "",
@@ -89,7 +101,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
         rows.push({
             ...base, Type: "BUY", Item: order.item, ...figures(order.item),
             Status: stockOut ? "Stock-out" : "Below minimum",
-            Recommendation: `Buy ${order.qty} by ${order.receiptDate}`,
+            ...timing(order, "Order"),
             "Needed By": order.receiptDate,
             "Recommended Qty (stock unit)": order.qty,
             Vendor: vendor.vendor, "Vendor Part No": vendor.partNo, "Purchase Unit": vendor.unit,
@@ -101,6 +113,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             Notes: [
                 converted.warning ? "Check the unit before ordering." : "",
                 later.has(order.item) ? "Already on order after the time frame (see On Order After Time Frame) — consider moving that order up instead of buying more." : "",
+                windowNotes.get(order.item) ?? "",
             ].filter(Boolean).join(" "),
         });
     }
@@ -136,7 +149,8 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
     for (const item of plan.items) {
         if (touched.has(item.item)) continue;
         const hasActivity = item.timeline.length > 1 || (snapshot.products.get(item.item)?.min ?? 0) > 0;
-        if (hasActivity) rows.push({ ...base, Type: "OK", Item: item.item, ...figures(item.item), Status: "Covered", Recommendation: "Nothing to do" });
+        const window = windowNotes.get(item.item);
+        if (hasActivity || window) rows.push({ ...base, Type: "OK", Item: item.item, ...figures(item.item), Status: "Covered", Recommendation: window ? "Order soon for demand after the time frame" : "Nothing to do", ...(window ? { Notes: window } : {}) });
     }
     // The planner's scope: the plan is always worked out for everything, because demand flows
     // between items, but the worksheet holds only the rows they asked to see.

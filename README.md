@@ -261,8 +261,12 @@ What is read, and how it is netted (worked out against SBX with someone who know
   minimum. Where it is needed sooner, the plan asks the buyer to confirm it by that date.
 - **What is already on order just after the time frame** is not netted, but it is shown: on the
   worksheet, and beside any item the plan says to buy.
-- **Lead time** — kept per product vendor in EBMS (the `LEAD_DAYS` column, according to Koble) but not published through the API,
-  so orders carry a needed-by date. `leadTimeDays` / `leadTimes` supply it when the user knows.
+- **Lead time** — the product's record for its primary vendor (`INVENDOR.LEAD_DAYS`), else the
+  vendor's (`APVENDOR.LEAD_DAYS`); 0 means not set. A purchase with a lead time gets an order-by
+  date; without one it carries only a needed-by date. `leadTimes` (per product) overrides EBMS,
+  `leadTimeDays` fills in where EBMS has none. On an EBMS too old to publish `LEAD_DAYS`, the plan
+  runs without and says so. Demand just after the time frame that a long lead time pulls inside it
+  is listed, not netted.
 
 **Manufacturing batches.** What creating test batches in EBMS showed, and the drafts are built on:
 the finished good must be a Track Count product (anything else is refused); EBMS does **not** add

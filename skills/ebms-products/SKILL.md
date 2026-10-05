@@ -138,8 +138,9 @@ ebms_get  path: INVENDOR   filter: ID eq 'MUG-12'
   number (max 24 characters) and is how an invoice line is matched back to a product.
 - `UNIT_MEAS` is the **purchase** unit for that vendor, which is often not the stock unit.
 - `INVENTRY.PRI_VENDOR` names the primary vendor.
-- `LEAD_DAYS` is the vendor's lead time. **It is not published by this API version** — the field
-  exists in the database but does not come back, which is why MRP plans without lead times.
+- `LEAD_DAYS` is this product's lead time from this vendor, in days; 0 means not set, and the
+  vendor's own `APVENDOR.LEAD_DAYS` applies instead. MRP and a new PO's expected dates use it.
+  It is writable, but setting it through the API has not been tried yet.
 - `ORDER_AMT` is the reorder increment (order in multiples of this).
 
 **Add a vendor record through the product** (verified on SBX, 2026-09-23):

@@ -12,7 +12,7 @@ import { addDays, runMrp } from "../mrp/engine.js";
 import { saveWorksheet } from "../mrp/files.js";
 import { summarise } from "../mrp/report.js";
 import { resolveScope } from "../mrp/scope.js";
-import { takeSnapshot } from "../mrp/snapshot.js";
+import { takeSnapshot, type Snapshot } from "../mrp/snapshot.js";
 import { buildTree, renderTree } from "../mrp/tree.js";
 import { toCsv } from "../mrp/csv.js";
 import { buildWorksheet, runId } from "../mrp/worksheet.js";
@@ -37,6 +37,14 @@ const company = z.string().optional().describe("Company, by ID or name. May be o
 const alsoMade = z.array(z.string()).optional().describe("Product IDs to treat as manufactured although they have never been on a batch.");
 const buyInstead = z.array(z.string()).optional().describe("Made products to plan as purchased for this run (not exploded into components).");
 
+/** How many planned items have a lead time, by where it came from. */
+function leadTimeSummary(snapshot: Snapshot): Record<string, unknown> | string {
+    if (!snapshot.leadDaysPublished && snapshot.leadTimes.size === 0) return "unknown: this EBMS version does not publish lead days, so orders show when stock is needed, not when to order";
+    const from: Record<string, number> = {};
+    for (const lead of snapshot.leadTimes.values()) from[lead.from] = (from[lead.from] ?? 0) + 1;
+    return { itemsWithLeadTime: snapshot.leadTimes.size, from, withoutLeadTime: snapshot.items.length - snapshot.leadTimes.size, note: "Items without a lead time show when stock is needed, not when to order." };
+}
+
 export function registerMrpTools(register: ToolRegistrar): void {
     register(
         "mrp_plan",
@@ -44,7 +52,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
             description: [
                 "Material requirements plan for one company, read-only: nets open sales and job demand, open manufacturing batches and open purchase orders against stock, day by day, through the bill of materials, and returns what to buy and make, by when, and why.",
                 "ALWAYS ask the user two things first and never assume either: the time frame (through, or days) — 'buy and make what is needed to cover everything due by this date' — and the scope: everything, particular vendors, or particular products.",
-                "EBMS does not publish vendor lead times, so orders carry a needed-by date; pass leadTimeDays only if the user gives one.",
+                "Lead times come from EBMS: the product's vendor record (INVENDOR.LEAD_DAYS), else the vendor's (APVENDOR.LEAD_DAYS); 0 means not set. A purchase with a lead time gets an order-by date; one without carries only its needed-by date. Pass leadTimes or leadTimeDays only for figures the user gives.",
                 "Only stocked products and stocked lines are planned; drop-ship, associated and sync lines belong to their own orders.",
                 "The planner's worksheet comes back attached as CSV: give it to the user as a file in the conversation, unchanged.",
             ].join(" "),
@@ -59,8 +67,8 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 items: z.array(z.string()).optional().describe("With scope 'products': the product IDs to report."),
                 includeJobs: z.boolean().optional().describe("Count job transfers as demand. Default true."),
                 minimumRule: z.enum(["when-crossed", "by-end"]).optional().describe("How an item that ends the time frame under its minimum is restored. when-crossed (default): the minimum is a reorder point, so the order is dated the day the item went under and can replace an expedite. by-end: the minimum is a level to be back at by the end of the time frame, so the order is dated its last day. It is a company policy; ask once."),
-                leadTimeDays: z.number().int().min(0).max(365).optional().describe("A lead time to assume for every item, only if the user states one."),
-                leadTimes: z.record(z.string(), z.number().int().min(0).max(365)).optional().describe("Lead time in days per product ID, overriding leadTimeDays."),
+                leadTimeDays: z.number().int().min(0).max(365).optional().describe("A lead time for items EBMS has none for (and for made items), only if the user states one."),
+                leadTimes: z.record(z.string(), z.number().int().min(0).max(365)).optional().describe("Lead time in days per product ID, from the user; overrides EBMS's figure for that product."),
                 maxRows: z.number().int().min(5).max(500).optional().describe("Rows per section in this result, default 25. The worksheet always has every row."),
                 worksheet: z.boolean().optional().describe("Default true: write the planner's worksheet (CSV)."),
                 saveTo: z.string().optional().describe("Folder for the worksheet. Default: KOBLE_OUTPUT_DIR, or 'Koble MRP' in the user's Documents."),
@@ -90,7 +98,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     scope: scope.label,
                     timeFrame: { from: now, through },
                     minimumRule: args.minimumRule ?? "when-crossed",
-                    leadTimes: args.leadTimeDays === undefined && !args.leadTimes ? "unknown: EBMS does not publish them, so orders show when stock is needed, not when to order" : "as supplied by the user",
+                    leadTimes: leadTimeSummary(snapshot),
                     ...summarise(plan, snapshot, scope.inScope, args.maxRows ?? 25),
                 };
                 if (args.worksheet === false) return jsonResult({ ...result, ms: { ...snapshot.timings, total: Date.now() - started } });

@@ -26,8 +26,8 @@ export interface ItemParams {
     id: string;
     onHand: number;
     /**
-     * Days from release to receipt. EBMS does not publish lead time through its API yet, so
-     * this is usually absent: the order then carries only a needed-by date, and says so.
+     * Days from release to receipt: EBMS's LEAD_DAYS for a purchased item, or what the user gave.
+     * When absent the order carries only a needed-by date, and says so.
      */
     leadTimeDays?: number;
     /** The level the projected balance must not fall below (EBMS's MIN_INVEN). */
@@ -251,7 +251,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             qty: order.qty,
             from: order.releaseDate,
             to: order.receiptDate,
-            message: `To have ${order.qty} of ${item.id} by ${order.receiptDate} this should have been released ${order.releaseDate} (lead time ${item.leadTimeDays ?? 0} days).`,
+            message: `To have ${order.qty} of ${item.id} by ${order.receiptDate} this should have been released ${order.releaseDate} (lead time ${item.leadTimeDays ?? 0} days); released today it arrives about ${addDays(today, item.leadTimeDays ?? 0)}.`,
         });
     };
     const newOrder = (date: string, qty: number, pegs: Peg[]): PlannedOrder => {
