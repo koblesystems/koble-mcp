@@ -4,7 +4,7 @@
  * (INVENDOR), and those items' units (INVENUNT) so stock quantities become order quantities.
  */
 import { TYPE_ORDER, checkCode, type RunManifest, type SheetRow } from "./csv.js";
-import type { Plan, PlannedOrder } from "./engine.js";
+import type { Peg, Plan, PlannedOrder } from "./engine.js";
 import { orderBeforeFrameEnds } from "./report.js";
 import { readByIds, type Snapshot } from "./snapshot.js";
 import { baseUnitOf, fromBaseUnits, type UnitRow } from "./units.js";
@@ -16,6 +16,24 @@ const round2 = (value: number): number => Math.round(value * 100) / 100;
 export function runId(company: string, now = new Date()): string {
     const pad = (n: number): string => String(n).padStart(2, "0");
     return `mrp-${company.toLowerCase()}-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+/** "1209" → "SO 1209"; a batch's or job's number with its kind; a minimum in words. */
+function pegLabel(peg: Peg): string {
+    if (peg.kind === "sales") return `SO ${peg.ref}`;
+    if (peg.kind === "job") return `Job ${peg.ref}`;
+    if (peg.kind === "batch") return `Batch ${peg.ref}`;
+    if (peg.kind === "forecast") return `Forecast ${peg.ref}`.trim();
+    if (peg.kind === "dependent") return `To make ${/^make (.+?) x[\d.]+ for /.exec(peg.ref)?.[1] ?? peg.ref}`;
+    return /negative/.test(peg.ref) ? "On hand is negative" : `Back to minimum ${peg.ref}`;
+}
+
+/** Why a row is there, short enough to read in a cell: the first few reasons, quantities added up. */
+export function whyText(pegs: readonly Peg[], max = 3): string {
+    const totals = new Map<string, number>();
+    for (const peg of pegs) totals.set(pegLabel(peg), Math.round(((totals.get(pegLabel(peg)) ?? 0) + peg.qty) * 10_000) / 10_000);
+    const parts = [...totals].map(([label, qty]) => `${label} (${qty})`);
+    return parts.length > max ? `${parts.slice(0, max).join(" · ")} · and ${parts.length - max} more` : parts.join(" · ");
 }
 
 export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan, include: (item: string, type: string) => boolean = () => true): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
@@ -94,6 +112,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 "Purchase Unit": baseUnitOf(order.item, unitRows) ?? "",
                 "Order Qty": order.qty,
                 Approve: "",
+                Why: whyText(order.pegs),
                 Because: because,
                 Notes: [makeable ? "" : "Cannot be created as a batch through EBMS's API: the product is not classified Track Count. Create it in EBMS.", product?.vendor ? "Also purchased; could be bought instead." : "", windowNotes.get(order.item) ?? ""].filter(Boolean).join(" "),
             });
@@ -113,6 +132,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             "Unit Cost": vendor.cost ?? "",
             "Est Cost": vendor.cost === null ? "" : round2(vendor.cost * converted.qty),
             Approve: "",
+            Why: whyText(order.pegs),
             Because: because,
             Notes: [
                 converted.warning ? "Check the unit before ordering." : "",
@@ -122,10 +142,13 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             ].filter(Boolean).join(" "),
         });
     }
+    // "178" alone does not say what it is: a batch or a purchase order.
+    const supplyKind = new Map(snapshot.supplies.map((supply) => [supply.ref, supply.kind]));
+    const documentLabel = (ref: string): string => (supplyKind.get(ref) === "batch" ? `Batch ${ref}` : /^PO/i.test(ref) ? ref : `PO ${ref}`);
     for (const exception of plan.exceptions) {
         if (exception.type === "expedite") {
             touched.add(exception.item);
-            const receipt = `${exception.ref} (${exception.qty})`;
+            const receipt = `${documentLabel(exception.ref)} (${exception.qty})`;
             rows.push({
                 ...base,
                 Type: "EXPEDITE",
@@ -134,7 +157,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 Status: exception.dateAssumed ? "On order with no expected date in EBMS" : "Receipt arrives after it is needed",
                 Recommendation: exception.dateAssumed ? `Confirm ${receipt} will arrive by ${exception.to}` : `Move ${receipt} from ${exception.from} to ${exception.to}`,
                 "Needed By": exception.to ?? "",
-                Document: exception.ref,
+                Document: documentLabel(exception.ref),
                 Because: exception.message,
                 Notes: windowNotes.get(exception.item) ?? "",
             });
@@ -146,8 +169,8 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 Item: exception.item,
                 ...figures(exception.item),
                 Status: "On order but nothing needs it",
-                Recommendation: `Defer or cancel ${exception.ref} (${exception.qty})`,
-                Document: exception.ref,
+                Recommendation: `Defer or cancel ${documentLabel(exception.ref)} (${exception.qty})`,
+                Document: documentLabel(exception.ref),
                 Because: exception.message,
                 Notes: windowNotes.get(exception.item) ?? "",
             });

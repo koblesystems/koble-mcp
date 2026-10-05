@@ -1,6 +1,6 @@
 ---
 name: ebms-mrp-batches
-description: Create EBMS / Koble manufacturing batches from an approved MRP worksheet — the CSV the ebms-mrp skill produced, after the planner marked MAKE rows to manufacture. Use whenever someone hands back an MRP worksheet and wants the batches created, says "create the batches", "start production on what I approved", "make the ones I marked", or asks to turn planned production into manufacturing batches. One batch per approved row, each confirmed before it is created and verified after. Batches are left pending: nothing is marked as made, consumed or processed. Needs the koble-mcp server (tools batches_from_csv and ebms_write).
+description: Create EBMS / Koble manufacturing batches from an approved MRP worksheet — the Excel workbook (or older CSV) the ebms-mrp skill produced, after the planner marked MAKE rows to manufacture. Use whenever someone hands back an MRP worksheet and wants the batches created, says "create the batches", "start production on what I approved", "make the ones I marked", or asks to turn planned production into manufacturing batches. One batch per approved row, each confirmed before it is created and verified after. Batches are left pending: nothing is marked as made, consumed or processed. Needs the koble-mcp server (tools batches_from_csv and ebms_write).
 ---
 
 # Manufacturing batches from an MRP worksheet
@@ -20,8 +20,10 @@ and stop.
 
 ## 1. Get the file, the company and the warehouse
 
-- The planner attaches or pastes the edited worksheet: pass its text as `csv`, exactly as
-  received. A path on their computer works too (`path`). The same worksheet can carry approved
+- It is the workbook `mrp_plan` saved, with rows approved (**Yes**) on its **To make** tab: pass
+  its path as `path`. Without a path, call `batches_from_csv` with none to list the newest
+  worksheets, and ask the user which. An older CSV worksheet still works, passed as `csv`
+  exactly as received. The same worksheet can carry approved
   `BUY` rows as well; those belong to the ebms-mrp-purchase-orders skill and are ignored here.
 - Confirm the company by name. It must be the company the worksheet was made for.
 - **Ask about the warehouse** if the company has more than one: "Which warehouse are these

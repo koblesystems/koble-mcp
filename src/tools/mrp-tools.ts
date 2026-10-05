@@ -5,7 +5,6 @@
  * hundreds of rows has to be exact, and doing it through a model would cost many tokens for a
  * worse answer. What to ask the planner and how to present the result is the ebms-mrp skill's job.
  */
-import { pathToFileURL } from "node:url";
 import { z } from "zod/v4";
 import { resolveCompany } from "../config.js";
 import { addDays, runMrp } from "../mrp/engine.js";
@@ -37,6 +36,25 @@ const company = z.string().optional().describe("Company, by ID or name. May be o
 const alsoMade = z.array(z.string()).optional().describe("Product IDs to treat as manufactured although they have never been on a batch.");
 const buyInstead = z.array(z.string()).optional().describe("Made products to plan as purchased for this run (not exploded into components).");
 
+/** The plan's caveats in sentences, for the workbook's summary tab. */
+function summaryNotes(result: Record<string, unknown>, sheetWarnings: readonly string[]): string[] {
+    const notes: string[] = [];
+    const lead = result["leadTimes"];
+    if (typeof lead === "string") notes.push(`Lead times ${lead}.`);
+    else if (lead && typeof lead === "object") {
+        const { itemsWithLeadTime, withoutLeadTime, from } = lead as { itemsWithLeadTime: number; withoutLeadTime: number; from: Record<string, number> };
+        const sources = Object.entries(from).map(([source, count]) => `${count} from ${source === "product" ? "the product's vendor record" : source === "vendor" ? "the vendor" : source}`).join(", ");
+        notes.push(`${itemsWithLeadTime} item(s) have a lead time (${sources}) and show an order-by date. The other ${withoutLeadTime} show only when the stock is needed.`);
+    }
+    for (const key of ["pastDueDemand", "assumedDates"]) if (typeof result[key] === "string") notes.push(result[key] as string);
+    const window = result["orderBeforeTimeFrameEnds"] as { items?: Array<{ item: string; orderBy: string }> } | undefined;
+    if (window?.items?.length) notes.push(`Needed after this time frame but must be ordered within it (not planned here; run a longer time frame): ${window.items.map((w) => `${w.item} by ${w.orderBy}`).join(", ")}.`);
+    const leftOut = Object.entries((result["leftOut"] as Record<string, number> | undefined) ?? {});
+    if (leftOut.length) notes.push(`Left out of the plan: ${leftOut.map(([why, count]) => `${count} ${why}`).join("; ")}.`);
+    for (const warning of [...((result["warnings"] as string[] | undefined) ?? []), ...sheetWarnings]) notes.push(warning);
+    return notes;
+}
+
 /** How many planned items have a lead time, by where it came from. */
 function leadTimeSummary(snapshot: Snapshot): Record<string, unknown> | string {
     if (!snapshot.leadDaysPublished && snapshot.leadTimes.size === 0) return "unknown: this EBMS version does not publish lead days, so orders show when stock is needed, not when to order";
@@ -54,7 +72,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 "ALWAYS ask the user two things first and never assume either: the time frame (through, or days) — 'buy and make what is needed to cover everything due by this date' — and the scope: everything, particular vendors, or particular products.",
                 "Lead times come from EBMS: the product's vendor record (INVENDOR.LEAD_DAYS), else the vendor's (APVENDOR.LEAD_DAYS); 0 means not set. A purchase with a lead time gets an order-by date; one without carries only its needed-by date. Pass leadTimes or leadTimeDays only for figures the user gives.",
                 "Only stocked products and stocked lines are planned; drop-ship, associated and sync lines belong to their own orders.",
-                "The planner's worksheet comes back attached as CSV: give it to the user as a file in the conversation, unchanged.",
+                "The planner's worksheet is an Excel workbook saved on this computer (worksheet.savedAt): give the user that path; they approve rows in it. A CSV copy of its rows is attached for reading only.",
             ].join(" "),
             inputSchema: z.object({
                 company,
@@ -70,9 +88,9 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 leadTimeDays: z.number().int().min(0).max(365).optional().describe("A lead time for items EBMS has none for (and for made items), only if the user states one."),
                 leadTimes: z.record(z.string(), z.number().int().min(0).max(365)).optional().describe("Lead time in days per product ID, from the user; overrides EBMS's figure for that product."),
                 maxRows: z.number().int().min(5).max(500).optional().describe("Rows per section in this result, default 25. The worksheet always has every row."),
-                worksheet: z.boolean().optional().describe("Default true: write the planner's worksheet (CSV)."),
+                worksheet: z.boolean().optional().describe("Default true: write the planner's worksheet (an Excel workbook)."),
                 saveTo: z.string().optional().describe("Folder for the worksheet. Default: KOBLE_OUTPUT_DIR, or 'Koble MRP' in the user's Documents."),
-                inChat: z.boolean().optional().describe("Default true: attach the worksheet's CSV to this result."),
+                inChat: z.boolean().optional().describe("Default true: attach a CSV copy of the worksheet's rows to this result, for reading."),
             }),
         },
         async (args) => {
@@ -105,12 +123,15 @@ export function registerMrpTools(register: ToolRegistrar): void {
 
                 const run = runId(id);
                 const sheet = await buildWorksheet(id, run, snapshot, plan, scope.inScope);
-                const fileName = `${run} through ${through}.csv`;
-                const saved = await saveWorksheet(args.saveTo, fileName, sheet.rows, sheet.manifest);
+                const fileName = `${run} through ${through}.xlsx`;
+                const saved = await saveWorksheet(args.saveTo, fileName, sheet.rows, sheet.manifest, { company: id, run, from: now, through, notes: summaryNotes(result, sheet.warnings) });
                 const byType: Record<string, number> = {};
                 for (const row of sheet.rows) byType[String(row.Type)] = (byType[String(row.Type)] ?? 0) + 1;
                 const decisions = sheet.rows.filter((row) => row.Type !== "OK");
-                const attached = args.inChat === false ? null : saved.csv.length <= ATTACH_LIMIT ? saved.csv : toCsv(decisions);
+                // A copy for reading: without the Check codes it cannot be handed back as an approved worksheet.
+                const copy = (rows: typeof sheet.rows) => toCsv(rows.map(({ Check: _check, ...row }) => row));
+                const full = copy(sheet.rows);
+                const attached = args.inChat === false ? null : full.length <= ATTACH_LIMIT ? full : copy(decisions);
                 const attach = attached !== null && attached.length <= ATTACH_LIMIT;
                 result["worksheet"] = {
                     fileName,
@@ -118,13 +139,14 @@ export function registerMrpTools(register: ToolRegistrar): void {
                     run,
                     rows: sheet.rows.length,
                     byType,
-                    editableColumns: ["Order Qty", "Approve", "Vendor", "Notes"],
+                    tabs: "Summary, To order (grouped by vendor), To make, Follow up (receipts to chase or review), All items",
+                    editableColumns: ["Approve", "Qty", "Vendor", "Notes"],
                     warnings: sheet.warnings,
-                    inChat: !attach ? "Not attached; give the user the savedAt path." : attached === saved.csv ? "The full worksheet is attached as CSV." : `Only the ${decisions.length} rows that need a decision are attached; the full file is at savedAt.`,
+                    inChat: !attach ? "Not attached; the workbook is at savedAt." : attached === full ? "A CSV copy of every row is attached, for reading; the workbook at savedAt is what the user approves in." : `A CSV copy of the ${decisions.length} rows that need a decision is attached, for reading; the workbook at savedAt has everything.`,
                 };
                 result["ms"] = { ...snapshot.timings, total: Date.now() - started };
-                result["next"] = "Nothing was written to EBMS. Follow the ebms-mrp skill: hand over the worksheet unchanged, then summarise expedites, buys by vendor and makes.";
-                return attach ? jsonResultWithFile(result, { uri: pathToFileURL(saved.path).toString(), mimeType: "text/csv", text: attached as string }) : jsonResult(result);
+                result["next"] = "Nothing was written to EBMS. Follow the ebms-mrp skill: give the user the workbook's path (savedAt), then summarise expedites, buys by vendor and makes.";
+                return attach ? jsonResultWithFile(result, { uri: `koble-mcp://worksheet/${encodeURIComponent(fileName.replace(/\.xlsx$/, ".csv"))}`, mimeType: "text/csv", text: attached as string }) : jsonResult(result);
             } catch (error) {
                 return errorResult(error);
             }

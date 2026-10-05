@@ -1,6 +1,6 @@
 ---
 name: ebms-mrp-purchase-orders
-description: Create EBMS / Koble purchase orders from an approved MRP worksheet — the CSV the ebms-mrp skill produced, after the planner marked rows to order. Use whenever someone hands back an MRP worksheet, says they have approved or reviewed the MRP file, asks to "create the POs", "place these orders" or "order what I approved", or attaches a CSV with Run / Type / Approve / Order Qty columns. One purchase order per vendor, each confirmed before it is created and verified after. Needs the koble-mcp server (tools po_from_csv and ebms_write).
+description: Create EBMS / Koble purchase orders from an approved MRP worksheet — the Excel workbook (or older CSV) the ebms-mrp skill produced, after the planner marked rows to order. Use whenever someone hands back an MRP worksheet, says they have approved or reviewed the MRP file, asks to "create the POs", "place these orders" or "order what I approved", or names the MRP workbook (.xlsx) or a CSV worksheet with Run / Type / Approve / Order Qty columns. One purchase order per vendor, each confirmed before it is created and verified after. Needs the koble-mcp server (tools po_from_csv and ebms_write).
 ---
 
 # Purchase orders from an MRP worksheet
@@ -20,10 +20,13 @@ and stop.
 
 ## 1. Get the file and the company
 
-- Ask for the worksheet if you do not have it. The usual way is that they attach or paste the
-  edited CSV into the conversation: pass its text to `po_from_csv` as `csv`, **exactly as
-  received** — do not tidy it. A path on their computer works too (`path`). Either way the run's
-  own record is found on the computer that ran the plan.
+- The worksheet is the workbook `mrp_plan` saved, which the planner approved rows in: pass its
+  path to `po_from_csv` as `path`. If you don't know the path (a new conversation), call
+  `po_from_csv` without one: it lists the newest worksheets in `Documents/Koble MRP`. Ask the
+  user which one, and never pick for them. An attached workbook reaches you as text, which
+  cannot be used; ask for the path instead. An older CSV worksheet still works, passed as `csv`
+  exactly as received; the CSV copy `mrp_plan` puts in the chat cannot, by design.
+- Problems name the tab and row ("To order row 7"). In the workbook only **Yes** approves a row.
 - Confirm the company by name. It must be the company the worksheet was made for; `po_from_csv`
   refuses a mismatch. If the server is in testing mode, writes only go to the sandbox company —
   say so rather than working around it.
