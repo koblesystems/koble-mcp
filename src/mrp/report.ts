@@ -1,11 +1,45 @@
 /** The part of a plan that goes back in the tool result: short lists, with counts for the rest. */
-import type { Plan, PlannedOrder } from "./engine.js";
+import { addDays, type Plan, type PlannedOrder } from "./engine.js";
 import type { InScope } from "./scope.js";
 import type { Snapshot } from "./snapshot.js";
 
 const cap = <T>(list: readonly T[], max: number): { shown: T[]; notShown: number } => ({ shown: list.slice(0, max), notShown: Math.max(0, list.length - max) });
 /** Reported as one line each, not row by row: on old data they would bury everything else. */
 const QUIET = new Set(["assumed-date", "past-due-demand"]);
+
+/**
+ * Demand just past the time frame that a long lead time pulls inside it: a part needed in 100 days
+ * with 120 days' lead has to be ordered now, though a 60-day plan does not reach its demand. Stock
+ * left above the minimum at the end of the time frame, and receipts due after it, are netted
+ * first; only the shortfall whose order-by date falls inside the time frame is reported.
+ */
+export interface OrderWindow { item: string; neededFrom: string; qty: number; leadDays: number; orderBy: string; make: boolean }
+export function orderBeforeFrameEnds(plan: Plan, snapshot: Snapshot): OrderWindow[] {
+    const through = plan.through;
+    if (!through) return [];
+    const ending = new Map(plan.items.map((item) => [item.item, item.endingBalance]));
+    const params = new Map(snapshot.items.map((item) => [item.id, item]));
+    return plan.beyondHorizon.flatMap((row) => {
+        const lead = snapshot.leadTimes.get(row.item);
+        if (!lead) return [];
+        const item = params.get(row.item);
+        let balance = Math.max(0, (ending.get(row.item) ?? 0) - (item?.safetyStock ?? 0));
+        // Receipts before demand on the same day, as the engine nets them.
+        const events = [...row.supplies.map((s) => ({ date: s.date, qty: s.qty })), ...row.demands.map((d) => ({ date: d.date, qty: -d.qty }))].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : b.qty - a.qty));
+        let neededFrom: string | null = null;
+        let short = 0;
+        for (const event of events) {
+            balance += event.qty;
+            if (balance >= 0) continue;
+            if (addDays(event.date, -lead.days) > through) break;
+            neededFrom ??= event.date;
+            short += -balance;
+            balance = 0; // counted as ordered
+        }
+        if (neededFrom === null) return [];
+        return [{ item: row.item, neededFrom, qty: Math.round(short * 10_000) / 10_000, leadDays: lead.days, orderBy: addDays(neededFrom, -lead.days), make: item?.make === true }];
+    });
+}
 
 export function summarise(plan: Plan, snapshot: Snapshot, inScope: InScope, max: number): Record<string, unknown> {
     const describe = (order: PlannedOrder) => {
@@ -15,7 +49,7 @@ export function summarise(plan: Plan, snapshot: Snapshot, inScope: InScope, max:
             description: product?.description ?? "",
             qty: order.qty,
             neededBy: order.receiptDate,
-            ...(order.leadTimeKnown ? { releaseBy: order.releaseDate, pastDue: order.pastDue } : {}),
+            ...(order.leadTimeKnown ? { releaseBy: order.releaseDate, pastDue: order.pastDue, leadDays: snapshot.leadTimes.get(order.item)?.days, leadFrom: snapshot.leadTimes.get(order.item)?.from } : {}),
             ...(order.action === "buy" ? { vendor: product?.vendor || "(no primary vendor)" } : { alsoPurchased: Boolean(product?.vendor) }),
             because: order.pegs.slice(0, 3).map((peg) => `${peg.kind} ${peg.ref}: ${peg.qty} on ${peg.date}`),
         };
@@ -30,6 +64,7 @@ export function summarise(plan: Plan, snapshot: Snapshot, inScope: InScope, max:
     const oldest = late.map((e) => e.from ?? "").filter(Boolean).sort()[0];
     const buying = new Set(buys.map((order) => order.item));
     const later = plan.beyondHorizon.filter((row) => inScope(row.item, ""));
+    const orderWindowInFrame = orderBeforeFrameEnds(plan, snapshot).filter((row) => inScope(row.item, ""));
 
     const buy = cap(buys.map(describe), max);
     const make = cap(makes.map(describe), max);
@@ -46,6 +81,7 @@ export function summarise(plan: Plan, snapshot: Snapshot, inScope: InScope, max:
         ...(late.length > 0 ? { pastDueDemand: `${late.length} open demand lines were already due before today (oldest ${oldest}); they are planned as due now.` } : {}),
         ...(byType["assumed-date"] ? { assumedDates: `${byType["assumed-date"]} incoming receipts have no expected date in EBMS. They are counted on the last day of the time frame; where one is needed sooner, the plan asks for it by that date.` } : {}),
         ...(onOrderLater.length > 0 ? { alreadyOnOrderAfterTimeFrame: onOrderLater.slice(0, max) } : {}),
+        ...(orderWindowInFrame.length > 0 ? { orderBeforeTimeFrameEnds: { note: "Demand after the time frame whose lead time means ordering inside it. Not planned: extend the time frame to plan it.", items: orderWindowInFrame.slice(0, max) } } : {}),
         demandAfterTimeFrame: later.filter((row) => row.demandQty > 0).slice(0, 20).map(({ supplies: _supplies, ...row }) => row),
         leftOut: snapshot.skipped,
         warnings: snapshot.warnings,

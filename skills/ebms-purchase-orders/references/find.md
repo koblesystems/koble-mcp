@@ -43,8 +43,9 @@ ebms_get  path: INVENDOR
   let EBMS fill it in rather than inventing a number.
 - `ORDER_AMT` is the reorder increment.
 - `INVENTRY.PRI_VENDOR` names the product's primary vendor.
-- `LEAD_DAYS` exists in the database but **is not published by this API version**, so a purchase
-  order cannot say when stock will arrive before EBMS sets `ETA_DATE` itself.
+- `LEAD_DAYS` is this product's lead time from this vendor; 0 means not set, and then the
+  vendor's own `APVENDOR.LEAD_DAYS` applies. Koble's documentation says EBMS dates a PO line
+  (`ETA_DATE`) as the ordered date plus that lead time; read the line back to see what it chose.
 
 If a product has no row for the vendor the user named, say so: the order will go out in the
 product's stock unit at whatever cost EBMS supplies, and the quantity deserves a second look.

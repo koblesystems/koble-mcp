@@ -29,11 +29,7 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
    decides what is reported and what goes on the worksheet. A vendor-scoped plan leaves out
    `MAKE` rows; say how many batches were planned elsewhere if the result mentions them.
 3. **The company**, if more than one is available. Confirm it by name (`ebms_companies`).
-4. **Lead times**, only if they have them. EBMS does not publish vendor lead times through its
-   API, so by default the plan says when stock is *needed*, not when to *order*. If the planner
-   gives a number ("assume three weeks", or per product), pass `leadTimeDays` / `leadTimes` and
-   the plan adds release dates and flags anything already too late. Never invent one.
-5. **What a minimum means to them**, the first time you plan for a company. "When an item drops
+4. **What a minimum means to them**, the first time you plan for a company. "When an item drops
    under its minimum, do you reorder right then, or is the minimum a level to be back at by the
    end of the period?" Reorder right then is `minimumRule: "when-crossed"` (the default): the
    order is dated the day the item went under, and because that stock arrives early it can make
@@ -43,6 +39,13 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
    use the same rule every time and say which one the plan used.
 
 Leave `includeJobs` on unless they say job transfers should not count as demand.
+
+**Lead times are not a question.** They come from EBMS: the product's record for its primary
+vendor (`INVENDOR.LEAD_DAYS`), else the vendor's (`APVENDOR.LEAD_DAYS`); 0 means not set. A
+purchase with one gets an order-by date, and one already too late is flagged. Only if the
+result's `leadTimes` shows many items without one, offer to use a figure the planner gives: per
+product (`leadTimes`, which overrides EBMS) or for the rest (`leadTimeDays`, which only fills
+gaps and also dates made items). Never invent one.
 
 ## 2. Run it
 
@@ -69,7 +72,9 @@ Lead with the file, then what matters most. Keep it short; the detail is in the 
 2. **Expedites** — incoming purchase orders or batches that arrive after the stock is needed,
    or that have no expected date at all. These are the urgent ones: the supply exists, it is
    just late or undated. Give the document, the item, and the dates.
-3. **Stock-outs to buy**, grouped by vendor, soonest first. Say how many lines per vendor and
+3. **Stock-outs to buy**, grouped by vendor, soonest first. Where a line has `releaseBy`, that is
+   the order-by date; `pastDue` means it should already have been ordered, and the exception says
+   roughly when it would arrive if ordered today. Say how many lines per vendor and
    name the biggest few. Call out any with **no primary vendor** — those cannot be ordered until
    someone picks one. If the result has `alreadyOnOrderAfterTimeFrame`, say which of these
    items already have an order arriving shortly after the time frame: moving that order up may be
@@ -83,8 +88,10 @@ Lead with the file, then what matters most. Keep it short; the detail is in the 
    lines belong to their own orders, service items are not materials, fully shipped or received
    lines carry nothing. Mention any `warnings` in full — they are usually a product set up
    wrongly (a unit that does not belong to the product, for instance) and someone should fix it.
-7. **Caveats that change how to read it:** if lead times are unknown, say the dates are
-   needed-by dates. If many demand lines were already past due, say the plan treats them as due
+7. **Caveats that change how to read it:** say how many items had a lead time and from where
+   (`leadTimes`); the rest show needed-by dates, not order-by dates. If the result has
+   `orderBeforeTimeFrameEnds`, name those items: demand after the time frame whose lead time
+   means ordering inside it, which this plan did not net — suggest a longer time frame. If many demand lines were already past due, say the plan treats them as due
    now. If incoming receipts have no expected date in EBMS, say so: they are counted on the last
    day of the time frame, and where one is needed sooner it shows up as an `EXPEDITE` row asking
    the buyer to confirm it will arrive by that date.
@@ -148,5 +155,7 @@ Tell the planner what to do with it:
   items that have never been on a batch are not planned as batches.
 - **Only stocked products and stocked lines are pooled.** Drop-ship, sync and associated lines are
   supplied by their own purchase orders.
-- **Not covered yet:** planning per warehouse, warehouse transfers, and vendor lead times from
-  EBMS.
+- **Order-by dates:** needed-by date minus the lead time (`leadDays`, from `leadFrom`: the
+  product's vendor record, the vendor, or the user). A made item has no vendor lead time; it gets
+  a start date only if the user gave one.
+- **Not covered yet:** planning per warehouse, and warehouse transfers.

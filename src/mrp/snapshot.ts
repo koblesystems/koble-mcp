@@ -91,12 +91,48 @@ export interface ProductInfo {
     increment: number;
     /** INVENTRY.QUAN2ORDER: what the EBMS purchasing screen last saved. A reference, not a formula. */
     ebmsQtyToOrder: number;
+    /** LEAD_DAYS on this product's record for its primary vendor (INVENDOR); 0 when not set there. */
+    leadDays: number;
 }
+
+/** Where an item's lead time came from, most specific first. */
+export type LeadSource = "you" | "product" | "vendor" | "your default";
+export interface LeadTime { days: number; from: LeadSource }
+
+/**
+ * A purchased item's lead time: what the user gave for it, else the product's record for its
+ * primary vendor, else that vendor's default (EBMS sets a PO line's ETA from the same two, in that
+ * order, according to Koble's documentation), else the user's blanket figure. LEAD_DAYS 0 means "not set" in EBMS. A made item, or one
+ * with no primary vendor, has no vendor lead time.
+ */
+export function leadTimeFor(id: string, product: ProductInfo | undefined, made: boolean, vendorLeadDays: ReadonlyMap<string, number>, options: Pick<SnapshotOptions, "leadTimes" | "leadTimeDays">): LeadTime | undefined {
+    const yours = options.leadTimes?.[id] ?? Object.entries(options.leadTimes ?? {}).find(([key]) => key.trim().toUpperCase() === id.toUpperCase())?.[1];
+    if (yours !== undefined) return { days: yours, from: "you" };
+    if (!made && product) {
+        if (product.leadDays > 0) return { days: product.leadDays, from: "product" };
+        const vendor = vendorLeadDays.get(product.vendor.toUpperCase()) ?? 0;
+        if (vendor > 0) return { days: vendor, from: "vendor" };
+    }
+    return options.leadTimeDays === undefined ? undefined : { days: options.leadTimeDays, from: "your default" };
+}
+
+/**
+ * EBMS builds before LEAD_DAYS was published refuse a query that names it. A field EBMS does not
+ * have is a 400 "Invalid query" with the detail "Could not find a property named 'X' on type …"
+ * (seen on SBX for misspelt APVENDOR and INVENDOR fields).
+ */
+const lacksField = (error: unknown, field: string): boolean => error instanceof EbmsError && error.status === 400 && `${error.message} ${error.detail ?? ""}`.includes(`'${field}'`);
 
 export interface Snapshot {
     company: string;
     takenAt: string;
+    /** The planning day, local to the server. */
+    today: string;
     products: Map<string, ProductInfo>;
+    /** Every planned item with a known lead time, and where it came from. */
+    leadTimes: Map<string, LeadTime>;
+    /** False on an EBMS that does not publish LEAD_DAYS through its API. */
+    leadDaysPublished: boolean;
     made: Set<string>;
     bom: BomItem[];
     items: ItemParams[];
@@ -125,6 +161,8 @@ export interface SnapshotOptions {
     buyInstead?: readonly string[] | undefined;
     leadTimeDays?: number | undefined;
     leadTimes?: Readonly<Record<string, number>> | undefined;
+    /** Default true. The item view does not date anything, so it skips the lead-day reads. */
+    readLeadDays?: boolean | undefined;
 }
 
 export async function takeSnapshot(company: string, options: SnapshotOptions): Promise<Snapshot> {
@@ -150,6 +188,26 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             $select: "ID,DESCR_1,C_TYPE,PURC_METH,PRI_VENDOR,T_ON_HAND,MIN_INVEN,MAX_INVEN,ORDER_AMT,QUAN2ORDER,PUR_O,PUR_S,M_IN_O,M_IN_S,SALES_O,SALES_S,M_OUT_O,M_OUT_S,JOB_OUT_O,JOB_OUT_S",
         }),
     );
+    // Lead days: on a product's vendor record (INVENDOR) and on the vendor (APVENDOR). Read
+    // directly, only the rows that set one: as an $expand on the products they made that read
+    // about five times slower on SBX, with the same values.
+    const leadRows = async (entity: string, select: string): Promise<Row[] | null> => {
+        if (options.readLeadDays === false) return [];
+        try {
+            return await timed(`leadDays ${entity}`, () => readAll(company, entity, { $filter: "LEAD_DAYS gt 0", $select: select }));
+        } catch (error) {
+            if (!lacksField(error, "LEAD_DAYS")) throw error;
+            warnings.push(`This EBMS version does not publish ${entity}.LEAD_DAYS through its API, so those lead times are not used.`);
+            return null;
+        }
+    };
+    const productLeadDays = new Map<string, number>();
+    const vendorLeadDays = new Map<string, number>();
+    const productRecords = await leadRows("INVENDOR", "ID,VENDOR_ID,LEAD_DAYS");
+    for (const row of productRecords ?? []) productLeadDays.set(`${text(row["ID"])}|${text(row["VENDOR_ID"]).toUpperCase()}`, num(row["LEAD_DAYS"]));
+    const vendorRecords = await leadRows("APVENDOR", "ID,LEAD_DAYS");
+    for (const row of vendorRecords ?? []) vendorLeadDays.set(text(row["ID"]).toUpperCase(), num(row["LEAD_DAYS"]));
+    const leadDaysPublished = productRecords !== null || vendorRecords !== null;
     const bomRows = await timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
     const madeRows = await timed("made", () => readAll(company, "APINVDET", { $filter: BATCH_LINES, $select: "INVEN" }));
     const lineRows = await timed("sales", () =>
@@ -183,6 +241,8 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             max: num(row["MAX_INVEN"]),
             increment: num(row["ORDER_AMT"]),
             ebmsQtyToOrder: num(row["QUAN2ORDER"]),
+            // The primary vendor's record: the one the worksheet orders from and EBMS dates a PO line by.
+            leadDays: productLeadDays.get(`${text(row["ID"])}|${text(row["PRI_VENDOR"]).toUpperCase()}`) ?? 0,
         });
     }
 
@@ -276,6 +336,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     const involved = new Set<string>([...demands.map((d) => d.item), ...supplies.map((s) => s.item), ...componentsOf.keys(), ...[...componentsOf.values()].flat().map((c) => c.item)]);
     for (const product of products.values()) if (product.min > 0) involved.add(product.id);
     const items: ItemParams[] = [];
+    const leadTimes = new Map<string, LeadTime>();
     for (const id of involved) {
         const product = products.get(id);
         const service = product?.classification === 0;
@@ -283,11 +344,12 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
         if (!product) { warnings.push(`${id} appears on a document or bill of materials but is not an active product; it was not planned.`); continue; }
         if (service) continue;
         if (product.purchaseMethod !== 0) { skip(`product not planned: purchase method ${product.purchaseMethod}`); continue; }
-        const leadTime = options.leadTimes?.[id] ?? options.leadTimeDays;
+        const leadTime = leadTimeFor(id, product, made.has(id), vendorLeadDays, options);
+        if (leadTime) leadTimes.set(id, leadTime);
         items.push({
             id,
             onHand: product.onHand,
-            ...(leadTime === undefined ? {} : { leadTimeDays: leadTime }),
+            ...(leadTime === undefined ? {} : { leadTimeDays: leadTime.days }),
             ...(product.min > 0 ? { safetyStock: product.min } : {}),
             ...(product.max > 0 ? { orderUpTo: product.max } : {}),
             ...(product.increment > 0 ? { orderMultiple: product.increment } : {}),
@@ -304,5 +366,5 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     if (keptSupplies.length !== supplies.length) skipped["incoming supply for an item that is not planned (service, non-stocked or inactive)"] = supplies.length - keptSupplies.length;
     if (undatedDemand > 0) warnings.push(`${undatedDemand} open demand line(s) have no ship date in EBMS and were planned as due today.`);
 
-    return { company, takenAt: new Date().toISOString(), products, made, bom, items, demands: keptDemands, supplies: keptSupplies, skipped, warnings, timings };
+    return { company, takenAt: new Date().toISOString(), today: options.today, products, leadTimes, leadDaysPublished, made, bom, items, demands: keptDemands, supplies: keptSupplies, skipped, warnings, timings };
 }

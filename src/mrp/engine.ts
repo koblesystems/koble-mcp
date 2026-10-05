@@ -26,8 +26,8 @@ export interface ItemParams {
     id: string;
     onHand: number;
     /**
-     * Days from release to receipt. EBMS does not publish lead time through its API yet, so
-     * this is usually absent: the order then carries only a needed-by date, and says so.
+     * Days from release to receipt: EBMS's LEAD_DAYS for a purchased item, or what the user gave.
+     * When absent the order carries only a needed-by date, and says so.
      */
     leadTimeDays?: number;
     /** The level the projected balance must not fall below (EBMS's MIN_INVEN). */
@@ -117,6 +117,8 @@ export interface BeyondHorizon {
     demandQty: number;
     supplyQty: number;
     firstDemandDate: string | null;
+    /** The demand itself, by date, so stock left at the end of the time frame can be netted against it. */
+    demands: Array<{ qty: number; date: string }>;
     /** The receipts themselves, so a buyer can see what is already on order just past the time frame. */
     supplies: Array<{ kind: SupplyKind; ref: string; qty: number; date: string }>;
 }
@@ -251,7 +253,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             qty: order.qty,
             from: order.releaseDate,
             to: order.receiptDate,
-            message: `To have ${order.qty} of ${item.id} by ${order.receiptDate} this should have been released ${order.releaseDate} (lead time ${item.leadTimeDays ?? 0} days).`,
+            message: `To have ${order.qty} of ${item.id} by ${order.receiptDate} this should have been released ${order.releaseDate} (lead time ${item.leadTimeDays ?? 0} days); released today it arrives about ${addDays(today, item.leadTimeDays ?? 0)}.`,
         });
     };
     const newOrder = (date: string, qty: number, pegs: Peg[]): PlannedOrder => {
@@ -371,13 +373,14 @@ export function runMrp(input: { today: string; through?: string | undefined; min
     const beyond = new Map<string, BeyondHorizon>();
     const noteBeyond = (item: string): BeyondHorizon => {
         let row = beyond.get(item);
-        if (!row) beyond.set(item, (row = { item, demandQty: 0, supplyQty: 0, firstDemandDate: null, supplies: [] }));
+        if (!row) beyond.set(item, (row = { item, demandQty: 0, supplyQty: 0, firstDemandDate: null, demands: [], supplies: [] }));
         return row;
     };
     for (const demand of input.demands) {
         if (inside(demand.date)) continue;
         const row = noteBeyond(demand.item);
         row.demandQty = round(row.demandQty + demand.qty);
+        row.demands.push({ qty: demand.qty, date: demand.date });
         row.firstDemandDate = row.firstDemandDate === null || demand.date < row.firstDemandDate ? demand.date : row.firstDemandDate;
     }
     for (const supply of input.supplies) {
@@ -386,7 +389,10 @@ export function runMrp(input: { today: string; through?: string | undefined; min
         row.supplyQty = round(row.supplyQty + supply.qty);
         row.supplies.push({ kind: supply.kind, ref: supply.ref, qty: supply.qty, date: supply.date });
     }
-    for (const row of beyond.values()) row.supplies.sort((a, b) => cmp(a.date, b.date) || cmp(a.ref, b.ref));
+    for (const row of beyond.values()) {
+        row.supplies.sort((a, b) => cmp(a.date, b.date) || cmp(a.ref, b.ref));
+        row.demands.sort((a, b) => cmp(a.date, b.date));
+    }
 
     const byId = new Map(input.items.map((item) => [item.id, item]));
     const { levels, cycles, broken } = lowLevelCodes(input.items);

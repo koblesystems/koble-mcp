@@ -23,7 +23,7 @@ export function checkCode(run: string, line: string, item: string): string {
 export const BOM = String.fromCharCode(0xfeff);
 
 export const COLUMNS = [
-    "Run", "Company", "Line", "Check", "Type", "Item", "Description", "Status", "Recommendation", "Needed By",
+    "Run", "Company", "Line", "Check", "Type", "Item", "Description", "Status", "Recommendation", "Needed By", "Order By", "Lead Days", "Lead From",
     "Recommended Qty (stock unit)", "Vendor", "Vendor Part No", "Purchase Unit", "Order Qty", "Unit Cost", "Est Cost", "Approve",
     "On Hand", "Available", "Minimum", "Maximum", "Reorder Increment", "EBMS Qty To Order", "Demand In Time Frame", "Supply In Time Frame", "Projected Balance",
     "On Order After Time Frame", "Demand After Time Frame", "Document", "Because", "Notes",
