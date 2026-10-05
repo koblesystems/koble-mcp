@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import ExcelJS from "exceljs";
 import { checkCode, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
 import { readWorksheet, recentWorksheets, saveWorksheet } from "../src/mrp/files.js";
@@ -154,5 +154,5 @@ test("an empty tab says so and stops, and the newest worksheets are offered when
     await saveWorksheet(out, "mrp-sbx-20261001-090000 through 2026-10-31.xlsx", rows, { ...manifest, run: "mrp-sbx-20261001-090000" }, context);
     await new Promise((r) => setTimeout(r, 20));
     await saveWorksheet(out, `${RUN} through 2026-11-04.xlsx`, rows, manifest, context);
-    assert.deepEqual((await recentWorksheets(out)).map((p) => p.split("/").pop()), [`${RUN} through 2026-11-04.xlsx`, "mrp-sbx-20261001-090000 through 2026-10-31.xlsx"]);
+    assert.deepEqual((await recentWorksheets(out)).map((p) => basename(p)), [`${RUN} through 2026-11-04.xlsx`, "mrp-sbx-20261001-090000 through 2026-10-31.xlsx"]);
 });
