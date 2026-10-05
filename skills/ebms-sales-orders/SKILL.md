@@ -111,7 +111,8 @@ path: ARINV('1193')   select: AUTOID,INVOICE,STATUS
 path: ARINV   filter: EXTERNALID eq 'claude-2026-09-21-a1'   select: AUTOID,INVOICE
 ```
 
-If a product doesn't exist yet, use the **ebms-products** skill rather than inventing one.
+If a product doesn't exist yet, use the **ebms-products** skill rather than inventing one; for a
+new customer, the **ebms-customers-vendors** skill.
 
 **Read an order** with this shape every time you read back:
 

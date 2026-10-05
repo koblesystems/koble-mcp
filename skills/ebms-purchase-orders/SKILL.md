@@ -86,6 +86,8 @@ path: APVENDOR
 filter: not startswith(ID,'($)') and INACTIVE eq false and (contains(tolower(ID),'bike') or contains(tolower(L_NAME),'bike'))
 select: AUTOID,ID,L_NAME,F_NAME,CITY,STATE,GL_CODE
 
+# A vendor that is not there yet: the ebms-customers-vendors skill creates it.
+
 # A vendor's open purchase orders
 path: APINV   filter: ID eq 'BIKEPARTS' and STATUS eq 'U'
 select: AUTOID,INVOICE,PO_NO,INV_DATE,DUE_DATE,TOTAL_PO,WAREHOUSE

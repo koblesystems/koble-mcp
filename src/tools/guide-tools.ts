@@ -7,7 +7,7 @@ export function registerGuideTools(register: ToolRegistrar, guide: Guide): void 
         "ebms_guide",
         {
             description: [
-                "The procedures for working with EBMS through this server: how to build and change sales orders and purchase orders, receive stock, manage products and tasks, and run MRP.",
+                "The procedures for working with EBMS through this server: how to build and change sales orders and purchase orders, receive stock, manage products, customers, vendors and tasks, and run MRP.",
                 "Call it before any task beyond a single read, unless the matching skill is already loaded in this app.",
                 "With no arguments it lists the skills; with skill it returns that skill; with file it returns one of the skill's reference files.",
                 "Read-only.",

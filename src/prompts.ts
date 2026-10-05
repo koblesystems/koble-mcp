@@ -83,6 +83,22 @@ export const PROMPTS: PromptSpec[] = [
         ask: (a) => (a["product"]?.trim() ? `I want to change product ${a["product"].trim()}.` : "I want to set up a new product."),
     },
     {
+        name: "customer",
+        title: "Customer: new or change",
+        description: "Add a customer, or change one's address, phone, email, folder or price level.",
+        args: { customer: "An existing customer ID or name, to change it.", name: "For a new customer: the person's or company's name." },
+        skill: "ebms-customers-vendors",
+        ask: (a) => (a["customer"]?.trim() ? `I want to change customer ${a["customer"].trim()}.` : `I want to add a customer.${given("Name:", a["name"])}`),
+    },
+    {
+        name: "vendor",
+        title: "Vendor: new or change",
+        description: "Add a vendor, or change one's address, contact, lead days or folder.",
+        args: { vendor: "An existing vendor ID or name, to change it.", name: "For a new vendor: the company's name." },
+        skill: "ebms-customers-vendors",
+        ask: (a) => (a["vendor"]?.trim() ? `I want to change vendor ${a["vendor"].trim()}.` : `I want to add a vendor.${given("Name:", a["name"])}`),
+    },
+    {
         name: "task",
         title: "Task: new or update",
         description: "Raise a task or work order, assign it, move it along, book time or close it.",
