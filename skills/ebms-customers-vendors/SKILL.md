@@ -37,6 +37,12 @@ each reference.
 7. **Prefer inactive to delete.** A customer or vendor with history should be marked
    `INACTIVE: true`; delete only a record created by mistake, and only with a yes.
 8. **Address a record by quoted AUTOID**: `ARCUST('<AUTOID>')`, `APVENDOR('<AUTOID>')`.
+9. **Give every create an `EXTERNALID`** (`claude-<date>-<short id>`, as in ebms-api). The server
+   then refuses a second create with the same one, and after an `uncertain` result it is how you
+   find out whether the record was made: search `EXTERNALID eq '…'` before anything else. Never
+   resend a create blind: a customer's ID is generated, so a resend makes `SMIJOE1`. If a
+   different, legitimate record really shares an outside system's ID, give it its own
+   `EXTERNALID`.
 
 ## Folders
 
@@ -48,7 +54,8 @@ ebms_get  path: ARCUSTRE        (vendors: APVENTRE)
 `TREE_ID` comes back space-padded (`"   24"`); send it unpadded (`"24"`). Each folder's defaults
 are stored on a row with ID `($)` plus the folder's ID, in the same entity as the records
 (`ARCUST`, `APVENDOR`). That is why every search must exclude `not startswith(ID,'($)')`. Read a
-folder's row to tell the user what a new record there will get:
+customer folder's row to tell the user what a new customer there will get (for a vendor folder,
+`GL_CODE` and `COUNTRY` are the defaults worth showing):
 
 ```
 ebms_get  path: ARCUST

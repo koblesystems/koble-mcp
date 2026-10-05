@@ -118,13 +118,15 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
 - **`APVENDOR` does not auto-number.** A POST with no `ID` is accepted and creates a vendor
   whose natural key is the **empty string**: a record that no natural-key lookup will ever
   find. Vendor IDs are user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`); always send
-  one. (`ARCUST` *does* generate one from the folder's naming rule: `SMIJOE`, then `SMIJOE1`.)
+  one. `APINV` *does* auto-number, assigning `INVOICE` "PO#174" and `PO_NO` "174", and so does
+  `ARCUST`, from the folder's naming rule: `SMIJOE`, then `SMIJOE1`.
 - **Creating a vendor with a name fails on 1.8.184** with 422 "APCONTACTS: Could not find child
   APCONTACTS record", in every folder, with or without contacts in the body; nothing is saved.
   `{ID, TREE_ID}` alone saves, and the name and the rest PATCH on afterwards. Reported to Koble
-  engineering 2026-10-05. Both entities need `TREE_ID` ("Could not find vendor defaults").
+  engineering 2026-10-05. Both entities need `TREE_ID`: a vendor without one fails with "Could
+  not find vendor defaults" (customers presumably with "Could not find customer defaults"; not tried).
 - **A child row's `@id` in a `<Nav>@delta` is the plain AUTOID** (`"6HH5TPOJG0R3E1A1"`). The
-  entity-qualified form (`"APCONTACTS('…')"`) is ignored with a 200. `APINV` *does* auto-number, assigning `INVOICE` "PO#174" and `PO_NO` "174".
+  entity-qualified form (`"APCONTACTS('…')"`) is ignored with a 200.
 - **`APINV.DESCR_H` truncates at 30 characters** without complaint.
 - **`PIPE_PHASE` accepts any string** with a 200 and leaves the derived `PHASE_AID` stale.
   The client is the only validation. Related: write `PIPE_PHASE`, never `PHASE_AID` alone.

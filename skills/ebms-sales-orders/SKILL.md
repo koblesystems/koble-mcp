@@ -94,7 +94,7 @@ fields.
 ```
 # Customers — not PHONE, which is not filterable
 path: ARCUST
-filter: INACTIVE eq false and (contains(tolower(ID),'smith') or contains(tolower(L_NAME),'smith') or contains(tolower(F_NAME),'smith'))
+filter: not startswith(ID,'($)') and INACTIVE eq false and (contains(tolower(ID),'smith') or contains(tolower(L_NAME),'smith') or contains(tolower(F_NAME),'smith'))
 select: AUTOID,ID,F_NAME,L_NAME,CITY     top: 20
 
 # Products — exclude the folder rows that share this entity set

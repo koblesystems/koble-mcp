@@ -119,5 +119,5 @@ of another; on-hand moving with it; reversing the receipt; and deleting the PO.
 Say so if a request depends on these: `MarkAllAsReceived` and `CreateBackOrder` (neither on the
 server's command allow-list, neither tested — see `references/receive.md`); timings on `APINV`
 (measured on `ARINV` only); multi-warehouse purchase orders; drop-ship and special-order lines
-(`PURC_METH` other than stocked); vendor creation; serialized or lot-tracked receiving; and
+(`PURC_METH` other than stocked); serialized or lot-tracked receiving; and
 paying or posting anything.

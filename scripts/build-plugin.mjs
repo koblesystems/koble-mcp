@@ -25,7 +25,7 @@ writeFileSync(
         {
             name: "koble",
             version,
-            description: "EBMS (Koble Systems ERP) procedures for sales orders, purchase orders, receiving, products, tasks and MRP. They need the koble program running on this computer: https://github.com/koblesystems/koble-mcp",
+            description: "EBMS (Koble Systems ERP) procedures for sales orders, purchase orders, receiving, products, customers, vendors, tasks and MRP. They need the koble program running on this computer: https://github.com/koblesystems/koble-mcp",
             author: { name: "Koble Systems", url: "https://koblesystems.com" },
             homepage: "https://github.com/koblesystems/koble-mcp",
             license: "MIT",
