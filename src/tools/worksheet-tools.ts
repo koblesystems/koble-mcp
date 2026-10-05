@@ -9,8 +9,8 @@ import { z } from "zod/v4";
 import { assertWriteCompany, resolveCompany } from "../config.js";
 import { odataString } from "../ebms/client.js";
 import { draftBatches, type BatchComponent } from "../mrp/batches.js";
-import { draftPurchaseOrders, readSheet, type ApprovedLine, type SheetReading } from "../mrp/csv.js";
-import { loadWorksheet } from "../mrp/files.js";
+import { draftPurchaseOrders, type ApprovedLine, type SheetReading } from "../mrp/csv.js";
+import { readWorksheet } from "../mrp/files.js";
 import { BATCH_LINES, readAll, readByIds } from "../mrp/snapshot.js";
 import { baseUnitOf, fromBaseUnits, toBaseUnits, type UnitRow } from "../mrp/units.js";
 import type { McpToolResult, ToolRegistrar } from "./types.js";
@@ -21,7 +21,7 @@ const text = (value: unknown): string => (typeof value === "string" ? value.trim
 
 const source = {
     company: z.string().min(1).describe("Required. Company, by ID or name. Must match the worksheet's company."),
-    path: z.string().optional().describe("Path of the worksheet CSV on this computer. Give this or csv."),
+    path: z.string().optional().describe("Path of the worksheet on this computer: the .xlsx workbook mrp_plan saved (after the user approved rows in it), or a CSV. Give this or csv."),
     csv: z.string().optional().describe("The worksheet's CSV text, exactly as the user attached or pasted it."),
 };
 
@@ -31,9 +31,8 @@ const FATAL = ["does not look like", "but this call names", "mixes", "semicolons
 /** The steps both tools start with. Returns a finished result when there is nothing to draft from. */
 async function openWorksheet(args: { company: string; path?: string | undefined; csv?: string | undefined }, want: "BUY" | "MAKE"): Promise<{ company: string; reading: SheetReading; problems: string[] } | McpToolResult> {
     const company = resolveCompany(args.company);
-    if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path, or its CSV text." });
-    const { text: csv, manifest } = await loadWorksheet(args);
-    const reading = readSheet(csv, manifest, want);
+    if (!args.path && !args.csv) return jsonResult({ needsInput: "Give the worksheet's path (the .xlsx workbook), or its CSV text." });
+    const reading = await readWorksheet(args, want);
     const problems = [...reading.problems];
     try {
         assertWriteCompany(company);
@@ -77,7 +76,7 @@ async function settleUnits(company: string, lines: ApprovedLine[], problems: str
             const converted = fromBaseUnits(line.item, stock.qty, unit ?? "", units);
             if (stock.warning || converted.warning || unit === null) {
                 const why = [stock.warning, converted.warning].filter(Boolean).join(" ") || "the product has no units set up.";
-                problems.push(`Line ${line.row}: ${line.item} was moved to vendor ${line.vendor}, but its quantity (${line.qty} ${line.originalUnit || "stock units"}) cannot be converted with confidence: ${why} It was not ordered; order it in EBMS.`);
+                problems.push(`${line.row}: ${line.item} was moved to vendor ${line.vendor}, but its quantity (${line.qty} ${line.originalUnit || "stock units"}) cannot be converted with confidence: ${why} It was not ordered; order it in EBMS.`);
                 dropped.add(line);
                 continue;
             }
@@ -101,7 +100,7 @@ export function registerWorksheetTools(register: ToolRegistrar): void {
         {
             description: [
                 "Turn an approved MRP worksheet into purchase-order drafts, read-only.",
-                "Reads the CSV mrp_plan produced, after the planner set Approve to Y on BUY rows (and perhaps changed Order Qty or Vendor); checks every vendor and product against EBMS; and returns one draft per vendor with the exact body to POST to APINV with ebms_write.",
+                "Reads the worksheet mrp_plan produced (its Excel workbook, or a CSV), after the planner approved BUY rows on its To order tab (and perhaps changed Qty or Vendor); checks every vendor and product against EBMS; and returns one draft per vendor with the exact body to POST to APINV with ebms_write.",
                 "It creates nothing. A worksheet handed in twice cannot order twice: ebms_write refuses the duplicate EXTERNALID.",
                 "Show the drafts and get a clear yes per purchase order before writing.",
             ].join(" "),
@@ -119,7 +118,7 @@ export function registerWorksheetTools(register: ToolRegistrar): void {
                     const vendor = vendors.get(line.vendor);
                     const product = products.get(line.item.toUpperCase());
                     const wrong = !vendor ? `vendor "${line.vendor}" is not in EBMS` : vendor["INACTIVE"] === true ? `vendor ${line.vendor} is inactive` : !product ? `product "${line.item}" is not in EBMS` : product["INACTIVE"] === true ? `product ${line.item} is inactive` : null;
-                    if (wrong) problems.push(`Line ${line.row}: ${wrong}.`);
+                    if (wrong) problems.push(`${line.row}: ${wrong}.`);
                     return wrong === null;
                 });
                 const drafts = draftPurchaseOrders({ ...reading, approved: await settleUnits(company, orderable, problems) });

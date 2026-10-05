@@ -23,7 +23,7 @@ export function checkCode(run: string, line: string, item: string): string {
 export const BOM = String.fromCharCode(0xfeff);
 
 export const COLUMNS = [
-    "Run", "Company", "Line", "Check", "Type", "Item", "Description", "Status", "Recommendation", "Needed By", "Order By", "Lead Days", "Lead From",
+    "Run", "Company", "Line", "Check", "Type", "Item", "Description", "Status", "Recommendation", "Why", "Needed By", "Order By", "Lead Days", "Lead From",
     "Recommended Qty (stock unit)", "Vendor", "Vendor Part No", "Purchase Unit", "Order Qty", "Unit Cost", "Est Cost", "Approve",
     "On Hand", "Available", "Minimum", "Maximum", "Reorder Increment", "EBMS Qty To Order", "Demand In Time Frame", "Supply In Time Frame", "Projected Balance",
     "On Order After Time Frame", "Demand After Time Frame", "Document", "Because", "Notes",
@@ -93,7 +93,8 @@ export function parseCsv(text: string): Array<Record<string, string>> {
 }
 
 export interface ApprovedLine {
-    row: number;
+    /** Where the row is, for messages: "Line 7" in a CSV, "To order row 7" in the workbook. */
+    row: string;
     line: string;
     item: string;
     vendor: string;
@@ -153,13 +154,21 @@ export function parseDate(text: string): string | null {
  */
 export function readSheet(text: string, manifest: RunManifest | null = null, want: "BUY" | "MAKE" = "BUY"): SheetReading {
     const rows = parseCsv(text);
+    const header = text.replace(new RegExp("^" + BOM), "").split(/\r?\n/, 1)[0] ?? "";
+    if (rows.length > 0 && Object.keys(rows[0] ?? {}).length === 1 && header.includes(";")) {
+        return { run: "", company: "", fromManifest: false, approved: [], problems: ["The file is separated by semicolons, which is how some spreadsheet settings save CSV. Save it again as comma-separated CSV (in Excel: \"CSV UTF-8 (comma delimited)\")."], notes: [], counts: { rows: rows.length, candidates: 0, approved: 0, notApproved: 0 } };
+    }
+    return readRows(rows, manifest, want, (index) => `Line ${index + 2}`);
+}
+
+/**
+ * The checks every worksheet goes through, whichever file it came in: `where` names a row for
+ * messages ("Line 7" in a CSV, "To order row 7" in the workbook).
+ */
+export function readRows(rows: ReadonlyArray<Record<string, string>>, manifest: RunManifest | null, want: "BUY" | "MAKE", where: (index: number) => string): SheetReading {
     const problems: string[] = [];
     const notes: string[] = [];
     const first = rows[0] ?? {};
-    const header = text.replace(new RegExp("^" + BOM), "").split(/\r?\n/, 1)[0] ?? "";
-    if (rows.length > 0 && Object.keys(first).length === 1 && header.includes(";")) {
-        return { run: "", company: "", fromManifest: false, approved: [], problems: ["The file is separated by semicolons, which is how some spreadsheet settings save CSV. Save it again as comma-separated CSV (in Excel: \"CSV UTF-8 (comma delimited)\")."], notes, counts: { rows: rows.length, candidates: 0, approved: 0, notApproved: 0 } };
-    }
     const missing = ["Run", "Company", "Line", "Check", "Type", "Item", "Vendor", "Order Qty", "Approve"].filter((name) => rows.length > 0 && !(name in first));
     if (rows.length === 0) problems.push("The file has no rows.");
     if (missing.length > 0) problems.push(`The file is missing column(s): ${missing.join(", ")}. It does not look like an MRP worksheet.`);
@@ -180,54 +189,54 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
     let candidates = 0;
     let notApproved = 0;
     rows.forEach((row, index) => {
-        const at = index + 2; // header is line 1
+        const at = where(index);
         const type = (row["Type"] ?? "").toUpperCase();
         const mark = (row["Approve"] ?? "").trim();
         const line = (row["Line"] ?? "").trim();
         const known = manifest?.lines[line];
         const rowType = known?.type ?? type;
         const isBuy = rowType === want;
-        if (!YES.test(mark) && !NO.test(mark)) { problems.push(`Line ${at}: Approve says "${mark}". Use Y to approve the row or leave it blank.`); return; }
+        if (!YES.test(mark) && !NO.test(mark)) { problems.push(`${at}: Approve says "${mark}". Use Y to approve the row or leave it blank.`); return; }
         if (!isBuy) {
             // The other actionable kind is somebody else's job, not a mistake.
-            if (YES.test(mark) && rowType !== "BUY" && rowType !== "MAKE") problems.push(`Line ${at}: ${row["Item"]} is marked approved but is a ${rowType} row; only BUY rows become purchase orders and MAKE rows become batches.`);
+            if (YES.test(mark) && rowType !== "BUY" && rowType !== "MAKE") problems.push(`${at}: ${row["Item"]} is marked approved but is a ${rowType} row; only BUY rows become purchase orders and MAKE rows become batches.`);
             return;
         }
         candidates += 1;
         if (!YES.test(mark)) { notApproved += 1; return; }
         if (blocked) return;
-        if (!line) { problems.push(`Line ${at}: the Line cell is blank, so the row cannot be tied to the run.`); return; }
-        if (seenLines.has(line)) { problems.push(`Line ${at}: worksheet line ${line} appears twice; the second copy was ignored.`); return; }
+        if (!line) { problems.push(`${at}: the Line cell is blank, so the row cannot be tied to the run.`); return; }
+        if (seenLines.has(line)) { problems.push(`${at}: worksheet line ${line} appears twice; the second copy was ignored.`); return; }
         seenLines.add(line);
-        if (manifest && !known) { problems.push(`Line ${at}: worksheet line ${line} is not part of run ${manifest.run}. Rows cannot be added by hand; run the plan again.`); return; }
+        if (manifest && !known) { problems.push(`${at}: worksheet line ${line} is not part of run ${manifest.run}. Rows cannot be added by hand; run the plan again.`); return; }
         // The row must carry the code it was written with. With the run record that ties it to the
         // run's own product; without it, to the Run, Line and Item cells exactly as they were written.
         const expected = known ? checkCode(manifest?.run ?? "", line, known.item) : checkCode(row["Run"] ?? "", line, (row["Item"] ?? "").trim());
         if ((row["Check"] ?? "").trim() !== expected) {
-            problems.push(`Line ${at}: this row does not match the run it claims to belong to — its Run, Line, Check${known ? "" : " or Item"} cell was changed${known ? "" : " (or a spreadsheet reformatted the product ID)"}, or the row was typed in. It was not ordered. Use the worksheet as it was written, on the computer that ran the plan.`);
+            problems.push(`${at}: this row does not match the run it claims to belong to — its Run, Line, Check${known ? "" : " or Item"} cell was changed${known ? "" : " (or a spreadsheet reformatted the product ID)"}, or the row was typed in. It was not ordered. Use the worksheet as it was written, on the computer that ran the plan.`);
             return;
         }
 
         const changes: string[] = [];
         const item = known?.item ?? (row["Item"] ?? "").trim();
-        if (!item) { problems.push(`Line ${at}: no item.`); return; }
-        if (!known && /^\d(\.\d+)?E\+\d+$/i.test(item)) { problems.push(`Line ${at}: the item reads "${item}" — a spreadsheet turned the product ID into a number. Re-enter the ID as text, or use the worksheet from the computer that ran the plan.`); return; }
-        if (known && (row["Item"] ?? "").trim() !== known.item) notes.push(`Line ${at}: the Item cell reads "${row["Item"]}" but the run planned ${known.item}; the run's product is used (spreadsheets often reformat numeric IDs).`);
+        if (!item) { problems.push(`${at}: no item.`); return; }
+        if (!known && /^\d(\.\d+)?E\+\d+$/i.test(item)) { problems.push(`${at}: the item reads "${item}" — a spreadsheet turned the product ID into a number. Re-enter the ID as text, or use the worksheet from the computer that ran the plan.`); return; }
+        if (known && (row["Item"] ?? "").trim() !== known.item) notes.push(`${at}: the Item cell reads "${row["Item"]}" but the run planned ${known.item}; the run's product is used (spreadsheets often reformat numeric IDs).`);
 
         const qty = parseQuantity(row["Order Qty"] ?? "");
-        if (qty === null || qty <= 0) { problems.push(`Line ${at}: ${item} is approved but Order Qty "${row["Order Qty"]}" is not a plain quantity above 0 (use digits and a decimal point, e.g. 12 or 1.5).`); return; }
+        if (qty === null || qty <= 0) { problems.push(`${at}: ${item} is approved but Order Qty "${row["Order Qty"]}" is not a plain quantity above 0 (use digits and a decimal point, e.g. 12 or 1.5).`); return; }
         if (known && known.orderQty !== null && Math.abs(known.orderQty - qty) > 1e-9) changes.push(`quantity ${known.orderQty} → ${qty}`);
 
         const typed = (row["Vendor"] ?? "").trim().toUpperCase();
         const vendor = want === "MAKE" ? "" : typed && !typed.startsWith("(") ? typed : (known?.vendor ?? "").toUpperCase();
-        if (want === "BUY" && (!vendor || vendor.startsWith("("))) { problems.push(`Line ${at}: ${item} is approved but has no vendor. Put a vendor ID in the Vendor column.`); return; }
+        if (want === "BUY" && (!vendor || vendor.startsWith("("))) { problems.push(`${at}: ${item} is approved but has no vendor. Put a vendor ID in the Vendor column.`); return; }
         const vendorChanged = want === "BUY" && known !== undefined && vendor !== known.vendor.toUpperCase();
         if (vendorChanged) changes.push(known.vendor.startsWith("(") || !known.vendor ? `vendor set to ${vendor}` : `vendor ${known.vendor} → ${vendor}`);
 
         let neededBy = known?.neededBy ?? "";
         if (!known) {
             const parsed = parseDate(row["Needed By"] ?? "");
-            if (parsed === null && (row["Needed By"] ?? "").trim() !== "") notes.push(`Line ${at}: Needed By "${row["Needed By"]}" is not a date this can read, so it cannot be compared with the date EBMS expects the goods.`);
+            if (parsed === null && (row["Needed By"] ?? "").trim() !== "") notes.push(`${at}: Needed By "${row["Needed By"]}" is not a date this can read, so it cannot be compared with the date EBMS expects the goods.`);
             neededBy = parsed ?? "";
         }
         const costCell = parseQuantity((row["Unit Cost"] ?? "").replace(/[$]/g, ""));

@@ -277,11 +277,21 @@ state each line's unit, take the warehouse the planner gives or the one the prod
 in, and carry an `EXTERNALID` of the run plus the worksheet line so a batch cannot be created
 twice (`INMFG` is covered by the duplicate guard alongside `ARINV`, `APINV` and `TASK`).
 
-**The worksheet.** `mrp_plan` writes a CSV (to `KOBLE_OUTPUT_DIR`, or `Documents/Koble MRP`) with
-every planned item: its status, the recommendation (`EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`, `OK`),
-the numbers behind it, and for purchases the vendor, part number, purchase unit, order quantity in
-that unit and cost from `INVENDOR` (the product's own stock unit when the vendor has none, stated
-on the order so EBMS cannot default to a case). A planner edits `Order Qty`, `Approve`, `Vendor` and `Notes` in a spreadsheet and hands it back.
+**The worksheet.** `mrp_plan` writes an Excel workbook (to `KOBLE_OUTPUT_DIR`, or
+`Documents/Koble MRP`) that opens in Excel and Google Sheets:
+
+- **Summary** — what to do, orders by vendor with live totals of what has been approved, and the
+  plan's caveats.
+- **To order** — purchases grouped by vendor (one group, one purchase order), most urgent first:
+  quantity in the vendor's purchase unit, part number, order-by and needed-by dates, lead time,
+  cost from `INVENDOR` (the product's own stock unit when the vendor has none, stated on the order
+  so EBMS cannot default to a case), and a short reason. Late order-by dates are red.
+- **To make** — batches. **Follow up** — receipts to chase and orders nothing needs, with the
+  document named ("PO#185", "Batch 178"). **All items** — every planned item and its figures.
+
+The planner edits only the shaded columns — Approve (a Yes/No list), Qty, Vendor and Notes — and
+saves the file. The columns that tie a row to its run are hidden, and columns empty on every row
+are hidden too. `po_from_csv` and `batches_from_csv` take the workbook's path, or a CSV as before.
 
 Spreadsheets reformat dates, turn long numeric product IDs into `3.94E+13` and drop leading
 zeros, so the file is not trusted for anything the planner was not meant to edit: `mrp_plan`

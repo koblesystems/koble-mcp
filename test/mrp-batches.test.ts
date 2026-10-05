@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { draftBatches, type BatchInputs } from "../src/mrp/batches.js";
 import type { ApprovedLine } from "../src/mrp/csv.js";
 
-const line = (over: Partial<ApprovedLine>): ApprovedLine => ({ row: 2, line: "L0007", item: "JCOMPOUND", vendor: "", qty: 3, unit: "5 GAL", unitCost: null, neededBy: "2026-10-05", partNo: "", changes: [], ...over });
+const line = (over: Partial<ApprovedLine>): ApprovedLine => ({ row: "Line 2", line: "L0007", item: "JCOMPOUND", vendor: "", qty: 3, unit: "5 GAL", unitCost: null, neededBy: "2026-10-05", partNo: "", changes: [], ...over });
 const inputs: BatchInputs = {
     run: "mrp-sbx-20260921-140533",
     classification: { JCOMPOUND: 2, "12 OZ HSBLEND": 1, BIKEKIT: 2, EMPTY: 2, NEWITEM: 2 },
@@ -35,7 +35,7 @@ test("a batch draft lists every component, per one finished good, each line in i
 });
 
 test("a product EBMS will not accept as a finished good is named, not sent", () => {
-    const { drafts, problems } = draftBatches([line({ item: "12 OZ HSBLEND" }), line({ item: "GHOST", row: 3 }), line({ item: "EMPTY", row: 4 }), line({ item: "NEWITEM", row: 5 })], inputs);
+    const { drafts, problems } = draftBatches([line({ item: "12 OZ HSBLEND" }), line({ item: "GHOST", row: "Line 3" }), line({ item: "EMPTY", row: "Line 4" }), line({ item: "NEWITEM", row: "Line 5" })], inputs);
     assert.deepEqual(drafts, []);
     assert.match(problems[0] ?? "", /12 OZ HSBLEND cannot be made through EBMS's API because it is not classified Track Count/);
     assert.match(problems[1] ?? "", /"GHOST" is not an active product/);

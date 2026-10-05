@@ -57,8 +57,8 @@ export function draftBatches(lines: readonly ApprovedLine[], inputs: BatchInputs
     const problems: string[] = [];
     for (const line of lines) {
         const kind = inputs.classification[line.item];
-        if (kind === undefined) { problems.push(`Line ${line.row}: product "${line.item}" is not an active product in EBMS.`); continue; }
-        if (kind !== 2) { problems.push(`Line ${line.row}: ${line.item} cannot be made through EBMS's API because it is not classified Track Count (its classification is ${kind}). Create this batch in EBMS.`); continue; }
+        if (kind === undefined) { problems.push(`${line.row}: product "${line.item}" is not an active product in EBMS.`); continue; }
+        if (kind !== 2) { problems.push(`${line.row}: ${line.item} cannot be made through EBMS's API because it is not classified Track Count (its classification is ${kind}). Create this batch in EBMS.`); continue; }
         const all = inputs.components[line.item] ?? [];
         const parts = all.filter((part) => part.item !== line.item && part.category.trim().toLowerCase() === "(single component)" && part.qtyPer > 0);
         const notes: string[] = [];
@@ -67,9 +67,9 @@ export function draftBatches(lines: readonly ApprovedLine[], inputs: BatchInputs
         const zero = all.filter((part) => part.category.trim().toLowerCase() === "(single component)" && part.item !== line.item && part.qtyPer <= 0);
         if (zero.length > 0) notes.push(`${zero.map((part) => part.item).join(", ")} ${zero.length === 1 ? "has" : "have"} a quantity of 0 on the bill of materials and ${zero.length === 1 ? "was" : "were"} left off.`);
         if (all.some((part) => part.item === line.item)) notes.push(`${line.item} lists itself as a component; that line was left off.`);
-        if (parts.length === 0) { problems.push(`Line ${line.row}: ${line.item} has no components on its bill of materials, so a batch would consume nothing. Set up its components in EBMS, or create the batch there.`); continue; }
+        if (parts.length === 0) { problems.push(`${line.row}: ${line.item} has no components on its bill of materials, so a batch would consume nothing. Set up its components in EBMS, or create the batch there.`); continue; }
         const warehouse = (inputs.warehouse ?? inputs.lastWarehouse[line.item] ?? "").trim();
-        if (!warehouse) { problems.push(`Line ${line.row}: no warehouse is known for ${line.item} (it has not been made before). Ask which warehouse the batch is for.`); continue; }
+        if (!warehouse) { problems.push(`${line.row}: no warehouse is known for ${line.item} (it has not been made before). Ask which warehouse the batch is for.`); continue; }
         if (!inputs.warehouse) notes.push(`Warehouse ${warehouse} is where ${line.item} was last made.`);
 
         const unit = baseUnitOf(line.item, inputs.units) ?? "";

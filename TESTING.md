@@ -30,9 +30,10 @@ Quit and reopen Claude Desktop first (or start a new Claude Code session). Use t
 | # | Ask Claude | What should happen |
 |---|---|---|
 | 1 | "Which EBMS companies can you see?" | It names them, and says writes go only to the test company. |
-| 2 | Claude Desktop: ＋ menu → koble-mcp → **mrp-plan**. Claude Code or Desktop's Code tab: `/ebms-mrp` | It asks how far ahead and which vendors, then gives you a worksheet (CSV) in the chat. |
+| 2 | Claude Desktop: ＋ menu → koble-mcp → **mrp-plan**. Claude Code or Desktop's Code tab: `/ebms-mrp` | It asks how far ahead and which vendors, then saves an Excel worksheet and tells you where. Open it: the Summary tab says what to do. |
 | 3 | "Why is it telling me to buy <an item from the worksheet>?" | A plain explanation from the plan, with the dates. |
 | 4 | "What's on order from <a vendor>?" | A list of open POs; nothing changed. |
+| 4b | In the worksheet, set Approve to Yes on one line in To order, save, and say "create the POs I approved" | It shows the draft PO (with any quantity you changed) and asks before creating it. |
 | 5 | "Raise a PO to <vendor> for 2 of <product>" | It shows the PO and **asks** before creating it; afterwards it reports the PO number and what EBMS stored. |
 | 6 | "Add one more line to that PO, then remove it" | Asks each time; reports each change. |
 | 7 | "Receive 1 of the first line" | It warns that receiving changes stock, asks, then reports what arrived. |

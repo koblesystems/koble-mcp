@@ -52,17 +52,14 @@ gaps and also dates made items). Never invent one.
 Call `mrp_plan` with the company and the time frame. It takes about half a minute on a small
 company and longer on a large one; say so before you call it.
 
-It returns a summary and the **worksheet** as CSV, attached to the result, and also saved on the
-user's computer (in `Documents/Koble MRP` unless they chose a folder with `saveTo`).
+It returns a summary, and saves the **worksheet** — an Excel workbook — on the user's computer
+(in `Documents/Koble MRP` unless they chose a folder with `saveTo`). A CSV copy of its rows is
+attached to the result so you can read them; it is not what the planner approves in.
 
-**Give the user the worksheet as a file in the conversation.** If you can create files, create one
-named exactly `worksheet.fileName` whose content is the attached CSV **character for character**.
-Do not re-sort it, re-format it, round a number, drop a column or retype a value: every row
-carries a `Check` code tying it to this run, and any number that differs from the run's own
-record is reported as a change when purchase orders are drafted. If you cannot create files,
-show the CSV in a code block and also give the saved path. Never send the user off to find the
-file as the only option. If the result says the worksheet was too large to attach in full, say
-what was attached (the rows needing a decision) and where the full file is.
+**Give the user the workbook's path** (`worksheet.savedAt`) as the first thing in your answer, as
+a link they can open where the app allows it. It opens in Excel and Google Sheets (upload it to
+Drive, then download it again as .xlsx when done). Don't make your own copy of the file or
+rebuild it from the CSV: every row carries a hidden `Check` code tying it to this run.
 
 ## 3. Report, in this order
 
@@ -113,25 +110,22 @@ When the planner asks "why 48?" or "can we actually build those?":
 
 ## 5. Hand over the worksheet
 
-Tell the planner what to do with it:
+The workbook explains itself on its **Summary** tab; tell the planner the short version:
 
-- Open it in a spreadsheet. Rows are in reading order: `EXPEDITE`, `BUY`, `MAKE`, `NOT NEEDED`,
-  `OK`.
-- On the `BUY` rows they want ordered (and the `MAKE` rows they want manufactured), put **Y** in **Approve**. They may change **Order Qty**
-  (it is in the purchase unit shown beside it; plain numbers like `12` or `1.5`) and fill in or
-  change **Vendor**. **Notes** is theirs. Leave every other column alone — especially **Run** and
-  **Line** and **Check**, which tie each row to this run. Rows cannot be added by hand, and a row
-  whose Run, Line or Check was changed is refused.
-- A spreadsheet may reformat dates or long product numbers when it opens the file. That is
-  harmless as long as the purchase orders are created on the same computer that ran the plan,
-  because the run keeps its own record of each row.
-- **EBMS Qty To Order** is what EBMS's own purchasing screen last saved for the product. It is
-  there for comparison; the plan does not use it.
-- Save it as CSV and attach or paste it back into the conversation. The
-  `ebms-mrp-purchase-orders` skill turns the approved rows into purchase orders, one per vendor,
-  and asks before creating each.
-
-`MAKE` rows work the same way: a **Y** in **Approve** (and an adjusted **Order Qty** if they wish), and the `ebms-mrp-batches` skill turns them into pending manufacturing batches, one per row, asking before each. A `MAKE` row whose Notes say the product is not classified Track Count cannot be created through EBMS's API; that one is made in EBMS.
+- **To order** — the purchases, grouped by vendor (each group becomes one purchase order) and
+  most urgent first. Set **Approve** to **Yes** on the lines to order; change **Qty** (in the
+  **Unit** shown) or type another **Vendor** ID if they want. Shaded columns are theirs; red
+  order-by dates are already late. Lines with no primary vendor are last and need a vendor ID.
+- **To make** — batches; approve them the same way. A row whose Notes say the product is not
+  classified Track Count cannot be created through EBMS's API; that one is made in EBMS.
+- **Follow up** — receipts to chase and orders nothing needs. Nothing there is ordered from the
+  file; it is a list for the phone and for EBMS.
+- **All items** — every planned item with its figures, for reference. **EBMS qty to order** is
+  what EBMS's own purchasing screen last saved; the plan does not use it.
+- Rows cannot be added by hand, and the hidden Run, Line and Check columns must stay as they are.
+- Save the file (as .xlsx) and ask to create the purchase orders or batches from it, giving its
+  path if it was moved. The `ebms-mrp-purchase-orders` and `ebms-mrp-batches` skills take it
+  from there and ask before creating each one.
 
 ## How the plan works, for when you are asked
 
