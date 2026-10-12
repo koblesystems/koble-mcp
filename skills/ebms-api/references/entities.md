@@ -43,6 +43,23 @@ Discount · 11 Lots-Tracked Cost.
 
 Watch out: a product with markup "(None)" and `BASE` 0 computes every price level to $0.
 
+## INVENUNT: units of measure
+
+A product's units, one row per unit. **Cannot be written directly**: `PATCH INVENUNT('<AUTOID>')`
+returns 422 "Cannot modify detail table INVENUNT without accessing it through a parent entity!"
+and saves nothing. Write units through the product, `PATCH INVENTRY('<AUTOID>')`:
+
+| Operation | Body | Status |
+|---|---|---|
+| Add | `{"INVENUNTs": [{"UNIT": …, "MULTIPLY": …, "MULTIPLIER": …}]}` | verified (2026-09-23) |
+| Rename | `{"INVENUNTs@delta": [{"@id": "<INVENUNT AUTOID>", "UNIT": …}]}` | verified (1.8.184, 2026-10-12) |
+| Change `MULTIPLIER` / `MULTIPLY` | `INVENUNTs@delta` with `@id` | not verified |
+| Remove | `INVENUNTs@delta` with `@id` and `"@removed": true` | not verified |
+
+Renaming the main unit also updates `INVENTRY.EACH_UNIT` (EBMS 1.8.184, 2026-10-12). The
+generated `entities/INVENUNT.md` lists direct `PATCH`/`POST`/`DELETE` on `INVENUNT` as
+"unverified"; this table supersedes it. See `ebms-products` for the full procedure.
+
 ## ARCUST / APVENDOR: customers and vendors
 
 Natural key `ID`. Search on `ID`, `F_NAME` and `L_NAME`, but **not** `PHONE` (see quirks).

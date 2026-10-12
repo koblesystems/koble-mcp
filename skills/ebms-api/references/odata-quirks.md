@@ -51,6 +51,21 @@ This is worth knowing before writing anything: a diff built from a standalone re
 quantities from a baseline of zero and reports cost changes that never happened. Always
 reach detail rows through the parent document.
 
+## Detail tables can't be written directly
+
+Writing a product's detail table on its own path fails:
+
+```
+PATCH INVENUNT('<unit AUTOID>')  {"UNIT": "<new name>"}
+  -> 422 "Attempted to write to detail without parent."
+     INVENUNT: Cannot modify detail table INVENUNT without accessing it through a parent entity!
+```
+
+Nothing is saved. Write through the parent instead — `PATCH INVENTRY('<AUTOID>')` with
+`INVENUNTs@delta: [{"@id": "<unit AUTOID>", …}]` — the same delta pattern as document lines.
+Verified for `INVENUNT` on EBMS 1.8.184, 2026-10-12. `INVENDOR` likely behaves the same;
+not verified.
+
 ## Selecting
 
 Some virtual and derived fields are omitted from a normal GET **and** from `$select=*`.
