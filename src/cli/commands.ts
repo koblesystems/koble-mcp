@@ -54,13 +54,23 @@ async function ask(question: string, fallback = ""): Promise<string> {
     }
 }
 
+let passwordInput: AsyncIterable<unknown> = process.stdin;
+let pipedLines: string[] | null = null;
+
+/** Where --password-stdin reads from; tests hand it a stream of their own. */
+export function setPasswordInput(input: AsyncIterable<unknown>): void {
+    passwordInput = input;
+    pipedLines = null;
+}
+
+/** --password-stdin: everything piped in is read once, and each call takes the next line (one per company). */
 async function readLineFromPipe(): Promise<string> {
-    let text = "";
-    for await (const chunk of process.stdin) {
-        text += String(chunk);
-        if (text.includes("\n")) break;
+    if (pipedLines === null) {
+        let text = "";
+        for await (const chunk of passwordInput) text += String(chunk);
+        pipedLines = text.split(/\r?\n/);
     }
-    return (text.split(/\r?\n/)[0] ?? "").trim();
+    return (pipedLines.shift() ?? "").trim();
 }
 
 /** Typed without echo. Needs a terminal: a password is never taken from a flag. */
@@ -152,8 +162,9 @@ async function chooseCompanies(companies: CompanyInfo[], current: string[] | nul
 async function loginCompany(config: StoredConfig, company: string, flags: Flags, interactive: boolean): Promise<boolean> {
     const known = loginFor(config, company)?.username ?? "";
     let username = typeof flags["username"] === "string" ? flags["username"] : "";
+    if (!username && flags["password-stdin"] === true) username = known; // stdin carries passwords only
     if (!username) {
-        if (!interactive) { say(`${company}: no username. Pass --username.`); return false; }
+        if (!interactive || flags["password-stdin"] === true) { say(`${company}: no username. Pass --username.`); return false; }
         username = await ask(`${company}: EBMS username`, known);
     }
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -175,10 +186,26 @@ async function loginCompany(config: StoredConfig, company: string, flags: Flags,
     return false;
 }
 
-/** Forgets the older single login once every enabled company has its own. */
+/** Every credential-store account a configuration refers to. */
+const allAccounts = (config: StoredConfig): string[] => [...(config.username ? [accountFor(config)] : []), ...Object.entries(config.logins ?? {}).map(([id, l]) => loginAccount(config.serial, id, l.username))];
+
+/** The login that works for a company: its own when its password is stored, else the older shared one. */
+function workingLogin(config: StoredConfig, company: string): { username: string; password: string; where: string; shared: boolean } | null {
+    const own = config.logins?.[company.toUpperCase()];
+    const ownStored = own ? loadPassword(loginAccount(config.serial, company, own.username)) : null;
+    if (own && ownStored) return { username: own.username, ...ownStored, shared: false };
+    const shared = config.username ? loadPassword(accountFor(config)) : null;
+    return shared && config.username ? { username: config.username, ...shared, shared: true } : null;
+}
+
+/** Forgets the older single login once every enabled company has its own, with its password stored. */
 function retireSharedLogin(config: StoredConfig): void {
     const enabled = enabledCompanies(config) ?? [];
-    if (!config.username || enabled.length === 0 || !enabled.every((id) => config.logins?.[id])) return;
+    const ownWorks = (id: string): boolean => {
+        const own = config.logins?.[id];
+        return own !== undefined && loadPassword(loginAccount(config.serial, id, own.username)) !== null;
+    };
+    if (!config.username || enabled.length === 0 || !enabled.every(ownWorks)) return;
     forgetPassword(accountFor(config));
     delete config.username;
     writeConfig(config);
@@ -220,13 +247,15 @@ export async function setup(flags: Flags): Promise<number> {
         if (unknown.length || ids.length === 0) return fail(`No company ${unknown.map((u) => `"${u}"`).join(", ") || "named"} on this serial. Companies: ${listCompanies(companies)}.`);
         chosen = ids;
     } else if (interactive) chosen = await chooseCompanies(companies, current);
-    else chosen = current ?? companies.map((c) => c.id);
+    else if (current) chosen = current;
+    else if (sameSerial && existing?.username) chosen = companies.map((c) => c.id); // an older install: every company, as before
+    else return fail(`Name the companies the agent may use: --companies <IDs> (or all). Companies: ${listCompanies(companies)}.`);
 
     let sandbox = String(flags["sandbox"] ?? process.env["KOBLE_SANDBOX"] ?? (sameSerial ? existing?.sandbox : "") ?? "");
     if (interactive && flags["sandbox"] === undefined) {
         say("");
         say("While you try this out, writes can be limited to one test company.");
-        sandbox = await ask(`Test company for writes (${chosen.join(", ")}; 'none' to allow every enabled company)`, sandbox && chosen.includes(sandbox.toUpperCase()) ? sandbox : chosen.length === 1 ? (chosen[0] as string) : "none");
+        sandbox = await ask(`Test company for writes (${chosen.join(", ")}; 'none' to allow every enabled company)`, sandbox && chosen.includes(sandbox.toUpperCase()) ? sandbox : "none");
     }
     let sandboxId: string | undefined;
     if (sandbox && sandbox.toLowerCase() !== "none") {
@@ -235,8 +264,8 @@ export async function setup(flags: Flags): Promise<number> {
         sandboxId = match.id;
     }
 
-    if (flags["password-stdin"] === true && flags["skip-password"] !== true && chosen.length !== 1) return fail("--password-stdin signs in to one company. Enable one with --companies, or use `koble login <ID> --password-stdin` for each afterwards.");
-
+    // A different serial: the previous one's passwords go.
+    if (existing && !sameSerial) for (const account of allAccounts(existing)) forgetPassword(account);
     // Logins carry over for companies that stay enabled; companies dropped lose theirs.
     const logins = Object.fromEntries(Object.entries(sameSerial ? (existing?.logins ?? {}) : {}).filter(([id]) => chosen.includes(id)));
     for (const [id, login] of Object.entries(sameSerial ? (existing?.logins ?? {}) : {})) if (!chosen.includes(id)) forgetPassword(loginAccount(serial, id, login.username));
@@ -294,7 +323,6 @@ export async function login(flags: Flags): Promise<number> {
         if (off.length) return fail(`${off.join(", ")} ${off.length === 1 ? "is" : "are"} not enabled. Add ${off.length === 1 ? "it" : "them"} with \`koble companies add ${off.join(" ")}\`.`);
         targets = ids;
     }
-    if (flags["password-stdin"] === true && targets.length !== 1) return fail("--password-stdin signs in to one company: name it, e.g. `koble login COF --password-stdin`.");
     const interactive = process.stdin.isTTY === true || flags["password-stdin"] === true;
     const failed: string[] = [];
     for (const company of targets) if (!(await loginCompany(config, company, flags, interactive))) failed.push(company);
@@ -304,19 +332,21 @@ export async function login(flags: Flags): Promise<number> {
 }
 
 /** Words after the command that are not flags: `koble companies add COF ROV`. */
-const positional = (flags: Flags): string[] => (typeof flags["_"] === "string" ? flags["_"].split(" ").filter(Boolean) : []);
+const positional = (flags: Flags): string[] => (typeof flags["_"] === "string" ? flags["_"].split("\n").filter(Boolean) : []);
 
 /** `koble companies`, `koble companies add <ID…>`, `koble companies remove <ID…>`. */
 export async function companiesCommand(flags: Flags): Promise<number> {
     // Before setup: `koble companies --serial <serial>` only lists what a serial reaches.
-    if (typeof flags["serial"] === "string" && (!readConfig() || readConfig()?.serial !== flags["serial"])) {
+    const saved = readConfig();
+    if (typeof flags["serial"] === "string" && saved?.serial !== flags["serial"]) {
+        if (positional(flags).length) return fail("Run `koble setup --serial <serial>` before changing that serial's companies.");
         const found = await companiesFor(flags["serial"]).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
         if (typeof found === "string") return fail(`That serial number did not reach EBMS (${found}).`);
         say(`Companies on this serial (${found.length}):`);
         for (const c of found) say(`  ${c.id.padEnd(8)} ${c.name}`);
         return 0;
     }
-    const config = readConfig();
+    const config = saved;
     if (!config) return fail("Run `koble setup` first, or list a serial's companies with `koble companies --serial <serial>`.");
     const all = await companiesFor(config.serial).catch((error: unknown) => (error instanceof Error ? error.message : String(error)));
     if (typeof all === "string") return fail(`The company list is not reachable: ${all}`);
@@ -326,9 +356,8 @@ export async function companiesCommand(flags: Flags): Promise<number> {
         say(`Companies on this serial (${all.length}):`);
         for (const c of all) {
             const on = enabled.includes(c.id);
-            const login = loginFor(config, c.id);
-            const stored = login ? loadPassword(login.account) : null;
-            const state = !on ? "off" : !login ? "on, no login: koble login " + c.id : !stored ? `on, ${login.username}, no password: koble login ${c.id}` : `on, ${login.username}`;
+            const login = workingLogin(config, c.id);
+            const state = !on ? "off" : !login ? `on, no login: koble login ${c.id}` : login.shared ? `on, shared login ${login.username}` : `on, ${login.username}`;
             say(`  ${c.id.padEnd(8)} ${c.name.padEnd(28)} ${state}${config.sandbox === c.id ? "  (test company for writes)" : ""}`);
         }
         say("");
@@ -430,11 +459,12 @@ export async function doctor(flags: Flags): Promise<number> {
             for (const id of enabled) {
                 const label = `Sign-in ${id}`;
                 if (!companies.some((c) => c.id === id)) { add({ status: "warn", label, detail: "enabled, but no longer on this serial", fix: `koble companies remove ${id}` }); continue; }
-                const login = loginFor(config, id);
-                const stored = login ? loadPassword(login.account) : null;
-                if (!login || !stored) { add({ status: "fail", label, detail: login ? `no password stored for ${login.username}` : "no login", fix: `koble login ${id}` }); continue; }
-                const signed = await signIn(config.serial, login.username, stored.password, id);
-                add(signed.ok ? { status: "ok", label, detail: `works as ${login.username} (password in ${stored.where})` } : { status: "fail", label, detail: signed.reason, fix: `koble login ${id}` });
+                const login = workingLogin(config, id);
+                if (!login) { const named = config.logins?.[id]?.username; add({ status: "fail", label, detail: named ? `no password stored for ${named}` : "no login", fix: `koble login ${id}` }); continue; }
+                const signed = await signIn(config.serial, login.username, login.password, id);
+                if (!signed.ok) add({ status: "fail", label, detail: signed.reason, fix: `koble login ${id}` });
+                else if (login.shared) add({ status: "warn", label, detail: `works with the shared login ${login.username}`, fix: `koble login ${id} (to give it its own)` });
+                else add({ status: "ok", label, detail: `works as ${login.username} (password in ${login.where})` });
             }
             const off = companies.filter((c) => !enabled.includes(c.id));
             if (off.length && enabledCompanies(config)) add({ status: "info", label: "Not enabled", detail: `${off.map((c) => c.id).join(", ")} (the agent cannot see ${off.length === 1 ? "it" : "them"})`, fix: `koble companies add ${off[0]?.id}` });
@@ -598,7 +628,7 @@ function removeSelf(): string {
 
 export async function uninstall(flags: Flags): Promise<number> {
     const config = readConfig();
-    const accounts = config ? [...(config.username ? [accountFor(config)] : []), ...Object.entries(config.logins ?? {}).map(([id, l]) => loginAccount(config.serial, id, l.username))] : [];
+    const accounts = config ? allAccounts(config) : [];
     const credential = accounts.map((account) => loadPassword(account)).find((found) => found !== null) ?? null;
     const apps = APPS.filter((app) => app.installed()).map((app) => ({ app, parts: app.footprint() })).filter((x) => x.parts.length > 0);
     const program = isSingleFile() ? process.execPath : null;
@@ -665,7 +695,7 @@ export function help(): number {
   koble mcp       Run the MCP server (what Claude starts; not for typing by hand)
   koble version
 
-setup flags: --serial, --companies <ids|all>, --sandbox <company|none>, --username, --apps <ids>, --skip-password, --password-stdin, --no-connect, --yes
+setup flags (or KOBLE_SERIAL, KOBLE_COMPANIES, KOBLE_SANDBOX, KOBLE_USERNAME): --serial, --companies <ids|all>, --sandbox <company|none>, --username, --apps <ids>, --skip-password, --password-stdin, --no-connect, --yes
 Docs: https://github.com/${REPO}`);
     return 0;
 }

@@ -6,7 +6,7 @@ import { storedEnv } from "./src/cli/store.js";
 import { configure } from "./src/config.js";
 import { startServer } from "./src/server.js";
 
-/** --name value, --name=value and --switch; words that are not flags are kept, space-separated, in "_". */
+/** --name value, --name=value and --switch; words that are not flags are kept, one per line, in "_". */
 export function parseFlags(args: string[]): Flags {
     const flags: Flags = {};
     const words: string[] = [];
@@ -24,7 +24,7 @@ export function parseFlags(args: string[]): Flags {
             i += 1;
         } else flags[key] = true;
     }
-    if (words.length) flags["_"] = words.join(" ");
+    if (words.length) flags["_"] = words.join("\n");
     return flags;
 }
 

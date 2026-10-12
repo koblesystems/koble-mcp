@@ -23,7 +23,7 @@ to run anything. Instead:
    `koble doctor` in a terminal and paste the result.
 2. If it is not, give them the one line for their system and say what it does (downloads the
    koble program from github.com/koblesystems/koble-mcp, checks it, and asks for the EBMS serial
-   number, a test company, their username and password):
+   number, which companies to use, a test company, and a username and password for each):
    - Windows, in PowerShell: `irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex`
    - macOS or Linux, in Terminal: `curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash`
 3. Tell them to quit Claude Desktop completely (tray icon or menu → Quit) and reopen it

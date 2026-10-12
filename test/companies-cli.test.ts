@@ -3,22 +3,35 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { companiesCommand, login } from "../src/cli/commands.js";
-import { enabledCompanies, loadPassword, loginAccount, loginFor, readConfig, savePassword, storedEnv, writeConfig } from "../src/cli/store.js";
+import { companiesCommand, login, setPasswordInput, setup } from "../src/cli/commands.js";
+import { accountFor, enabledCompanies, loadPassword, loginAccount, loginFor, readConfig, savePassword, storedEnv, writeConfig } from "../src/cli/store.js";
+import { resetAuth } from "../src/ebms/client.js";
 import { configure, connectionFor, setDiscoveredCompanies } from "../src/config.js";
 
-// Settings and passwords go to a scratch folder and a private file, never the real keychain.
-process.env["KOBLE_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "koble-companies-"));
+// Settings and passwords go to a scratch folder and a private file, never the real keychain;
+// a new folder for every test, so no test sees another's passwords.
 process.env["KOBLE_CREDENTIAL_STORE"] = "file";
+const fresh = (): void => { process.env["KOBLE_CONFIG_DIR"] = mkdtempSync(join(tmpdir(), "koble-companies-")); };
 const SERIAL = "000000000000000";
 
-// The serial reaches three companies.
-globalThis.fetch = (async (url: string | URL) => {
-    if (String(url).includes("ebmscompanylist")) {
+// The serial reaches three companies; each accepts one username and password of its own.
+const PASSWORDS: Record<string, [string, string]> = { SBX: ["deke", "sbx-pass"], LIVE: ["buyer", "live-pass"], ROV: ["deke", "rov-pass"] };
+const signIns: string[] = [];
+globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    const u = String(url);
+    if (u.includes("ebmscompanylist")) {
         return new Response(JSON.stringify([{ Id: "SBX", Name: "Sample Coffee Co" }, { Id: "LIVE", Name: "Acme Hardware" }, { Id: "ROV", Name: "Rova Bicycles" }]), { status: 200 });
     }
-    return new Response("{}", { status: 404 });
+    const company = /MyEbms\/([^/]+)\//.exec(u)?.[1] ?? "";
+    if (u.endsWith("/Token")) {
+        const { Username, Password } = JSON.parse(String(init?.body)) as { Username: string; Password: string };
+        signIns.push(`${company}:${Username}`);
+        const ok = PASSWORDS[company]?.[0] === Username && PASSWORDS[company]?.[1] === Password;
+        return ok ? new Response(JSON.stringify({ AccessToken: "t" }), { status: 200 }) : new Response(JSON.stringify({ Messages: [{ TextBriefDescription: "Invalid user name or password" }] }), { status: 401 });
+    }
+    return new Response(JSON.stringify({ value: [] }), { status: 200 });
 }) as typeof fetch;
+const piped = (...lines: string[]) => { setPasswordInput((async function* () { yield lines.join("\n") + "\n"; })()); resetAuth(); };
 
 const quiet = async <T>(work: () => Promise<T>): Promise<T> => {
     const write = process.stdout.write.bind(process.stdout);
@@ -31,6 +44,7 @@ const quiet = async <T>(work: () => Promise<T>): Promise<T> => {
 };
 
 test("each company keeps its own login, and the server gets per-company credentials", () => {
+    fresh();
     writeConfig({ serial: SERIAL, companies: "SBX,LIVE", sandbox: "SBX", logins: { SBX: { username: "deke" }, LIVE: { username: "buyer" } } });
     savePassword(loginAccount(SERIAL, "SBX", "deke"), "sbx-pass");
     savePassword(loginAccount(SERIAL, "LIVE", "buyer"), "live-pass");
@@ -47,6 +61,7 @@ test("each company keeps its own login, and the server gets per-company credenti
 });
 
 test("an older install with one shared login keeps working", () => {
+    fresh();
     writeConfig({ serial: SERIAL, username: "old" });
     savePassword(`${SERIAL}:old`, "old-pass");
     assert.equal(enabledCompanies(readConfig()!), null, "nothing chosen: every company");
@@ -56,27 +71,72 @@ test("an older install with one shared login keeps working", () => {
 });
 
 test("companies: add enables without a password until `koble login`; remove disables and forgets the password", async () => {
+    fresh();
     writeConfig({ serial: SERIAL, companies: "SBX,LIVE", sandbox: "SBX", logins: { SBX: { username: "deke" }, LIVE: { username: "buyer" } } });
     savePassword(loginAccount(SERIAL, "LIVE", "buyer"), "live-pass");
     // Not a terminal here, so add only enables and says how to sign in.
-    assert.equal(await quiet(() => companiesCommand({ _: "add rova bicycles" })), 1, "a name with a space is two words");
-    assert.equal(await quiet(() => companiesCommand({ _: "add ROV" })), 0);
+    assert.equal(await quiet(() => companiesCommand({ _: "add\nRova Bicycles" })), 0, "a quoted name with a space is one company");
     assert.deepEqual(enabledCompanies(readConfig()!), ["SBX", "LIVE", "ROV"]);
     assert.equal(readConfig()?.logins?.["ROV"], undefined, "no login until the user types the password");
 
-    assert.equal(await quiet(() => companiesCommand({ _: "remove LIVE" })), 0);
+    assert.equal(await quiet(() => companiesCommand({ _: "remove\nLIVE" })), 0);
     assert.deepEqual(enabledCompanies(readConfig()!), ["SBX", "ROV"]);
     assert.equal(readConfig()?.logins?.["LIVE"], undefined);
     assert.equal(loadPassword(loginAccount(SERIAL, "LIVE", "buyer")), null, "its password is gone from the store");
 
-    assert.equal(await quiet(() => companiesCommand({ _: "remove SBX" })), 1, "the test company cannot be removed");
-    assert.equal(await quiet(() => companiesCommand({ _: "remove NOPE" })), 1, "an unknown company is refused");
+    assert.equal(await quiet(() => companiesCommand({ _: "remove\nSBX" })), 1, "the test company cannot be removed");
+    assert.equal(await quiet(() => companiesCommand({ _: "remove\nNOPE" })), 1, "an unknown company is refused");
     assert.deepEqual(enabledCompanies(readConfig()!), ["SBX", "ROV"], "refusals change nothing");
 });
 
-test("login refuses a company that is not enabled, and --password-stdin needs exactly one company", async () => {
+test("login refuses a company that is not enabled", async () => {
+    fresh();
     writeConfig({ serial: SERIAL, companies: "SBX,ROV", sandbox: "SBX" });
     assert.equal(await quiet(() => login({ _: "LIVE" })), 1);
-    assert.equal(await quiet(() => login({ "password-stdin": true })), 1);
     assert.equal(readConfig()?.logins, undefined, "nothing was stored");
+});
+
+test("login with piped passwords: one line per company, the saved username, each stored under its company", async () => {
+    fresh();
+    writeConfig({ serial: SERIAL, companies: "SBX,ROV", sandbox: "SBX", logins: { SBX: { username: "deke" }, ROV: { username: "deke" } } });
+    piped("sbx-pass", "rov-pass");
+    signIns.length = 0;
+    assert.equal(await quiet(() => login({ "password-stdin": true })), 0);
+    assert.deepEqual(signIns, ["SBX:deke", "ROV:deke"], "no username prompt: the saved one is used");
+    assert.equal(loadPassword(loginAccount(SERIAL, "ROV", "deke"))?.password, "rov-pass");
+    piped("wrong");
+    assert.equal(await quiet(() => login({ _: "SBX", "password-stdin": true })), 1);
+    assert.equal(loadPassword(loginAccount(SERIAL, "SBX", "deke"))?.password, "sbx-pass", "a failed sign-in keeps the stored password");
+});
+
+test("an upgraded install keeps every company working until each has a password of its own", async () => {
+    fresh();
+    // Before: one shared login for everything.
+    writeConfig({ serial: SERIAL, username: "deke" });
+    savePassword(accountFor({ serial: SERIAL, username: "deke" }), "sbx-pass");
+    // The skill's upgrade: companies named, usernames saved, passwords left to the user.
+    assert.equal(await quiet(() => setup({ serial: SERIAL, companies: "SBX,ROV", sandbox: "SBX", username: "deke", "skip-password": true, "no-connect": true, yes: true, brief: true })) >= 0, true);
+    assert.deepEqual(enabledCompanies(readConfig()!), ["SBX", "ROV"]);
+    piped("rov-pass");
+    assert.equal(await quiet(() => login({ _: "ROV", "password-stdin": true })), 0);
+    // ROV has its own now; SBX still runs on the shared login, which must not have been retired.
+    assert.equal(readConfig()?.username, "deke");
+    let env = storedEnv({});
+    assert.deepEqual([env["EBMS_ROV_PASSWORD"], env["EBMS_SBX_PASSWORD"], env["EBMS_PASSWORD"]], ["rov-pass", undefined, "sbx-pass"]);
+    configure(env);
+    setDiscoveredCompanies([{ id: "SBX", name: "", version: "" }, { id: "ROV", name: "", version: "" }]);
+    assert.equal(connectionFor("SBX").password, "sbx-pass");
+    // Once SBX has its own too, the shared login is forgotten.
+    piped("sbx-pass");
+    assert.equal(await quiet(() => login({ _: "SBX", "password-stdin": true })), 0);
+    assert.equal(readConfig()?.username, undefined);
+    assert.equal(loadPassword(accountFor({ serial: SERIAL, username: "deke" })), null);
+    env = storedEnv({});
+    assert.deepEqual([env["EBMS_SBX_PASSWORD"], env["EBMS_ROV_PASSWORD"]], ["sbx-pass", "rov-pass"]);
+});
+
+test("a first setup without a terminal must name its companies", async () => {
+    fresh();
+    writeConfig({ serial: "999999999999999" });
+    assert.equal(await quiet(() => setup({ serial: SERIAL, sandbox: "none", "skip-password": true, "no-connect": true, yes: true })), 1);
 });

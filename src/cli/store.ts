@@ -272,9 +272,11 @@ export function storedEnv(env: NodeJS.ProcessEnv = process.env): Record<string, 
     for (const [company, login] of Object.entries(config.logins ?? {})) {
         const key = companyKey(company);
         if (env[`EBMS_${key}_USERNAME`] || env[`EBMS_${key}_PASSWORD`]) continue;
-        merged[`EBMS_${key}_USERNAME`] = login.username;
+        // Only a complete login: a username without its password would pair with the shared password.
         const found = loadPassword(loginAccount(config.serial, company, login.username));
-        if (found) merged[`EBMS_${key}_PASSWORD`] = found.password;
+        if (!found) continue;
+        merged[`EBMS_${key}_USERNAME`] = login.username;
+        merged[`EBMS_${key}_PASSWORD`] = found.password;
     }
     return merged;
 }
