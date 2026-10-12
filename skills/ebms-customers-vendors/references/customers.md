@@ -34,11 +34,11 @@ What EBMS does with it (verified):
   taken (`SMIJOE1`). Report the ID it chose. Send an `ID` only if the user asks for a particular
   one, at most 10 characters. What it generates for a company (last name only) was not tried:
   report whatever comes back, and offer to change it if it reads badly.
-  This needs the folder to have a default ID method (SBX's customer folders all do). In a folder
-  without one, EBMS would try to save a blank ID (seen for vendors: a "duplicate key … contact"
-  error when a blank-ID record already exists). If the user doesn't know, or a create comes back
-  with a blank `ID` or that error, send an `ID` of their choosing instead; delete a blank-ID
-  customer this created, with a yes.
+  This needs the folder to have a default ID method (SBX's customer folders all do). **Always check
+  the `ID` in `verification.rows`:** if it is blank, the folder has no method — say so, offer to
+  delete that customer (with a yes), and create it again with an `ID` the user chooses. If the
+  create fails with a "duplicate key … contact" error, nothing was saved and the cause is the
+  same: ask for an `ID`.
 - **The folder's defaults are copied in**: price level (`IN_LEVEL`), charge and discount terms,
   which payment methods are allowed, shipping method, freight formula, mailing and email lists.
   A Wholesale folder gives a Wholesale price level.

@@ -115,20 +115,21 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
 - **A description-only purchase line is marked received on create** (`SHIP_VIS` 1), so its
   `COST` counts in `SUBTOTAL` immediately. Send `DESCR`, `COST` and `ACCOUNT` only: a `UNIT_VIS`
   of 0 is overwritten with the amount.
-- **`APVENDOR` does not auto-number.** A POST with no `ID` is accepted and creates a vendor
-  whose natural key is the **empty string**: a record that no natural-key lookup will ever
-  find. Vendor IDs are user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`); always send
-  one. `APINV` *does* auto-number, assigning `INVOICE` "PO#174" and `PO_NO` "174", and so does
+- **`APVENDOR` generates an ID only when the folder has a default ID method**, which the API
+  cannot show (only `INVENTRE` publishes `CRID_TYPE`/`CRID_VALUE`). Otherwise a POST with no `ID`
+  saves a vendor whose natural key is the **empty string**, a record no lookup will find. Always
+  send one: user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`). `APINV` *does* auto-number, assigning `INVOICE` "PO#174" and `PO_NO` "174", and so does
   `ARCUST`, from the folder's naming rule: `SMIJOE`, then `SMIJOE1`.
 - **`TREE_ID` must be the first field of a customer or vendor create body.** A vendor create
   with the name before `TREE_ID` fails with 422 "APCONTACTS: Could not find child APCONTACTS
-  record" and saves nothing; with `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}` saves in one POST
-  (SBX, 1.8.184, 2026-10-12; the ordering found by Koble). Both entities need `TREE_ID`: a vendor
+  record" and saves nothing (a body ordered `ID, L_NAME, …, TREE_ID`, SBX 2026-10-05); with
+  `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}` saves in one POST (SBX, 1.8.184, 2026-10-12). The
+  ordering was found by Koble. Both entities need `TREE_ID`: a vendor
   without one fails with "Could not find vendor defaults".
-- **Without a folder ID method, a create with no `ID` tries to save a blank ID.** On SBX's
-  vendor folders it was stopped only by an existing blank-ID vendor tripping the unique index
-  `idx_fromcb_apvendor_t1_contact__unique` (folder path + first contact + ID). Send an ID unless
-  the folder is known to generate one.
+- **Without a folder ID method, a create with no `ID` saves a blank ID.** In two SBX vendor
+  folders the attempt was stopped only by an existing blank-ID vendor tripping the unique indexes
+  `idx_fromcb_apvendor_t1_contact__unique` / `t2` (folder path + first contact + ID); elsewhere it
+  would have saved. Send an ID for vendors; for customers, check the `ID` that comes back.
 - **A child row's `@id` in a `<Nav>@delta` is the plain AUTOID** (`"6HH5TPOJG0R3E1A1"`). The
   entity-qualified form (`"APCONTACTS('…')"`) is ignored with a 200.
 - **`APINV.DESCR_H` truncates at 30 characters** without complaint.
