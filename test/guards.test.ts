@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, validatePath } from "../src/guards.js";
+import { DOCUMENT_ENTITIES, encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, validatePath } from "../src/guards.js";
 import { safeUrl } from "../src/ebms/client.js";
 import { errorFromBody, warningsFromBody, EbmsError } from "../src/ebms/errors.js";
 
@@ -86,4 +86,8 @@ test("uncertain means a timeout, a network failure, a 408 or a 5xx — never a 4
     assert.equal(new EbmsError("x", 403).uncertain, false);
     assert.equal(new EbmsError("x", 200, { kind: "embedded" }).uncertain, true, "a 2xx carrying an error may still have saved");
     assert.equal(new EbmsError("x", 0, { kind: "refused" }).uncertain, false);
+});
+
+test("customers and vendors get the duplicate-EXTERNALID guard, as documents do", () => {
+    for (const entity of ["ARCUST", "APVENDOR", "ARINV", "APINV"]) assert.ok(DOCUMENT_ENTITIES.includes(entity), entity);
 });

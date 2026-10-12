@@ -73,7 +73,7 @@ test("a POST whose EXTERNALID already exists is refused, and the existing record
 });
 
 test("the duplicate check covers every document entity, and nothing else", async () => {
-    for (const entity of ["ARINV", "APINV", "INMFG", "TASK"]) {
+    for (const entity of ["ARINV", "APINV", "INMFG", "TASK", "ARCUST", "APVENDOR"]) {
         fresh();
         script.push(() => json(200, { value: [{ AUTOID: "X1", EXTERNALID: "mcp-1" }] }));
         const r = await call("ebms_write", { company: "sbx", method: "POST", path: entity, body: { EXTERNALID: "mcp-1" } });
@@ -82,7 +82,7 @@ test("the duplicate check covers every document entity, and nothing else", async
     }
     fresh();
     script.push(() => json(201, { AUTOID: "V1" }));
-    await call("ebms_write", { company: "sbx", method: "POST", path: "APVENDOR", body: { ID: "V", EXTERNALID: "mcp-1" }, verify: false });
+    await call("ebms_write", { company: "sbx", method: "POST", path: "INVENTRY", body: { ID: "P", EXTERNALID: "mcp-1" }, verify: false });
     assert.deepEqual(sent.map((s) => s.method), ["POST"], "an entity off the list is not pre-checked");
 });
 

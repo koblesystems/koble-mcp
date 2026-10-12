@@ -38,6 +38,7 @@ Quit and reopen Claude Desktop first (or start a new Claude Code session). Use t
 | 6 | "Add one more line to that PO, then remove it" | Asks each time; reports each change. |
 | 7 | "Receive 1 of the first line" | It warns that receiving changes stock, asks, then reports what arrived. |
 | 8 | "Make a task for <worker> to <something> by Friday" | It offers the task types, asks, creates it, and reports the task ID. |
+| 8b | "Add a customer: <a made-up name> in <a folder>, with a ZIP" | It searches first, asks, creates it, and reports the ID EBMS generated and the city it filled in. |
 | 9 | "Enter a sales order for <customer>: 2 of <product>" | Asks, creates, reports the order number and EBMS's prices. |
 | 10 | "Delete everything you just created" | It lists them and asks before each delete. |
 
