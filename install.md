@@ -26,25 +26,35 @@ it against the release's checksums.
 
 Check: `koble version` prints a version. If `koble` is not found, use the full path above.
 
-## 2. Ask the person three things
+## 2. Ask the person for the serial number, then which companies
 
-1. Their EBMS serial number (the number at the start of their `…koblesystems.dev` address).
-2. A test company to limit writes to while trying it out, or `none`.
-3. Their EBMS username.
+Ask for their EBMS serial number (the number at the start of their `…koblesystems.dev` address)
+and list what it reaches; this saves nothing, and a wrong serial fails here:
+
+```bash
+koble companies --serial <serial>
+```
+
+Show them the list and ask, in one message:
+
+1. Which companies the agent may use. Only these are visible to it.
+2. A test company, one of those, to limit writes to while trying it out, or `none`.
+3. Their EBMS username (and which companies, if any, use a different one).
 
 ## 3. Save the settings and connect the Claude apps
 
 ```bash
-koble setup --serial <serial> --username <username> --sandbox <company or none> --skip-password --yes
+koble setup --serial <serial> --companies <ID,ID> --sandbox <company or none> --username <username> --skip-password --yes
 ```
 
-It lists the companies on the serial (a wrong serial fails here), saves the settings, and connects
-Claude Desktop and Claude Code where they are installed.
+`--companies` is required here: without a terminal, setup will not guess which companies to
+enable. It saves the settings and connects Claude Desktop and Claude Code where they are installed.
 
-## 4. The password — the person does this
+## 4. The passwords — the person does this
 
-Tell them: *open a terminal (PowerShell on Windows), run `koble login`, and type your EBMS
-password; nothing shows while you type.* Wait until they confirm it printed "Signed in to …".
+Tell them: *open a terminal (PowerShell on Windows), run `koble login`, and type the username (or
+press Enter to keep it) and password for each company; nothing shows while you type the
+password.* Wait until they confirm it printed "<company>: signed in as …" for each.
 
 ## 5. Verify
 

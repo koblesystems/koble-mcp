@@ -22,9 +22,15 @@ export function configDir(): string {
 
 export interface StoredConfig {
     serial: string;
+    /** Installs set up before per-company logins: one username for every company. */
     username?: string | undefined;
-    /** Comma-separated company IDs to limit the server to; unset means every company the serial reaches. */
+    /**
+     * Comma-separated IDs of the companies the agent may use. Setup always writes it, so a company
+     * that appears on the serial later stays off until added; unset (older installs) means every one.
+     */
     companies?: string | undefined;
+    /** Per company ID: the username to sign in with. The password is in the credential store under loginAccount. */
+    logins?: Record<string, { username: string }> | undefined;
     /** While testing: the only company writes may go to. */
     sandbox?: string | undefined;
     /** The AI apps chosen at setup (ids from apps.ts); unset means every one installed. */
@@ -57,6 +63,23 @@ export function writeConfig(config: StoredConfig): string {
 }
 
 export const accountFor = (config: Pick<StoredConfig, "serial" | "username">): string => `${config.serial}:${config.username ?? ""}`;
+
+/** The credential-store account for one company's login. */
+export const loginAccount = (serial: string, company: string, username: string): string => `${serial}:${company.toUpperCase()}:${username}`;
+
+/** The companies the agent may use, upper-cased; null on an older install that never chose (every company). */
+export const enabledCompanies = (config: Pick<StoredConfig, "companies">): string[] | null =>
+    config.companies ? config.companies.split(",").map((id) => id.trim().toUpperCase()).filter(Boolean) : null;
+
+/** The username and credential-store account to sign in to a company with: its own login, else the older single one. */
+export function loginFor(config: StoredConfig, company: string): { username: string; account: string } | null {
+    const own = config.logins?.[company.toUpperCase()];
+    if (own) return { username: own.username, account: loginAccount(config.serial, company, own.username) };
+    return config.username ? { username: config.username, account: accountFor(config) } : null;
+}
+
+/** The variable-name form of a company ID, as the server reads per-company credentials: EBMS_<KEY>_USERNAME. */
+export const companyKey = (company: string): string => company.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
 const encode = (secret: string): string => `b64:${Buffer.from(secret, "utf8").toString("base64")}`;
 const decode = (stored: string): string => (stored.startsWith("b64:") ? Buffer.from(stored.slice(4), "base64").toString("utf8") : stored);
@@ -245,6 +268,15 @@ export function storedEnv(env: NodeJS.ProcessEnv = process.env): Record<string, 
     if (config.username && !env["EBMS_PASSWORD"]) {
         const found = loadPassword(accountFor(config));
         if (found) merged["EBMS_PASSWORD"] = found.password;
+    }
+    for (const [company, login] of Object.entries(config.logins ?? {})) {
+        const key = companyKey(company);
+        if (env[`EBMS_${key}_USERNAME`] || env[`EBMS_${key}_PASSWORD`]) continue;
+        // Only a complete login: a username without its password would pair with the shared password.
+        const found = loadPassword(loginAccount(config.serial, company, login.username));
+        if (!found) continue;
+        merged[`EBMS_${key}_USERNAME`] = login.username;
+        merged[`EBMS_${key}_PASSWORD`] = found.password;
     }
     return merged;
 }

@@ -1,6 +1,6 @@
 ---
 name: koble-setup
-description: Install, connect, update, repair or remove koble — the program that connects Claude to EBMS (Koble Systems ERP). Downloads it, saves the EBMS serial number, test company and username, has the user enter their password privately, connects Claude Desktop and Claude Code, and runs its health check. Use whenever someone wants to set up, install, connect or update Koble or EBMS for Claude, when the ebms_* tools are missing or failing to sign in, or when they ask whether their EBMS connection is working — "set up Koble", "connect Claude to EBMS", "koble isn't working", "update koble", "uninstall Koble".
+description: Install, connect, update, repair or remove koble — the program that connects Claude to EBMS (Koble Systems ERP). Downloads it, saves the EBMS serial number, which companies the agent may use, a test company and a username for each, has the user enter each company's password privately, connects Claude Desktop and Claude Code, and runs its health check. Use whenever someone wants to set up, install, connect or update Koble or EBMS for Claude, when the ebms_* tools are missing or failing to sign in, or when they ask whether their EBMS connection is working — "set up Koble", "connect Claude to EBMS", "koble isn't working", "update koble", "uninstall Koble".
 ---
 
 # Set up koble
@@ -23,7 +23,7 @@ to run anything. Instead:
    `koble doctor` in a terminal and paste the result.
 2. If it is not, give them the one line for their system and say what it does (downloads the
    koble program from github.com/koblesystems/koble-mcp, checks it, and asks for the EBMS serial
-   number, a test company, their username and password):
+   number, which companies to use, a test company, and a username and password for each):
    - Windows, in PowerShell: `irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex`
    - macOS or Linux, in Terminal: `curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash`
 3. Tell them to quit Claude Desktop completely (tray icon or menu → Quit) and reopen it
@@ -63,21 +63,29 @@ off Windows security settings.
 
 ## 3. Save the settings
 
-Ask the user for three things, in one message:
+First ask for **the EBMS serial number**, the number at the start of their `…koblesystems.dev`
+address (don't repeat it back in full), and list what it reaches:
 
-1. **The EBMS serial number**, the number at the start of their `…koblesystems.dev` address.
-   Don't repeat it back in full.
-2. **A test company**, if they have one, for trying things out. While set, every write can reach
-   only that company. Recommend it for a first setup. `none` allows writes to every company.
-3. **Their EBMS username.**
+```bash
+koble companies --serial <serial>
+```
+
+It saves nothing; a wrong serial shows up at once. Show the user the companies it printed and ask, in one message:
+
+1. **Which companies the agent may use.** Only these are visible to it; a company added to the
+   serial later stays off until they add it.
+2. **A test company**, one of those, for trying things out. While set, every write can reach
+   only that company. Recommend it for a first setup. `none` allows writes to every enabled one.
+3. **Their EBMS username** — the same for every company, or one per company if they differ.
 
 Then run:
 
 ```bash
-koble setup --serial <serial> --username <username> --sandbox <company or none> --skip-password --yes
+koble setup --serial <serial> --companies <ID,ID> --sandbox <company or none> --username <username> --skip-password --yes
 ```
 
-It lists the companies the serial reaches, so a wrong serial shows up at once. It then connects
+`--username` saves the same username for every company; where one differs, the user changes it
+when `koble login` asks for that company. It then connects
 every AI app it finds (Claude Desktop, Claude Code, Codex, Cursor, VS Code, Gemini CLI, Windsurf),
 backing up each config first, and copies the skills into Claude Code's skills folder. To choose
 the apps, add `--apps claude-desktop,claude-code,codex` (any of `claude-desktop`, `claude-code`,
@@ -87,10 +95,21 @@ the apps, add `--apps claude-desktop,claude-code,codex` (any of `claude-desktop`
 
 Tell the user, in these words or close to them:
 
-> Open a terminal window (on Windows, PowerShell) and run `koble login`. Type your EBMS password
-> when it asks; nothing will show as you type. It checks the password with EBMS before saving it.
+> Open a terminal window (on Windows, PowerShell) and run `koble login`. It asks for your username
+> and password for each company in turn; nothing shows as you type the password. It checks each
+> one with EBMS before saving it.
 
-Wait until they say it's done. `koble login` prints "Signed in to …" when it worked.
+Wait until they say it's done. `koble login` prints "<company>: signed in as …" for each one that
+worked. `koble login COF` signs in to just that company.
+
+## Companies later
+
+- `koble companies` lists the companies on the serial, which are enabled, and which still need a
+  login. Run it and read it to the user.
+- `koble companies add <ID>` enables one; the user then runs `koble login <ID>` in their terminal.
+- `koble companies remove <ID>` disables one and forgets its password. The test company cannot be
+  removed until another is chosen with `koble setup`.
+- After any change, the user restarts the AI apps (quits Claude Desktop completely).
 
 ## 5. Check everything
 
@@ -124,7 +143,8 @@ Code. The first failure is usually the cause of the rest. Common ones:
 |---|---|
 | Settings: none saved | step 3 |
 | EBMS: company list not reachable | Check the serial number and the internet connection. |
-| Password: not stored, or Sign-in failing | The user runs `koble login`. |
+| Sign-in <company>: no login, no password, or failing | The user runs `koble login <company>`. |
+| Not enabled: <companies> | Only if the user wants the agent to see them: `koble companies add <ID>`. |
 | Any app: not connected, or runs something else | `koble connect` |
 | Claude Desktop: connected, but has not started it | The user quits Claude Desktop completely (tray icon or menu → Quit) and reopens it. |
 | Claude Desktop: config is not valid JSON | Don't edit it yourself. Show the user the path and ask them to fix or move the file, then `koble connect`. |

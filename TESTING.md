@@ -9,9 +9,10 @@ Follow the README's **Install** section for your system. On Windows that is one 
 Setup asks for:
 
 - the EBMS serial number;
+- which companies the agent may use;
 - the test company;
-- your username;
-- your password, typed hidden and stored in the system's credential store.
+- your username and password for each company, the password typed hidden and stored in the
+  system's credential store.
 
 Then run:
 
