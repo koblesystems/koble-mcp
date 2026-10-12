@@ -37,7 +37,7 @@ fi
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 base="https://github.com/$repo/releases/download/$version"
-say "Downloading koble $version for $os-$arch…"
+say "Downloading koble ${version} for ${os}-${arch}..."
 curl -fsSL -o "$tmp/$asset" "$base/$asset" || fail "release $version has no $asset"
 curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt" || fail "release $version has no checksums.txt"
 
