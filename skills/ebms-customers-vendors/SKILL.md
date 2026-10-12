@@ -28,8 +28,8 @@ each reference.
 3. **One write at a time, each with a yes**, and report what EBMS stored — from
    `verification.rows`, not from what you sent.
 4. **The folder is required, comes first, and sets the defaults.** Put `TREE_ID` as the
-   **first** field of every create body: EBMS reads the folder before anything else, and a body
-   with `TREE_ID` later can fail. Ask which folder when it is not obvious,
+   **first** field of every create body: EBMS reads the folder before anything else, and a vendor
+   create with the name before `TREE_ID` fails ("Could not find child APCONTACTS record"). Ask which folder when it is not obvious,
    and list them by name (`ARCUSTRE` / `APVENTRE`, `TREE_DESCR`). Defaults come from the folder
    **only when the record is created**; moving it later keeps its old price level and terms.
 5. **Company names go in `L_NAME`, with `F_NAME` left blank.** People: first name in `F_NAME`,
@@ -51,10 +51,9 @@ each reference.
 
 Each folder can have a **default ID method** (set on the folder's defaults in EBMS, e.g. "first 3
 letters of last name and first 3 letters of first name"). With one, EBMS generates the ID when
-the create leaves `ID` out. **Without one, a create that carries a name fails** with 422 "Could
-not find child APCONTACTS record" (or the customer equivalent) and saves nothing — a misleading
-message for a missing setting. The API does not show which folders have a method, so the create
-itself is the test: see the vendor and customer references for what to do when it fails.
+the create leaves `ID` out. Without one, a create with no `ID` tries to save a blank ID. The API
+does not show which folders have a method. SBX's customer folders have one; its vendor folders
+do not — so customers may leave `ID` out, and vendors always send one (see the references).
 
 ## Folders
 
