@@ -1,24 +1,30 @@
 /**
  * `koble` — the command people install. `koble setup` once; after that Claude starts `koble mcp`.
  */
-import { connect, doctor, help, login, plugin, setup, uninstall, update, version, type Flags } from "./src/cli/commands.js";
+import { companiesCommand, connect, doctor, help, login, plugin, setup, uninstall, update, version, type Flags } from "./src/cli/commands.js";
 import { storedEnv } from "./src/cli/store.js";
 import { configure } from "./src/config.js";
 import { startServer } from "./src/server.js";
 
-function parseFlags(args: string[]): Flags {
+/** --name value, --name=value and --switch; words that are not flags are kept, space-separated, in "_". */
+export function parseFlags(args: string[]): Flags {
     const flags: Flags = {};
+    const words: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
         const arg = args[i] ?? "";
-        if (!arg.startsWith("--")) continue;
+        if (!arg.startsWith("--")) {
+            if (arg.trim()) words.push(arg.trim());
+            continue;
+        }
         const [key = "", inline] = arg.slice(2).split("=", 2);
         const next = args[i + 1];
         if (inline !== undefined) flags[key] = inline;
-        else if (["serial", "username", "sandbox", "apps"].includes(key) && next !== undefined && !next.startsWith("--")) {
+        else if (["serial", "username", "sandbox", "apps", "companies"].includes(key) && next !== undefined && !next.startsWith("--")) {
             flags[key] = next;
             i += 1;
         } else flags[key] = true;
     }
+    if (words.length) flags["_"] = words.join(" ");
     return flags;
 }
 
@@ -34,6 +40,8 @@ async function main(): Promise<number> {
             return setup(flags);
         case "login":
             return login(flags);
+        case "companies":
+            return companiesCommand(flags);
         case "connect":
             return connect(flags);
         case "doctor":

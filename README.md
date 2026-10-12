@@ -15,9 +15,11 @@ It is two things in one install:
 ## Install
 
 One command downloads the `koble` program (checked against the release's checksums), then
-`koble setup` asks for your EBMS serial number, a test company, your username and your password,
-checks that they work, stores the password in your system's credential store, and connects the AI
-apps you choose from the ones it finds:
+`koble setup` asks for your EBMS serial number, lists the companies it reaches and has you choose
+which ones the agent may use, asks for a test company, then a username and password for each
+company. It checks each login works, stores the passwords in your system's credential store, and
+connects the AI apps you choose from the ones it finds. Later, `koble companies` shows and changes
+which companies are enabled, and `koble login <company>` signs in to one again:
 
 | App | What koble sets up |
 |---|---|
@@ -84,8 +86,8 @@ claude plugin install koble-mcp@koblesystems
 ```
 
 and ask Claude to **"set up Koble"** (or run `/koble-mcp:koble-setup`): it installs the program,
-saves your settings, and has you type the password into `koble login` yourself — the password
-never goes through the chat.
+saves your settings, and has you type each company's password into `koble login` yourself — a
+password never goes through the chat.
 
 ### Let an AI agent install it
 
