@@ -36,9 +36,9 @@ What EBMS does with it (verified):
   report whatever comes back, and offer to change it if it reads badly.
   This needs the folder to have a default ID method (SBX's customer folders all do). **Always check
   the `ID` in `verification.rows`:** if it is blank, the folder has no method — say so, offer to
-  delete that customer (with a yes), and create it again with an `ID` the user chooses. If the
-  create fails with a "duplicate key … contact" error, nothing was saved and the cause is the
-  same: ask for an `ID`.
+  delete that customer (with a yes), and create it again with an `ID` the user chooses. A
+  "duplicate key … contact" error, seen for vendors when a blank-ID record already exists,
+  would mean the same thing here: nothing was saved; ask for an `ID`.
 - **The folder's defaults are copied in**: price level (`IN_LEVEL`), charge and discount terms,
   which payment methods are allowed, shipping method, freight formula, mailing and email lists.
   A Wholesale folder gives a Wholesale price level.

@@ -77,13 +77,16 @@ matches to the top yourself.
 
 Bound actions never go through `ebms_write` — see `ebms_command` below.
 
-Three things the server refuses outright, before anything is sent:
+Four things the server refuses outright, before anything is sent:
 
 - **`PROCESS` anywhere in the body, at any depth.** Posting or unprocessing a document is done
   by a person in EBMS, not through this server. Do not look for a way around it.
 - **A `POST` whose `EXTERNALID` already exists** on `ARINV`, `APINV`, `INMFG`, `TASK`, `ARCUST` or `APVENDOR`. You get
   the existing record back. That is the guard working: read it and continue from it rather than
   creating a second one.
+- **A vendor (`APVENDOR`) `POST` without an `ID`.** EBMS generates one only when the vendor
+  folder has an ID method, which the API cannot show; otherwise it saves a blank ID. Send one —
+  the **ebms-customers-vendors** skill says how to choose it.
 - **A malformed request** — a keyed POST, a body on a DELETE, a PATCH with no key.
 
 ### Mark what you create

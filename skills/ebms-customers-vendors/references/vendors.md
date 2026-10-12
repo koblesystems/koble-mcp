@@ -34,27 +34,33 @@ ebms_write  method: POST   path: APVENDOR
 
 **Always send an `ID`, even if the user believes the folder generates one.** EBMS generates a
 vendor ID only when the folder has a default ID method, and the API cannot show whether it has.
-Without one, a create with no `ID` does not fail cleanly: EBMS saves a vendor whose ID is blank,
-which nothing can look up. (On SBX two such attempts were stopped only because a blank-ID vendor
-already existed, tripping the unique indexes `idx_fromcb_apvendor_t1/t2_contact__unique`; in a
-folder without one, the create would have returned 200.) If a vendor create ever comes back with
-a blank `ID` in `verification.rows`, say so at once and offer to delete it, with a yes.
+Without one, a create with no `ID` tries to save a vendor whose ID is blank: no lookup by ID finds
+it, only its AUTOID or `ID eq ''`. (On SBX two such attempts were stopped only because a blank-ID
+vendor already existed, tripping the unique indexes `idx_fromcb_apvendor_t1/t2_contact__unique`;
+otherwise they would most likely have saved.) The koble server refuses a vendor create without an
+`ID`. If a blank `ID` ever comes back in `verification.rows`, say so at once and offer to delete
+it, with a yes.
 
 The ID is a short mnemonic of the name in capitals, like the existing ones (`BIKEPARTS`,
 `FARMCO`), at most 10 characters; check it is free (`ID eq '…'`) and let the user change it.
 
-**If EBMS answers "Could not find child APCONTACTS record"**, the name probably came before
-`TREE_ID` (on 2026-10-05 a body ordered `ID, L_NAME, …, TREE_ID` failed this way; on 2026-10-12
-the same fields with `TREE_ID` first saved). Before anything else, search `EXTERNALID eq '…'` and
-`ID eq '…'` to be sure nothing was saved; then show the body with `TREE_ID` first and ask again.
-If that fails too, the two-step route works (verified 2026-10-05), each step with its own yes:
-POST `{"TREE_ID": "8", "ID": "BIKEPARTS", "EXTERNALID": …}`, then PATCH the rest onto the AUTOID
-it returns. Until the PATCH lands the vendor has no name: if it fails, read the vendor back and
-ask before sending it again, and if the user stops there, say the vendor exists unnamed.
+**If EBMS answers "Could not find child APCONTACTS record"**, first search `EXTERNALID eq '…'`
+and `ID eq '…'` to be sure nothing was saved. The usual cause is the name coming before `TREE_ID`
+(on 2026-10-05 a body ordered `ID, L_NAME, TREE_ID, …` failed this way; on 2026-10-12 one with
+`TREE_ID` first saved). If your body had the name first, show it with `TREE_ID` first and ask
+again. If it already had `TREE_ID` first, don't resend it: use the two-step route, each step with
+its own yes — POST only `{"TREE_ID": "8", "ID": "BIKEPARTS", "EXTERNALID": …}` (verified
+2026-10-05 with `ID` before `TREE_ID`; with no name in the body, the order did not matter), then
+PATCH the rest onto the AUTOID it returns. Until the PATCH lands
+the vendor has no name: if it fails, read the vendor back and ask before sending it again, and if
+the user stops there, say the vendor exists unnamed.
 
-**"This Id already exists"** means another vendor holds that ID (the server already refuses a
-repeat of a create with the same `EXTERNALID`), or a longer ID was cut to 10 characters and
-collided. Search `ID eq '…'`, show the user who holds it, and ask for a different ID.
+**"This Id already exists"**: search `ID eq '…'` and look at the holder. It is yours only if
+its `EXTERNALID` is one you sent in this conversation (a first step of the two-step route that
+went through, or a create whose answer was lost): then continue from it — PATCH the name and the
+rest onto its AUTOID, with a yes — and don't choose another ID. Otherwise it is someone else's
+record, even if it is unnamed or the same company: show it to the user. If it is the vendor they
+meant, there is nothing to create; if not, ask for a different ID.
 
 What EBMS does with it (verified):
 
