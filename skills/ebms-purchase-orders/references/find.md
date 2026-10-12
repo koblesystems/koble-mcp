@@ -21,9 +21,9 @@ ebms_get  path: APVENDOR
 - `MIN_ORDER` is the vendor's minimum order; mention it when an order looks small.
 - Confirm with the user whenever more than one vendor matches.
 
-**Creating a vendor is not done by this skill.** EBMS does **not** assign vendor IDs: a POST with
-no `ID` is accepted and creates a vendor whose natural key is the empty string — a corrupt record,
-not an auto-numbered one. If a vendor is missing, say so and let the user add it in EBMS.
+**Creating a vendor is not done by this skill.** If a vendor is missing, say so and use the
+**ebms-customers-vendors** skill, which creates it with the user's yes (it always sends an `ID`:
+EBMS does not reliably assign one).
 
 ## What a vendor charges for a product — `INVENDOR`
 
