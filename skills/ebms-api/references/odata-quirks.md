@@ -116,20 +116,19 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
   `COST` counts in `SUBTOTAL` immediately. Send `DESCR`, `COST` and `ACCOUNT` only: a `UNIT_VIS`
   of 0 is overwritten with the amount.
 - **`APVENDOR` generates an ID only when the folder has a default ID method**, which the API
-  cannot show (only `INVENTRE` publishes `CRID_TYPE`/`CRID_VALUE`). Otherwise a POST with no `ID`
-  saves a vendor whose natural key is the **empty string**, a record no lookup will find. Always
-  send one: user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`). `APINV` *does* auto-number, assigning `INVOICE` "PO#174" and `PO_NO` "174", and so does
-  `ARCUST`, from the folder's naming rule: `SMIJOE`, then `SMIJOE1`.
-- **`TREE_ID` must be the first field of a customer or vendor create body.** A vendor create
-  with the name before `TREE_ID` fails with 422 "APCONTACTS: Could not find child APCONTACTS
-  record" and saves nothing (a body ordered `ID, L_NAME, …, TREE_ID`, SBX 2026-10-05); with
-  `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}` saves in one POST (SBX, 1.8.184, 2026-10-12). The
-  ordering was found by Koble. Both entities need `TREE_ID`: a vendor
-  without one fails with "Could not find vendor defaults".
-- **Without a folder ID method, a create with no `ID` saves a blank ID.** In two SBX vendor
-  folders the attempt was stopped only by an existing blank-ID vendor tripping the unique indexes
-  `idx_fromcb_apvendor_t1_contact__unique` / `t2` (folder path + first contact + ID); elsewhere it
-  would have saved. Send an ID for vendors; for customers, check the `ID` that comes back.
+  cannot show (only `INVENTRE` publishes `CRID_TYPE`/`CRID_VALUE`). Without one, a POST with no
+  `ID` tries to save a vendor with a blank ID, found only by its AUTOID or `ID eq ''` (seen
+  2026-09: one was saved; 2026-10-12: two attempts were stopped only by an existing blank-ID
+  vendor tripping `idx_fromcb_apvendor_t1/t2_contact__unique`). The koble server refuses a vendor
+  POST without an `ID`. Vendor IDs are user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`).
+  `APINV` auto-numbers (`INVOICE` "PO#174", `PO_NO` "174"), and so does `ARCUST` where its folder
+  has a method (SBX's do): `SMIJOE`, then `SMIJOE1`.
+- **Put `TREE_ID` first in a customer or vendor create body.** A vendor body with `L_NAME` before
+  `TREE_ID` fails with 422 "APCONTACTS: Could not find child APCONTACTS record" and saves nothing
+  (`ID, L_NAME, TREE_ID, …`, SBX 2026-10-05); with `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}`
+  saves in one POST (2026-10-12). `{ID, TREE_ID}` with no name also saves. Customers were created
+  with the name first and saved; `TREE_ID` first is the safe order for both. The ordering was found
+  by Koble. Both need `TREE_ID`: a vendor without one fails with "Could not find vendor defaults".
 - **A child row's `@id` in a `<Nav>@delta` is the plain AUTOID** (`"6HH5TPOJG0R3E1A1"`). The
   entity-qualified form (`"APCONTACTS('…')"`) is ignored with a 200.
 - **`APINV.DESCR_H` truncates at 30 characters** without complaint.

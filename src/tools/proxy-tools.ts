@@ -53,6 +53,11 @@ function checkShape(method: "POST" | "PATCH" | "DELETE", path: string, body: unk
     if (method === "POST" && keyed) throw new Error("POST goes to the entity set, e.g. ARINV, not a keyed path. Bound actions use ebms_command.");
     const processKeys = findProcessKeys(body);
     if (processKeys.length > 0) throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}. Posting or unposting a document is done by a person in EBMS, not through this server.`);
+    // A vendor folder without an ID method saves a vendor whose ID is blank, which no lookup by ID finds.
+    const id = (body as Record<string, unknown> | null)?.["ID"];
+    if (method === "POST" && entityOf(path) === "APVENDOR" && (typeof id !== "string" || id.trim() === "")) {
+        throw new Error("Refused: a new vendor needs an ID. EBMS generates one only when the vendor folder has a default ID method, which the API cannot show; without one it saves a vendor with a blank ID. Send an ID (at most 10 characters).");
+    }
 }
 
 /** Documents already carrying the EXTERNALID a create would use. A second one is the costly mistake. */

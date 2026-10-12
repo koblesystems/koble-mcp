@@ -76,7 +76,7 @@ test("the duplicate check covers every document entity, and nothing else", async
     for (const entity of ["ARINV", "APINV", "INMFG", "TASK", "ARCUST", "APVENDOR"]) {
         fresh();
         script.push(() => json(200, { value: [{ AUTOID: "X1", EXTERNALID: "mcp-1" }] }));
-        const r = await call("ebms_write", { company: "sbx", method: "POST", path: entity, body: { EXTERNALID: "mcp-1" } });
+        const r = await call("ebms_write", { company: "sbx", method: "POST", path: entity, body: { ID: "X", EXTERNALID: "mcp-1" } });
         assert.equal(r.refused, true, entity);
         assert.equal(sent.length, 1, `${entity}: checked, nothing sent`);
     }
@@ -258,4 +258,22 @@ test("failing to sign in before a write is a refusal with nothing sent, not an u
     } finally {
         globalThis.fetch = real;
     }
+});
+
+test("a vendor create without an ID is refused before anything is sent", async () => {
+    for (const body of [{ TREE_ID: "4", L_NAME: "Bike Parts Co" }, { TREE_ID: "4", ID: "  ", L_NAME: "Bike Parts Co" }]) {
+        fresh();
+        const r = await call("ebms_write", { company: "sbx", method: "POST", path: "APVENDOR", body });
+        assert.equal(r.refused, true);
+        assert.match(String((r.error as { message?: string } | undefined)?.message ?? ""), /needs an ID/);
+        assert.equal(sent.length, 0, "nothing reached EBMS");
+    }
+    fresh();
+    script.push(() => json(201, { AUTOID: "V1", ID: "BIKEPARTS" }));
+    await call("ebms_write", { company: "sbx", method: "POST", path: "APVENDOR", body: { TREE_ID: "4", ID: "BIKEPARTS" }, verify: false });
+    assert.deepEqual(sent.map((s) => s.method), ["POST"], "with an ID it goes through");
+    fresh();
+    script.push(() => json(201, { AUTOID: "C1", ID: "SMIJOE" }));
+    await call("ebms_write", { company: "sbx", method: "POST", path: "ARCUST", body: { TREE_ID: "24", F_NAME: "Joe", L_NAME: "Smith" }, verify: false });
+    assert.deepEqual(sent.map((s) => s.method), ["POST"], "customers may leave the ID to EBMS");
 });

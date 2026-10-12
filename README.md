@@ -168,7 +168,7 @@ Testing it? [TESTING.md](TESTING.md) has a checklist and what to send back.
 |---|---|---|
 | `ebms_companies` | Lists the companies the serial reaches — ID, name, version, and whether writes are allowed. Needs no credentials. | — |
 | `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | anything but `ENTITY` or `ENTITY('key')`; a key containing `/ \ ? %` or `..` |
-| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV`/`INMFG`/`TASK`/`ARCUST`/`APVENDOR` whose `EXTERNALID` already exists; the same path rules |
+| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV`/`INMFG`/`TASK`/`ARCUST`/`APVENDOR` whose `EXTERNALID` already exists; a vendor (`APVENDOR`) POST without an `ID`; the same path rules |
 | `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); any action that is not on the allow-list (`MarkAllAsShipped`, `RecalculateAllPrices`, `CalculateFreight`, `ChangeCustomer` by default); `PROCESS` in the body |
 | `ebms_guide` | Serves the skills: the list, one skill, or one reference file. Lets Claude Desktop use them without uploading anything. | — (read-only; only the files it shipped with) |
 | `mrp_plan`, `mrp_item_view`, `po_from_csv`, `batches_from_csv` | Planning and worksheet reading (see *Planning*). | — (read-only) |

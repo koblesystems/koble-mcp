@@ -16,8 +16,8 @@ stop.
 | Add or change a customer | `references/customers.md` |
 | Add or change a vendor | `references/vendors.md` |
 
-Verified on SBX (EBMS 1.8.184) with ZTEST customers and vendors that were created, changed and
-deleted, deletions verified: customers on 2026-10-05, vendors on 2026-10-05 and 2026-10-12. What was not tried is listed at the end of
+Verified on SBX (EBMS 1.8.184) with ZTEST customers and vendors that were created, changed
+and deleted, deletions verified: customers on 2026-10-05, vendors on 2026-10-05 and 2026-10-12. What was not tried is listed at the end of
 each reference.
 
 ## Ground rules
@@ -28,9 +28,9 @@ each reference.
 3. **One write at a time, each with a yes**, and report what EBMS stored — from
    `verification.rows`, not from what you sent.
 4. **The folder is required, comes first, and sets the defaults.** Put `TREE_ID` as the
-   **first** field of every create body: EBMS reads the folder before anything else, and a
-   vendor create with the name before `TREE_ID` fails ("Could not find child APCONTACTS
-   record"). Ask which folder when it is not obvious,
+   **first** field of every create body. A vendor create with the name before `TREE_ID` fails
+   ("Could not find child APCONTACTS record"); `TREE_ID` first always works. (Customers saved
+   with the name first in testing, but put `TREE_ID` first anyway.) Ask which folder when it is not obvious,
    and list them by name (`ARCUSTRE` / `APVENTRE`, `TREE_DESCR`). Defaults come from the folder
    **only when the record is created**; moving it later keeps its old price level and terms.
 5. **Company names go in `L_NAME`, with `F_NAME` left blank.** People: first name in `F_NAME`,
@@ -39,8 +39,9 @@ each reference.
    `ZTSKL71323`, and two long IDs can then collide. Count before you send one.
 7. **Prefer inactive to delete.** A customer or vendor with history should be marked
    `INACTIVE: true`; delete only a record created by mistake, and only with a yes.
-   **Never send a vendor create without an `ID`**, and never a customer create with neither a
-   name nor an `ID`: EBMS can save a record with a blank ID, which nothing can look up.
+   **Never send a vendor create without an `ID`** (the server refuses one). A customer create may
+   leave the `ID` to EBMS, but check the `ID` that comes back: in a folder without an ID method it
+   is blank, and only the record's AUTOID finds it.
 8. **Address a record by quoted AUTOID**: `ARCUST('<AUTOID>')`, `APVENDOR('<AUTOID>')`.
 9. **Give every create an `EXTERNALID`** (`claude-<date>-<short id>`, as in ebms-api). The server
    then refuses a second create with the same one, and after an `uncertain` result it is how you
