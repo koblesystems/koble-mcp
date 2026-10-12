@@ -51,3 +51,6 @@ jobs:
       - name: install.sh passes shellcheck
         if: runner.os == 'Linux'
         run: shellcheck scripts/install.sh
+      - name: install.sh is plain ASCII (macOS bash 3.2 reads "$var…" as a longer variable name in a UTF-8 terminal)
+        if: runner.os == 'Linux'
+        run: "! LC_ALL=C grep -n '[^ -~\t]' scripts/install.sh"
