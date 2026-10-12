@@ -261,9 +261,9 @@ test("failing to sign in before a write is a refusal with nothing sent, not an u
 });
 
 test("a vendor create without an ID is refused before anything is sent", async () => {
-    for (const body of [{ TREE_ID: "4", L_NAME: "Bike Parts Co" }, { TREE_ID: "4", ID: "  ", L_NAME: "Bike Parts Co" }]) {
+    for (const [path, body] of [["APVENDOR", { TREE_ID: "4", L_NAME: "Bike Parts Co" }], ["APVENDOR", { TREE_ID: "4", ID: "  ", L_NAME: "Bike Parts Co" }], ["apvendor", { TREE_ID: "4", L_NAME: "Bike Parts Co" }], ["APVENDOR", { TREE_ID: "4", ID: 123 }]] as const) {
         fresh();
-        const r = await call("ebms_write", { company: "sbx", method: "POST", path: "APVENDOR", body });
+        const r = await call("ebms_write", { company: "sbx", method: "POST", path, body });
         assert.equal(r.refused, true);
         assert.match(String((r.error as { message?: string } | undefined)?.message ?? ""), /needs an ID/);
         assert.equal(sent.length, 0, "nothing reached EBMS");

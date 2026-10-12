@@ -49,16 +49,18 @@ and `ID eq '…'` to be sure nothing was saved. The usual cause is the name comi
 (on 2026-10-05 a body ordered `ID, L_NAME, TREE_ID, …` failed this way; on 2026-10-12 one with
 `TREE_ID` first saved). If your body had the name first, show it with `TREE_ID` first and ask
 again. If it already had `TREE_ID` first, don't resend it: use the two-step route, each step with
-its own yes — POST only `{"ID": "BIKEPARTS", "TREE_ID": "8", "EXTERNALID": …}` (verified
-2026-10-05 in that order), then PATCH the rest onto the AUTOID it returns. Until the PATCH lands
+its own yes — POST only `{"TREE_ID": "8", "ID": "BIKEPARTS", "EXTERNALID": …}` (verified
+2026-10-05 with `ID` before `TREE_ID`; with no name in the body, the order did not matter), then
+PATCH the rest onto the AUTOID it returns. Until the PATCH lands
 the vendor has no name: if it fails, read the vendor back and ask before sending it again, and if
 the user stops there, say the vendor exists unnamed.
 
-**"This Id already exists"**: search `ID eq '…'` and look at the holder. If it is unnamed, or
-it is the same company — most likely a first step of the two-step route that went through, or a
-create whose answer was lost — it is yours: continue from it (PATCH the name and the rest onto its
-AUTOID, with a yes) and don't choose another ID. If it is a different company (or a longer ID was
-cut to 10 characters and collided), show the user who holds it and ask for a different ID.
+**"This Id already exists"**: search `ID eq '…'` and look at the holder. It is yours only if
+its `EXTERNALID` is one you sent in this conversation (a first step of the two-step route that
+went through, or a create whose answer was lost): then continue from it — PATCH the name and the
+rest onto its AUTOID, with a yes — and don't choose another ID. Otherwise it is someone else's
+record, even if it is unnamed or the same company: show it to the user. If it is the vendor they
+meant, there is nothing to create; if not, ask for a different ID.
 
 What EBMS does with it (verified):
 

@@ -39,9 +39,10 @@ each reference.
    `ZTSKL71323`, and two long IDs can then collide. Count before you send one.
 7. **Prefer inactive to delete.** A customer or vendor with history should be marked
    `INACTIVE: true`; delete only a record created by mistake, and only with a yes.
-   **Never send a vendor create without an `ID`** (the server refuses one). A customer create may
-   leave the `ID` to EBMS, but check the `ID` that comes back: in a folder without an ID method it
-   is blank, and only the record's AUTOID finds it.
+   **Never send a vendor create without an `ID`** (the server refuses one), and never a customer
+   create with neither a name nor an `ID`. A customer create may leave the `ID` to EBMS, but check
+   the `ID` that comes back: in a folder without an ID method it is blank, and only the record's
+   AUTOID finds it.
 8. **Address a record by quoted AUTOID**: `ARCUST('<AUTOID>')`, `APVENDOR('<AUTOID>')`.
 9. **Give every create an `EXTERNALID`** (`claude-<date>-<short id>`, as in ebms-api). The server
    then refuses a second create with the same one, and after an `uncertain` result it is how you

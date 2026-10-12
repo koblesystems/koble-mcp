@@ -8,6 +8,7 @@
  *   - any body carrying PROCESS, at any depth
  *   - a POST of a document whose EXTERNALID already exists (a duplicate order is the
  *     costly mistake, and this is the one check a model under time pressure skips)
+ *   - a POST of a vendor without an ID (a folder with no ID method would save a blank one)
  *   - any bound action not on the allow-list (EBMS_ALLOWED_COMMANDS)
  *   - paths that are not a plain entity path; keys are validated and percent-encoded
  */
@@ -53,17 +54,17 @@ function checkShape(method: "POST" | "PATCH" | "DELETE", path: string, body: unk
     if (method === "POST" && keyed) throw new Error("POST goes to the entity set, e.g. ARINV, not a keyed path. Bound actions use ebms_command.");
     const processKeys = findProcessKeys(body);
     if (processKeys.length > 0) throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}. Posting or unposting a document is done by a person in EBMS, not through this server.`);
-    // A vendor folder without an ID method saves a vendor whose ID is blank, which no lookup by ID finds.
+    // A vendor folder without an ID method tries to save a vendor whose ID is blank, which no lookup by ID finds.
     const id = (body as Record<string, unknown> | null)?.["ID"];
-    if (method === "POST" && entityOf(path) === "APVENDOR" && (typeof id !== "string" || id.trim() === "")) {
-        throw new Error("Refused: a new vendor needs an ID. EBMS generates one only when the vendor folder has a default ID method, which the API cannot show; without one it saves a vendor with a blank ID. Send an ID (at most 10 characters).");
+    if (method === "POST" && entityOf(path).toUpperCase() === "APVENDOR" && (typeof id !== "string" || id.trim() === "")) {
+        throw new Error("Refused: a new vendor needs an ID: a non-blank string of at most 10 characters. EBMS generates one only when the vendor folder has a default ID method, which the API cannot show; without one it tries to save a vendor with a blank ID.");
     }
 }
 
 /** Documents already carrying the EXTERNALID a create would use. A second one is the costly mistake. */
 async function findExisting(company: string, entity: string, body: unknown): Promise<unknown[]> {
     const externalId = externalIdOf(body);
-    if (externalId === undefined || !DOCUMENT_ENTITIES.includes(entity)) return [];
+    if (externalId === undefined || !DOCUMENT_ENTITIES.includes(entity.toUpperCase())) return [];
     const found = await request(company, "GET", `${entity}${buildQuery({ filter: `EXTERNALID eq ${odataString(externalId)}`, select: "AUTOID,EXTERNALID", top: 2 })}`);
     return (found.body as { value?: unknown[] } | null)?.value ?? [];
 }
@@ -157,7 +158,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
         {
             description: [
                 "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one.",
-                "Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere or a POST's EXTERNALID already exists.",
+                "Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere, a POST's EXTERNALID already exists, or a vendor (APVENDOR) POST has no ID.",
                 "A 2xx is not proof — EBMS silently ignores unknown @ids and unwritable fields — so the server reads back the fields you sent and returns a verification: ok, mismatches (sent vs stored), problems (a row that never appeared or was not removed), notes (rows EBMS added itself) and the stored rows.",
                 "Treat ok:false as a partly failed write and tell the user.",
                 "If the result says uncertain, read back before resending — a resent create or add duplicates.",
