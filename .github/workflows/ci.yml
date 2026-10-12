@@ -51,6 +51,6 @@ jobs:
       - name: install.sh passes shellcheck
         if: runner.os == 'Linux'
         run: shellcheck scripts/install.sh
-      - name: install.sh is plain ASCII (macOS bash 3.2 reads "$var…" as a longer variable name in a UTF-8 terminal)
+      - name: The installers are plain ASCII (macOS bash 3.2 reads "$var…" as a longer variable name in a UTF-8 terminal; PowerShell 5.1 misreads UTF-8 without a BOM)
         if: runner.os == 'Linux'
-        run: "! LC_ALL=C grep -n '[^ -~\t]' scripts/install.sh"
+        run: "test -f scripts/install.sh && test -f scripts/install.ps1 && ! LC_ALL=C grep -n '[^ -~\t]' scripts/install.sh scripts/install.ps1"
