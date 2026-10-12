@@ -27,7 +27,9 @@ each reference.
    the next free ID (`SMIJOE1`) without a word. Show anything close and ask.
 3. **One write at a time, each with a yes**, and report what EBMS stored — from
    `verification.rows`, not from what you sent.
-4. **The folder is required and sets the defaults.** Ask which folder when it is not obvious,
+4. **The folder is required, comes first, and sets the defaults.** Put `TREE_ID` as the
+   **first** field of every create body: EBMS reads the folder before anything else, and a body
+   with `TREE_ID` later can fail. Ask which folder when it is not obvious,
    and list them by name (`ARCUSTRE` / `APVENTRE`, `TREE_DESCR`). Defaults come from the folder
    **only when the record is created**; moving it later keeps its old price level and terms.
 5. **Company names go in `L_NAME`, with `F_NAME` left blank.** People: first name in `F_NAME`,
@@ -36,6 +38,7 @@ each reference.
    `ZTSKL71323`, and two long IDs can then collide. Count before you send one.
 7. **Prefer inactive to delete.** A customer or vendor with history should be marked
    `INACTIVE: true`; delete only a record created by mistake, and only with a yes.
+   And never send a create with neither a name nor an ID: EBMS saves a record with a blank ID.
 8. **Address a record by quoted AUTOID**: `ARCUST('<AUTOID>')`, `APVENDOR('<AUTOID>')`.
 9. **Give every create an `EXTERNALID`** (`claude-<date>-<short id>`, as in ebms-api). The server
    then refuses a second create with the same one, and after an `uncertain` result it is how you
@@ -43,6 +46,15 @@ each reference.
    resend a create blind: a customer's ID is generated, so a resend makes `SMIJOE1`. If a
    different, legitimate record really shares an outside system's ID, give it its own
    `EXTERNALID`.
+
+## The folder's ID method
+
+Each folder can have a **default ID method** (set on the folder's defaults in EBMS, e.g. "first 3
+letters of last name and first 3 letters of first name"). With one, EBMS generates the ID when
+the create leaves `ID` out. **Without one, a create that carries a name fails** with 422 "Could
+not find child APCONTACTS record" (or the customer equivalent) and saves nothing — a misleading
+message for a missing setting. The API does not show which folders have a method, so the create
+itself is the test: see the vendor and customer references for what to do when it fails.
 
 ## Folders
 

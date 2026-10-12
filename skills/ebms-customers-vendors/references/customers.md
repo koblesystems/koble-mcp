@@ -20,7 +20,7 @@ the address, phone and email. Then show the body and ask before sending.
 
 ```
 ebms_write  method: POST   path: ARCUST
-            body: {"F_NAME": "Joe", "L_NAME": "Smith", "TREE_ID": "24",
+            body: {"TREE_ID": "24", "F_NAME": "Joe", "L_NAME": "Smith",
                    "ADDRESS1": "100 Main St", "ZIP": "17527",
                    "PHONE": "(717) 555-0101", "EMAIL": "joe@example.com",
                    "EXTERNALID": "claude-2026-10-05-c1"}
@@ -34,6 +34,10 @@ What EBMS does with it (verified):
   taken (`SMIJOE1`). Report the ID it chose. Send an `ID` only if the user asks for a particular
   one, at most 10 characters. What it generates for a company (last name only) was not tried:
   report whatever comes back, and offer to change it if it reads badly.
+  This needs the folder to have a default ID method (SBX's customer folders all do). If a
+  create fails with a "Could not find child … record" message, the folder has none: send an `ID`
+  of the user's choosing, or have them set the method on the folder in EBMS and try again (not
+  yet seen for customers; the same thing happens for vendors).
 - **The folder's defaults are copied in**: price level (`IN_LEVEL`), charge and discount terms,
   which payment methods are allowed, shipping method, freight formula, mailing and email lists.
   A Wholesale folder gives a Wholesale price level.
