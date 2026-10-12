@@ -137,5 +137,9 @@ export function externalIdOf(body: unknown): string | undefined {
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
-/** Entities that carry an EXTERNALID and where a duplicate create is the costly mistake. */
-export const DOCUMENT_ENTITIES = ["ARINV", "APINV", "INMFG", "TASK", "ARCUST", "APVENDOR"];
+/**
+ * Entities that carry an EXTERNALID and where a duplicate create is the costly mistake. Products
+ * and workers are here for imports: a duplicate natural key is refused by EBMS itself, but a
+ * create resent after a timeout is caught only by its EXTERNALID.
+ */
+export const DOCUMENT_ENTITIES = ["ARINV", "APINV", "INMFG", "TASK", "ARCUST", "APVENDOR", "INVENTRY", "PYEMP"];

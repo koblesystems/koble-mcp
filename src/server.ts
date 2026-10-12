@@ -10,6 +10,7 @@ import { discoverCompanies } from "./ebms/companies.js";
 import { loadGuide, skillSummary } from "./guide.js";
 import { registerPrompts } from "./prompts.js";
 import { registerGuideTools } from "./tools/guide-tools.js";
+import { registerImportTools } from "./tools/import-tools.js";
 import { registerMrpTools } from "./tools/mrp-tools.js";
 import { registerProxyTools } from "./tools/proxy-tools.js";
 import { registerWorksheetTools } from "./tools/worksheet-tools.js";
@@ -47,7 +48,7 @@ export async function startServer(): Promise<void> {
         { name: "koble-mcp", version: VERSION },
         {
             instructions:
-                "Thin proxy over EBMS OData, plus read-only planning tools. " +
+                "Thin proxy over EBMS OData, plus read-only planning and import tools. " +
                 "The procedures live in skills. If the matching skill is not already loaded in this app, call ebms_guide with its name before any task beyond a single read, and follow it. " +
                 `Skills: ${skillSummary(guide)}. ` +
                 "PROCESS is never accepted, and ebms_command runs only a short allow-list of actions; a POST whose EXTERNALID already exists is refused; a 2xx is not proof a write applied — read back. " +
@@ -61,6 +62,7 @@ export async function startServer(): Promise<void> {
     registerProxyTools(register);
     registerMrpTools(register);
     registerWorksheetTools(register);
+    registerImportTools(register);
     registerGuideTools(register, guide);
     registerPrompts((name, config, callback) => server.registerPrompt(name, config as never, callback as never));
 

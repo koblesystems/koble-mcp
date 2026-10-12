@@ -6,7 +6,7 @@
  * back are the skills' job. What the server refuses on its own:
  *   - any write or command to a company that is not configured (or, in testing, not the sandbox)
  *   - any body carrying PROCESS, at any depth
- *   - a POST of a document whose EXTERNALID already exists (a duplicate order is the
+ *   - a POST of a document, customer, vendor, product or worker whose EXTERNALID already exists (a duplicate order is the
  *     costly mistake, and this is the one check a model under time pressure skips)
  *   - a POST of a vendor without an ID (a folder with no ID method would save a blank one)
  *   - any bound action not on the allow-list (EBMS_ALLOWED_COMMANDS)
@@ -158,7 +158,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
         {
             description: [
                 "Write to EBMS: POST creates a record (documents take their lines nested as Details), PATCH updates one by quoted AUTOID (lines via a Details@delta array), DELETE removes one.",
-                "Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere, a POST's EXTERNALID already exists, or a vendor (APVENDOR) POST has no ID.",
+                "Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere, a POST's EXTERNALID already exists (orders, POs, batches, tasks, customers, vendors, products, workers), or a vendor (APVENDOR) POST has no ID.",
                 "A 2xx is not proof — EBMS silently ignores unknown @ids and unwritable fields — so the server reads back the fields you sent and returns a verification: ok, mismatches (sent vs stored), problems (a row that never appeared or was not removed), notes (rows EBMS added itself) and the stored rows.",
                 "Treat ok:false as a partly failed write and tell the user.",
                 "If the result says uncertain, read back before resending — a resent create or add duplicates.",
