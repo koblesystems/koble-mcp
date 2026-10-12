@@ -81,7 +81,7 @@ Four things the server refuses outright, before anything is sent:
 
 - **`PROCESS` anywhere in the body, at any depth.** Posting or unprocessing a document is done
   by a person in EBMS, not through this server. Do not look for a way around it.
-- **A `POST` whose `EXTERNALID` already exists** on `ARINV`, `APINV`, `INMFG`, `TASK`, `ARCUST` or `APVENDOR`. You get
+- **A `POST` whose `EXTERNALID` already exists** on `ARINV`, `APINV`, `INMFG`, `TASK`, `ARCUST`, `APVENDOR`, `INVENTRY` or `PYEMP`. You get
   the existing record back. That is the guard working: read it and continue from it rather than
   creating a second one.
 - **A vendor (`APVENDOR`) `POST` without an `ID`.** EBMS generates one only when the vendor
@@ -91,7 +91,7 @@ Four things the server refuses outright, before anything is sent:
 
 ### Mark what you create
 
-Put an `EXTERNALID` on every document, customer and vendor you create. It is settable on a POST and filterable, so it
+Put an `EXTERNALID` on every document, customer, vendor, product and worker you create. It is settable on a POST and filterable, so it
 is how you find out whether a create that timed out actually happened — and it is what makes the
 duplicate guard work. Use something traceable and unique, e.g. `claude-2026-09-21-a1`.
 

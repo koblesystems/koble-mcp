@@ -41,6 +41,8 @@ Quit and reopen Claude Desktop first (or start a new Claude Code session). Use t
 | 8 | "Make a task for <worker> to <something> by Friday" | It offers the task types, asks, creates it, and reports the task ID. |
 | 8b | "Add a customer: <a made-up name> in <a folder>, with a ZIP" | It searches first, asks, creates it, and reports the ID EBMS generated and the city it filled in. |
 | 9 | "Enter a sales order for <customer>: 2 of <product>" | Asks, creates, reports the order number and EBMS's prices. |
+| 9b | Make a 10-row customer CSV with three planted mistakes (a blank name, a folder that doesn't exist, the same customer twice) and say "review this file before we load it" | It lists the mapping and exactly those three rows, grouped, and saves an exceptions file with only those three rows beside yours. Nothing is created. |
+| 9c | "Import it" | It shows three sample customers and asks **once** for the file; it creates the seven good ones. Ask again: it reports all seven skipped as already created. |
 | 10 | "Delete everything you just created" | It lists them and asks before each delete. |
 
 ## 3. Things to try breaking

@@ -88,6 +88,6 @@ test("uncertain means a timeout, a network failure, a 408 or a 5xx — never a 4
     assert.equal(new EbmsError("x", 0, { kind: "refused" }).uncertain, false);
 });
 
-test("customers and vendors get the duplicate-EXTERNALID guard, as documents do", () => {
-    for (const entity of ["ARCUST", "APVENDOR", "ARINV", "APINV"]) assert.ok(DOCUMENT_ENTITIES.includes(entity), entity);
+test("customers, vendors, products and workers get the duplicate-EXTERNALID guard, as documents do", () => {
+    for (const entity of ["ARCUST", "APVENDOR", "INVENTRY", "PYEMP", "ARINV", "APINV"]) assert.ok(DOCUMENT_ENTITIES.includes(entity), entity);
 });

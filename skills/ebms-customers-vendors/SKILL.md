@@ -16,6 +16,9 @@ stop.
 | Add or change a customer | `references/customers.md` |
 | Add or change a vendor | `references/vendors.md` |
 
+For many customers or vendors at once, from a CSV or Excel file, use **ebms-import**; it applies
+this skill's rules to every row.
+
 Verified on SBX (EBMS 1.8.184) with ZTEST customers and vendors that were created, changed
 and deleted, deletions verified: customers on 2026-10-05, vendors on 2026-10-05 and 2026-10-12. What was not tried is listed at the end of
 each reference.
