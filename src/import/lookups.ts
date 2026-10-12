@@ -15,6 +15,14 @@ import { keyOf } from "./validate.js";
 type Row = Record<string, unknown>;
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "");
 const upper = (value: unknown): string => text(value).toUpperCase();
+/**
+ * Rows whose field is one of `ids`, ignoring case. EBMS compares `eq` case-sensitively (on COF
+ * `ID eq 'padep'` finds nothing while `PADEP` exists) and `tolower(ID) eq …` fails outright, but
+ * `toupper(ID) eq …` works, so keys are matched upper-cased.
+ */
+const readByIdsAnyCase = (company: string, entity: string, field: string, ids: readonly string[], select: string): Promise<Row[]> =>
+    readByIds(company, entity, `toupper(${field})`, ids.map((id) => id.toUpperCase()), select);
+
 /** A folder row EBMS keeps for a folder's defaults, e.g. ID "($)   26"; never a real record. */
 const isDefaultsRow = (value: unknown): boolean => text(value).startsWith("($)");
 
@@ -61,7 +69,7 @@ async function tryRead<T>(what: string, notes: string[], read: () => Promise<T>,
     }
 }
 
-/** Records whose EXTERNALID starts with this import's prefix: one read, or exact reads where startswith is not supported. */
+/** Records whose EXTERNALID starts with this import's prefix: one read, or exact reads of every row's EXTERNALID where startswith is not supported. */
 async function createdByThisImport(company: string, entity: string, importId: string, rows: readonly CheckedRow[], externalIdFor: (row: number) => string, select: string): Promise<Row[]> {
     try {
         return await readAll(company, entity, { $filter: `startswith(EXTERNALID,${odataString(importPrefix(importId))})`, $select: select });
@@ -79,33 +87,49 @@ export async function lookUp(company: string, rule: EntityRule, meta: EntityMeta
     if (rule.route === "post" && rule.folder) await lookUpFolders(company, rule, rows, out);
     else if (rule.route === "post") {
         const keyField = keys[0] as string;
-        const select = [...new Set(["AUTOID", ...keys, ...(meta.hasExternalId ? ["EXTERNALID"] : [])])].join(",");
+        const labels = rule.label.filter((f) => meta.fields.has(f));
+        const select = [...new Set(["AUTOID", ...keys, ...labels, ...(meta.hasExternalId ? ["EXTERNALID"] : [])])].join(",");
         if (meta.hasExternalId) {
+            const claim = (r: CheckedRow, record: Row): void => {
+                // A marker on a different record means the file changed since that run (a row deleted
+                // or moved, or another file under the same name). Never skip a row on the marker alone.
+                if (sameRecord(r, record, keys, labels)) { out.created.set(r.row, record); return; }
+                const there = keyOf(keys, record) || labels.map((f) => text(record[f])).filter(Boolean).join(" ");
+                out.issues.push({ row: r.row, kind: "id-taken", field: "EXTERNALID", value: text(record["EXTERNALID"]), text: `an earlier run of this import created ${there || "a different record"} for row ${r.row}; this row is ${r.key || labels.map((f) => text(r.values[f])).filter(Boolean).join(" ")}` });
+            };
+            const byRow = new Map(rows.map((r) => [r.row, r]));
             for (const record of await createdByThisImport(company, rule.entity, options.importId, rows, options.externalIdFor, select)) {
                 const row = rowOfExternalId(text(record["EXTERNALID"]), options.importId);
                 // Only rows of this file: an exceptions file holds a few rows of a bigger import.
-                if (row !== null && rows.some((r) => r.row === row)) out.created.set(row, record);
+                const r = row === null ? undefined : byRow.get(row);
+                if (r && typeof r.values["EXTERNALID"] !== "string") claim(r, record);
             }
             const ownIds = rows.filter((r) => typeof r.values["EXTERNALID"] === "string").map((r) => String(r.values["EXTERNALID"]));
             if (ownIds.length > 0) {
                 const found = new Map((await readByIds(company, rule.entity, "EXTERNALID", ownIds, select)).map((record) => [upper(record["EXTERNALID"]), record]));
-                for (const r of rows) if (found.has(upper(r.values["EXTERNALID"]))) out.created.set(r.row, found.get(upper(r.values["EXTERNALID"])) as Row);
+                for (const r of rows) {
+                    const record = found.get(upper(r.values["EXTERNALID"]));
+                    if (record) claim(r, record);
+                }
             }
         }
-        const open = rows.filter((r) => r.key !== "" && !out.created.has(r.row));
+        const taken = new Set(out.issues.map((i) => i.row));
+        const open = rows.filter((r) => r.key !== "" && !out.created.has(r.row) && !taken.has(r.row));
         // A two-part key (a bill-of-materials line: product and component) is read by its first part.
-        const there = await readByIds(company, rule.entity, keyField, open.map((r) => String(r.values[keyField])), select);
+        const there = await readByIdsAnyCase(company, rule.entity, keyField, open.map((r) => String(r.values[keyField])), select);
         const byKey = new Map(there.filter((record) => !isDefaultsRow(record[keyField])).map((record) => [keyOf(keys, record), record]));
         for (const r of open) if (byKey.has(r.key)) out.existing.set(r.row, byKey.get(r.key) as Row);
     }
 
     // 2. Products a child row hangs on, and the rows each already has.
-    const pending = rows.filter((r) => !out.created.has(r.row) && !out.existing.has(r.row));
+    const flagged = new Set(out.issues.map((i) => i.row));
+    const pending = rows.filter((r) => !out.created.has(r.row) && !out.existing.has(r.row) && !flagged.has(r.row));
     if (rule.route === "child") {
         const ids = [...new Set(pending.map((r) => text(r.values["ID"])))];
-        for (const record of await readByIds(company, "INVENTRY", "ID", ids, "AUTOID,ID")) out.products.set(upper(record["ID"]), text(record["AUTOID"]));
+        // A product without an AUTOID could only be PATCHed at INVENTRY(''): treat it as missing.
+        for (const record of await readByIdsAnyCase(company, "INVENTRY", "ID", ids, "AUTOID,ID")) if (text(record["AUTOID"])) out.products.set(upper(record["ID"]), text(record["AUTOID"]));
         const second = keys[1] as string;
-        const children = await readByIds(company, rule.entity, "ID", ids, `ID,${second}`);
+        const children = await readByIdsAnyCase(company, rule.entity, "ID", ids, `ID,${second}`);
         const have = new Set(children.map((record) => `${upper(record["ID"])} / ${upper(record[second])}`));
         for (const r of pending) if (have.has(r.key)) out.existing.set(r.row, { ID: r.values["ID"], [second]: r.values[second] });
     }
@@ -127,7 +151,7 @@ export async function lookUp(company: string, rule: EntityRule, meta: EntityMeta
         const records = await tryRead<Row[] | null>(`${spec.field} (against ${spec.entity})`, out.notes, async () =>
             spec.key === "TREE_ID" || spec.byName
                 ? (await readAll(company, spec.entity, { $select: [spec.key, ...(spec.byName ? [spec.byName] : [])].join(",") })).filter((record) => !isDefaultsRow(record[spec.key]))
-                : readByIds(company, spec.entity, spec.key, wanted.map((r) => text(r.values[spec.field])), spec.entity === "APVENDOR" ? "ID,L_NAME,F_NAME" : spec.key), null);
+                : readByIdsAnyCase(company, spec.entity, spec.key, wanted.map((r) => text(r.values[spec.field])), spec.entity === "APVENDOR" ? "ID,L_NAME,F_NAME" : spec.key), null);
         if (records === null) continue;
         const byKey = new Map(records.map((record) => [upper(record[spec.key]), record]));
         // Products earlier in the same file count for a bill of materials' components.
@@ -172,6 +196,11 @@ async function lookUpFolders(company: string, rule: EntityRule, rows: readonly C
     const byNumber = new Map(folders.map((f) => [text(f["TREE_ID"]), f]));
     const nameUnder = (parent: string, name: string): Row | undefined => folders.find((f) => text(f["PARENT_ID"]) === parent && upper(f["TREE_DESCR"]) === name.toUpperCase());
     const localOf = (r: CheckedRow): string[] => [text(r.values["TREE_ID"]).toUpperCase(), text(r.values["TREE_DESCR"]).toUpperCase()].filter(Boolean);
+    /** Other rows of the file a row's parent reference names (by their Folder or their Name). */
+    const inFileParents = (r: CheckedRow): CheckedRow[] => {
+        const ref = text(r.values["PARENT_ID"]).toUpperCase();
+        return rows.filter((other) => other !== r && localOf(other).includes(ref));
+    };
     // A row's EBMS number once it exists, found by its name under its resolved parent.
     const numberOf = new Map<number, string | null>();
     const resolving = new Set<number>();
@@ -188,15 +217,23 @@ async function lookUpFolders(company: string, rule: EntityRule, rows: readonly C
     };
     const parentOf = (r: CheckedRow): string | null => {
         const ref = text(r.values["PARENT_ID"]);
-        const inFile = rows.find((other) => other !== r && localOf(other).includes(ref.toUpperCase()));
-        if (inFile) return resolve(inFile);
+        const inFile = inFileParents(r);
+        if (inFile.length > 1) return null;
+        if (inFile[0]) return resolve(inFile[0]);
         if (byNumber.has(ref)) return ref;
         const named = folders.filter((f) => upper(f["TREE_DESCR"]) === ref.toUpperCase());
         return named.length === 1 ? text((named[0] as Row)["TREE_ID"]) : null;
     };
+    // The same folder named twice (its parent by number on one row, by name on another) would be created twice.
+    const drafted = new Map<string, number>();
     for (const r of rows) {
         const ref = text(r.values["PARENT_ID"]);
-        const inFile = rows.find((other) => other !== r && localOf(other).includes(ref.toUpperCase()));
+        const candidates = inFileParents(r);
+        if (candidates.length > 1) {
+            out.issues.push({ row: r.row, kind: "ambiguous", field: "PARENT_ID", value: ref, noun: "parent folder", text: `PARENT_ID "${ref}" matches ${candidates.length} rows of this file (rows ${candidates.map((c) => c.row).join(", ")}); use the parent's Folder number` });
+            continue;
+        }
+        const inFile = candidates[0];
         const parent = parentOf(r);
         if (parent === null && !inFile) {
             const named = folders.filter((f) => upper(f["TREE_DESCR"]) === ref.toUpperCase());
@@ -218,10 +255,24 @@ async function lookUpFolders(company: string, rule: EntityRule, rows: readonly C
         }
         const existing = nameUnder(parent, text(r.values["TREE_DESCR"]));
         if (existing) { out.existing.set(r.row, existing); continue; }
+        const identity = `${parent} / ${upper(r.values["TREE_DESCR"])}`;
+        const first = drafted.get(identity);
+        if (first !== undefined) {
+            out.issues.push({ row: r.row, kind: "duplicate", field: "PARENT_ID/TREE_DESCR", value: identity, text: `the same folder (${text(r.values["TREE_DESCR"])} under ${parent}) is also on row ${first}; this copy is ignored` });
+            continue;
+        }
+        drafted.set(identity, r.row);
         out.replace.set(r.row, { PARENT_ID: padFolder(parent) });
         const parentRow = byNumber.get(parent);
         out.resolved.set(r.row, { folder: `under ${parent}${parentRow ? ` ${text(parentRow["TREE_DESCR"])}` : ""}` });
     }
+}
+
+/** Whether a record an earlier run created is the one this row describes: same key, or for a row without one (a customer EBMS numbered) the same name. */
+function sameRecord(r: CheckedRow, record: Row, keys: readonly string[], labels: readonly string[]): boolean {
+    if (r.key !== "") return keyOf(keys, record) === r.key;
+    const named = labels.filter((f) => text(r.values[f]) !== "");
+    return named.length > 0 && named.every((f) => upper(record[f]) === upper(r.values[f]));
 }
 
 function missing(out: Lookups, r: CheckedRow, spec: LookupSpec): void {
@@ -231,7 +282,7 @@ function missing(out: Lookups, r: CheckedRow, spec: LookupSpec): void {
 
 /** A vendor record's unit must be one of that product's units. */
 async function checkUnits(company: string, rows: readonly CheckedRow[], spec: LookupSpec, out: Lookups): Promise<void> {
-    const units = await readByIds(company, "INVENUNT", "ID", [...new Set(rows.map((r) => text(r.values["ID"])))], "ID,UNIT");
+    const units = await readByIdsAnyCase(company, "INVENUNT", "ID", [...new Set(rows.map((r) => text(r.values["ID"])))], "ID,UNIT");
     const have = new Set(units.map((u) => `${upper(u["ID"])} / ${upper(u["UNIT"])}`));
     for (const r of rows) {
         if (have.has(`${upper(r.values["ID"])} / ${upper(r.values[spec.field])}`)) continue;

@@ -20,6 +20,8 @@ export interface SourceRow {
     row: number;
     /** Header -> cell text, trimmed. */
     cells: Record<string, string>;
+    /** Header -> what is wrong with a cell that has no usable value: an Excel error or a formula never calculated. */
+    errors?: Record<string, string>;
     blank: boolean;
 }
 
@@ -41,7 +43,7 @@ const empty = (name: string, path: string | null, fatal: string): Source => ({ n
 /** A leading apostrophe a spreadsheet uses to keep "=…" as text is not part of the value. */
 const unguard = (value: string): string => value.trim().replace(/^'(?=[=+\-@])/, "");
 
-function fromTable(name: string, path: string | null, sheet: string | null, table: string[][], firstRow: number, fromExceptions: Source["fromExceptions"]): Source {
+function fromTable(name: string, path: string | null, sheet: string | null, table: string[][], firstRow: number, fromExceptions: Source["fromExceptions"], errorTable: Array<Array<string | undefined>> = []): Source {
     const at = table.findIndex((record) => record.some((value) => value.trim() !== ""));
     if (at < 0) return empty(name, path, `${name} is empty: there is no header row.`);
     const header = table[at] ?? [];
@@ -56,10 +58,16 @@ function fromTable(name: string, path: string | null, sheet: string | null, tabl
     for (let i = at + 1; i < table.length; i += 1) {
         const record = table[i] ?? [];
         const cells: Record<string, string> = {};
-        headers.forEach((h, c) => { if (h && cells[h] === undefined) cells[h] = unguard(record[c] ?? ""); });
+        const errors: Record<string, string> = {};
+        headers.forEach((h, c) => {
+            if (!h || cells[h] !== undefined) return;
+            cells[h] = unguard(record[c] ?? "");
+            const error = errorTable[i]?.[c];
+            if (error) errors[h] = error;
+        });
         const original = rowColumn >= 0 ? Number.parseInt(record[rowColumn] ?? "", 10) : NaN;
         const dataCells = Object.entries(cells).filter(([h]) => !fromExceptions || !(EXCEPTION_COLUMNS as readonly string[]).includes(h));
-        rows.push({ row: Number.isFinite(original) ? original : i + firstRow, cells, blank: dataCells.every(([, v]) => v === "") });
+        rows.push({ row: Number.isFinite(original) ? original : i + firstRow, cells, ...(Object.keys(errors).length > 0 ? { errors } : {}), blank: dataCells.every(([, v]) => v === "") && Object.keys(errors).length === 0 });
     }
     // Trailing blank rows are the end of the sheet, not rows anyone left blank.
     while (rows.length > 0 && rows[rows.length - 1]?.blank) rows.pop();
@@ -73,6 +81,21 @@ function fromTable(name: string, path: string | null, sheet: string | null, tabl
 /** A CSV's text. Record n of the text is row n + 1 in a spreadsheet. */
 export function readCsvText(text: string, name = "pasted CSV", path: string | null = null): Source {
     return fromTable(name, path, null, parseCsvRecords(text), 1, null);
+}
+
+/**
+ * A cell with no usable value that would otherwise read as blank: an Excel error (#DIV/0!, #N/A)
+ * or a formula whose result was never calculated and saved (a file written by a program, not Excel).
+ */
+export function cellError(value: ExcelJS.CellValue): string | undefined {
+    if (!value || typeof value !== "object" || value instanceof Date) return undefined;
+    if ("error" in value) return String((value as ExcelJS.CellErrorValue).error);
+    if ("formula" in value || "sharedFormula" in value) {
+        const result = (value as ExcelJS.CellFormulaValue).result as unknown;
+        if (result === undefined || result === null) return "a formula with no saved result";
+        if (typeof result === "object" && result !== null && "error" in result) return String((result as { error: unknown }).error);
+    }
+    return undefined;
 }
 
 async function readXlsx(path: string, wanted: string | undefined): Promise<Source> {
@@ -97,13 +120,21 @@ async function readXlsx(path: string, wanted: string | undefined): Promise<Sourc
         return empty(name, path, wanted ? `${name} has no sheet named "${wanted}". Its sheets: ${book.worksheets.map((s) => `"${s.name}"`).join(", ")}.` : `${name} has no sheets.`);
     }
     const table: string[][] = [];
+    const errorTable: Array<Array<string | undefined>> = [];
     for (let r = 1; r <= sheet.rowCount; r += 1) {
         const row = sheet.getRow(r);
         const values: string[] = [];
-        for (let c = 1; c <= Math.max(sheet.columnCount, row.cellCount); c += 1) values.push(cellText(row.getCell(c).value));
+        const errors: Array<string | undefined> = [];
+        for (let c = 1; c <= Math.max(sheet.columnCount, row.cellCount); c += 1) {
+            const value = row.getCell(c).value;
+            const error = cellError(value);
+            values.push(error ? error : cellText(value));
+            errors.push(error);
+        }
         table.push(values);
+        errorTable.push(errors);
     }
-    const source = fromTable(name, path, sheet.name, table, 1, fromExceptions);
+    const source = fromTable(name, path, sheet.name, table, 1, fromExceptions, errorTable);
     if (!wanted && sheets.length > 1 && !fromExceptions) source.notes.push(`${name} has ${sheets.length} sheets; the first, "${sheet.name}", was read. Pass sheet to read another.`);
     return source;
 }

@@ -15,16 +15,25 @@ import { lookUp } from "../import/lookups.js";
 import { keyFields, resolveMapping } from "../import/mapping.js";
 import { readMetadata, type EntityMeta } from "../import/metadata.js";
 import { ENTITIES, RULES } from "../import/rules.js";
-import { openSource } from "../import/source.js";
+import { openSource, type Source } from "../import/source.js";
 import { groupIssues, validateRows, type Issue } from "../import/validate.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
-/** Six hex characters that stay the same for the same entity, file name and header row. */
-export const defaultImportId = (entity: string, name: string, headers: readonly string[]): string =>
-    createHash("sha256").update(`${entity}|${name}|${headers.join(",")}`).digest("hex").slice(0, 6);
+const hash = (text: string): string => createHash("sha256").update(text).digest("hex").slice(0, 6);
 
-const today = (): string => new Date().toLocaleDateString("en-CA");
+/**
+ * Six hex characters that stay the same for the same entity, file name and header row, so a file
+ * corrected and run again continues its import. Pasted text has no name, so its whole content
+ * counts. A different file under the same name gets the same ID; lookups never skip a row on that
+ * alone (the record found must be the row's), and contentImportId is offered to start afresh.
+ */
+export const defaultImportId = (entity: string, name: string, headers: readonly string[], content = ""): string =>
+    hash(`${entity}|${name}|${headers.join(",")}${content ? `|${content}` : ""}`);
+
+/** An ID from everything in the file, for treating a reused file name as a new import. */
+const contentImportId = (entity: string, source: Source): string =>
+    hash(`${entity}|${source.headers.join(",")}|${source.rows.map((r) => source.headers.map((h) => r.cells[h] ?? "").join(",")).join("\n")}`);
 
 const summary = (rows: readonly number[], message: string) => ({ message, count: rows.length, rows: rows.slice(0, 20).map((r) => `Row ${r}`) });
 
@@ -46,7 +55,7 @@ export function registerImportTools(register: ToolRegistrar): void {
                 sheet: z.string().optional().describe("For a workbook with several sheets: the one to read. Default: the first."),
                 mapping: z.record(z.string(), z.string()).optional().describe("Header -> field, overriding the automatic match. Map a header to \"\" to leave the column out."),
                 defaults: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).optional().describe("Field -> value for every row whose cell is blank or whose column is missing, e.g. {\"TREE_ID\": \"26\", \"C_TYPE\": 2}. Only what the user chose: never a guessed folder or classification."),
-                importId: z.string().regex(/^[a-z0-9]{1,12}$/).optional().describe("Continue an earlier import of the same records from a renamed file: the importId an earlier result gave."),
+                importId: z.string().regex(/^[a-z0-9]{1,12}$/).optional().describe("Continue an earlier import of the same records from a renamed file: the importId an earlier result gave. Or, when a result reports rows where an earlier run created a different record and the user confirms this is a new file, the newImportId that result offered."),
                 rowsFrom: z.number().int().min(1).optional().describe("First row number to draft (validation always covers the whole file)."),
                 rowsTo: z.number().int().min(1).optional(),
                 maxDrafts: z.number().int().min(1).max(500).optional().describe("At most this many drafts in one result. Default 200."),
@@ -92,11 +101,10 @@ export function registerImportTools(register: ToolRegistrar): void {
                 const mappingOut = mapping.columns.map((c) => `${c.header} -> ${c.field}${meta.fields.get(c.field)?.label ? ` (${meta.fields.get(c.field)?.label})` : ""}${c.by === "field name" ? "" : `, by ${c.by}`}`);
                 if (mapping.fatal.length > 0) return blocked(mapping.fatal, { mapping: mappingOut, unmapped: mapping.unmapped });
 
-                const importId = args.importId ?? source.fromExceptions?.importId ?? defaultImportId(rule.entity, source.name, source.headers);
-                const date = today();
+                const importId = args.importId ?? source.fromExceptions?.importId ?? defaultImportId(rule.entity, source.name, source.headers, source.path ? "" : source.rows.map((r) => Object.values(r.cells).join(",")).join("\n"));
                 const validation = validateRows(source.rows, rule, meta, mapping, defaults);
                 notes.push(...validation.notes);
-                const lookups = await lookUp(company, rule, meta, validation.rows, { importId, externalIdFor: (row) => externalIdFor(importId, date, row) });
+                const lookups = await lookUp(company, rule, meta, validation.rows, { importId, externalIdFor: (row) => externalIdFor(importId, row) });
                 notes.push(...lookups.notes);
 
                 const failed: Issue[] = (args.failedRows ?? [])
@@ -105,7 +113,7 @@ export function registerImportTools(register: ToolRegistrar): void {
                 const flagged = new Set([...lookups.issues, ...failed].map((i) => i.row));
                 const ready = validation.rows.filter((r) => !flagged.has(r.row) && !lookups.existing.has(r.row) && !lookups.created.has(r.row) && !lookups.waiting.has(r.row));
                 if (lookups.waiting.size > 0) notes.push(`${lookups.waiting.size} ${rule.plural} wait for a parent folder this import creates (rows ${[...lookups.waiting].sort((a, b) => a - b).slice(0, 20).join(", ")}). Run the import again once these are written: they will be drafted then.`);
-                const drafts = buildDrafts(rule, meta, rule.cannotCreate ? [] : ready, lookups, { company, importId, date, rowsFrom: args.rowsFrom, rowsTo: args.rowsTo, maxDrafts: args.maxDrafts ?? 200 });
+                const drafts = buildDrafts(rule, meta, rule.cannotCreate ? [] : ready, lookups, { company, importId, rowsFrom: args.rowsFrom, rowsTo: args.rowsTo, maxDrafts: args.maxDrafts ?? 200 });
                 notes.push(...drafts.notes);
                 if (rule.cannotCreate) notes.unshift(rule.cannotCreate);
 
@@ -128,6 +136,7 @@ export function registerImportTools(register: ToolRegistrar): void {
                 return jsonResult({
                     ...base,
                     importId,
+                    ...(issues.some((i) => i.kind === "id-taken") ? { newImportId: contentImportId(rule.entity, source) } : {}),
                     ...(writeBlocked ? { writeBlocked } : {}),
                     blocked: false,
                     counts: {

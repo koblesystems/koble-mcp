@@ -9,7 +9,7 @@ import { validateRows } from "../src/import/validate.js";
 import { meta } from "./import-fixtures.js";
 
 const noLookups = (extra: Partial<Lookups> = {}): Lookups => ({ existing: new Map(), created: new Map(), issues: [], resolved: new Map(), replace: new Map(), waiting: new Set(), products: new Map(), notes: [], ...extra });
-const opts = { company: "COF", importId: "abc123", date: "2026-10-12", maxDrafts: 200 };
+const opts = { company: "COF", importId: "abc123", maxDrafts: 200 };
 
 function draft(entity: string, csv: string, lookups = noLookups(), options: Partial<typeof opts & { rowsFrom: number; rowsTo: number }> = {}) {
     const source = readCsvText(csv);
@@ -36,12 +36,12 @@ test("product bodies follow the products skill's order, and carry the read-back"
     assert.equal(r.drafts[0]?.write.path, "INVENTRY");
 });
 
-test("EXTERNALID: the import's prefix, the date and the row, at most 50 characters; the file's own wins", () => {
-    assert.equal(externalIdFor("abc123", "2026-10-12", 9), "claude-import-abc123-2026-10-12-r9");
-    assert.ok(externalIdFor("abcdef123456", "2026-10-12", 1_000_000).length <= 50);
+test("EXTERNALID: the import's prefix and the row, no date (a rerun on another day must find it), at most 50 characters; the file's own wins", () => {
+    assert.equal(externalIdFor("abc123", 9), "claude-import-abc123-r9");
+    assert.ok(externalIdFor("abcdef123456", 1_000_000).length <= 50);
     const r = draft("ARCUST", "Last name,Folder,EXTERNALID\nSmith,1,legacy-77\nJones,1,\n");
     assert.equal(r.drafts[0]?.externalId, "legacy-77");
-    assert.equal(r.drafts[1]?.externalId, "claude-import-abc123-2026-10-12-r3");
+    assert.equal(r.drafts[1]?.externalId, "claude-import-abc123-r3");
 });
 
 test("names and folders a lookup resolved replace what the row said", () => {

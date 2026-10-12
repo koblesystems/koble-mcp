@@ -53,8 +53,11 @@ const matches = (row: Row, filter: string): boolean => {
     if (!filter) return true;
     const starts = /startswith\((\w+),'([^']*)'\)/.exec(filter);
     if (starts) return String(row[starts[1] as string] ?? "").startsWith(starts[2] as string);
-    const ors = [...filter.matchAll(/(\w+) eq '([^']*)'/g)];
-    return ors.some(([, field, value]) => String(row[field as string] ?? "").trim().toUpperCase() === String(value).toUpperCase());
+    // Like EBMS: `eq` is case-sensitive; `toupper(F) eq` compares upper-cased.
+    const ors = [...filter.matchAll(/(?:toupper\((\w+)\)|(\w+)) eq '([^']*)'/g)];
+    return ors.some(([, upperField, field, value]) => upperField
+        ? String(row[upperField] ?? "").trim().toUpperCase() === String(value)
+        : String(row[field as string] ?? "").trim() === String(value));
 };
 globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const u = new URL(String(url));
@@ -99,7 +102,7 @@ test("a product file: mapping, grouped problems, existing rows skipped, names re
     assert.equal(r.drafts[1].write.body.TREE_ID, "26", "a folder named in the file is sent as its number");
     assert.equal(r.drafts[1].resolved.folder, "26 Mugs");
     assert.equal(r.drafts[0].resolved.vendor, "BEANCO Bean Co");
-    assert.match(r.drafts[0].externalId, /^claude-import-[0-9a-f]{6}-\d{4}-\d{2}-\d{2}-r2$/);
+    assert.match(r.drafts[0].externalId, /^claude-import-[0-9a-f]{6}-r2$/);
     const messages = r.problems.map((p: any) => p.message).join(" | ");
     assert.match(messages, /1 row names a folder that is not in COF: "Wholesale"/);
     assert.match(messages, /1 row names a vendor that is not in COF: "NOBODY"/);
@@ -246,5 +249,126 @@ test("an exceptions file handed back continues the same import and counts only i
     assert.equal(back.counts.rows, 3);
     assert.equal(back.counts.createdEarlier, 0, "rows created from the original file are not this file's rows");
     assert.deepEqual(back.problems.flatMap((p: any) => p.rows).sort(), ["Row 5", "Row 6", "Row 8"]);
+    assert.deepEqual(writes, []);
+});
+
+// --- From the adversarial review of PR #11: each of these once went wrong. ---
+
+test("a different file under the same name: rows whose marker sits on another record are flagged, never skipped; newImportId starts afresh", async () => {
+    fresh();
+    const january = await file("new-customers.csv", "Last name,Folder\nSmith,1\nJones,1\n");
+    const first = await call({ entity: "ARCUST", path: january });
+    for (const d of first.drafts) tables["ARCUST"]!.push({ AUTOID: `c${d.row}`, ID: "", L_NAME: d.label, EXTERNALID: d.externalId });
+    const february = await file("new-customers.csv", "Last name,Folder\nBrown,1\nGreen,1\nWhite,1\n");
+    const r = await call({ entity: "ARCUST", path: february });
+    assert.equal(r.importId, first.importId, "same name and headers: same import ID");
+    assert.equal(r.counts.createdEarlier, 0, "Brown and Green are not reported as created");
+    assert.deepEqual(r.problems.find((p: any) => p.kind === "id-taken")?.rows, ["Row 2", "Row 3"]);
+    assert.deepEqual(r.drafts.map((d: any) => d.label), ["White"]);
+    assert.match(r.newImportId, /^[0-9a-f]{6}$/);
+    const fresh2 = await call({ entity: "ARCUST", path: february, importId: r.newImportId });
+    assert.deepEqual(fresh2.drafts.map((d: any) => d.label), ["Brown", "Green", "White"]);
+    assert.deepEqual(writes, []);
+});
+
+test("a row deleted between runs does not hide the row that moves up into its place", async () => {
+    fresh();
+    const dir = await mkdtemp(join(tmpdir(), "koble-imp-del-"));
+    const path = join(dir, "products.csv");
+    await writeFile(path, "ID,Folder,Classification\nALPHA,26,2\nBETA,26,2\nGAMMA,26,2\n");
+    const first = await call({ entity: "INVENTRY", path });
+    for (const d of first.drafts.slice(0, 2)) tables["INVENTRY"]!.push({ AUTOID: `x${d.row}`, ID: d.key, EXTERNALID: d.externalId });
+    await writeFile(path, "ID,Folder,Classification\nALPHA,26,2\nGAMMA,26,2\n");
+    const r = await call({ entity: "INVENTRY", path });
+    assert.equal(r.counts.createdEarlier, 1, "ALPHA only");
+    assert.deepEqual(r.problems.find((p: any) => p.kind === "id-taken")?.rows, ["Row 3"], "GAMMA sits on BETA's marker: flagged, not skipped");
+    assert.deepEqual(writes, []);
+});
+
+test("customers without an ID are recognised on a rerun by name", async () => {
+    fresh();
+    const path = await file("cust.csv", "Last name,Folder\nSmith,1\nJones,1\n");
+    const first = await call({ entity: "ARCUST", path });
+    for (const d of first.drafts) tables["ARCUST"]!.push({ AUTOID: `c${d.row}`, ID: `GEN${d.row}`, L_NAME: d.label.toUpperCase(), EXTERNALID: d.externalId });
+    const again = await call({ entity: "ARCUST", path });
+    assert.equal(again.counts.createdEarlier, 2);
+    assert.deepEqual(again.drafts, []);
+    assert.deepEqual(writes, []);
+});
+
+test("where startswith is refused, an earlier day's creates are still found (the EXTERNALID carries no date)", async () => {
+    fresh();
+    const path = await file("cust.csv", "Last name,Folder\nSmith,1\n");
+    const first = await call({ entity: "ARCUST", path });
+    tables["ARCUST"]!.push({ AUTOID: "c2", ID: "SMI", L_NAME: "Smith", EXTERNALID: first.drafts[0].externalId });
+    startswithWorks = false;
+    const again = await call({ entity: "ARCUST", path });
+    assert.equal(again.counts.createdEarlier, 1);
+    assert.deepEqual(again.drafts, []);
+    assert.deepEqual(writes, []);
+});
+
+test("an ID that differs only in case from one in EBMS is the same record (EBMS's eq is case-sensitive)", async () => {
+    fresh();
+    const r = await call({ entity: "INVENTRY", csv: "ID,Folder,Classification\noldmug,26,2\n" });
+    assert.equal(r.counts.alreadyInEbms, 1);
+    assert.ok(reads.some((x) => x.includes("toupper(ID) eq 'OLDMUG'")));
+    const units = await call({ entity: "INVENUNT", csv: "Product,Unit,Multiply,Multiplier\noldmug,case,Larger,12\n" });
+    assert.equal(units.counts.alreadyInEbms, 1, "OLDMUG already has CASE");
+    assert.deepEqual(writes, []);
+});
+
+test("the same new folder named twice, its parent by number on one row and by name on the other, is drafted once", async () => {
+    fresh();
+    const r = await call({ entity: "INVENTRE", csv: "Folder,Parent,Name\n,1,Handles\n,Products,Handles\n" });
+    assert.equal(r.drafts.length, 1);
+    assert.deepEqual(r.problems.find((p: any) => p.kind === "duplicate")?.rows, ["Row 3"]);
+    assert.deepEqual(writes, []);
+});
+
+test("a parent named by two rows of the file is ambiguous, as it is when both are in EBMS", async () => {
+    fresh();
+    const r = await call({ entity: "INVENTRE", csv: "Folder,Parent,Name\n,1,Accessories\n,26,Accessories\n,Accessories,Lights\n" });
+    assert.deepEqual(r.problems.find((p: any) => p.kind === "ambiguous")?.rows, ["Row 4"]);
+    assert.equal(r.counts.waitingForParent, 0);
+    assert.deepEqual(writes, []);
+});
+
+test("an Excel error or an uncalculated formula is a problem, never a blank", async () => {
+    fresh();
+    const dir = await mkdtemp(join(tmpdir(), "koble-imp-f-"));
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet("Items");
+    sheet.addRows([["ID", "Folder", "Classification", "Cost"], ["F1", 26, 2, 1], ["F2", 26, 2, 1], ["F3", 26, 2, 1]]);
+    sheet.getCell("D3").value = { formula: "1/0", result: { error: "#DIV/0!" } } as ExcelJS.CellFormulaValue;
+    sheet.getCell("D4").value = { formula: "A1*2" } as ExcelJS.CellFormulaValue;
+    const path = join(dir, "f.xlsx");
+    await book.xlsx.writeFile(path);
+    const r = await call({ entity: "INVENTRY", path, defaults: { COST: 9 } });
+    assert.deepEqual(r.drafts.map((d: any) => d.key), ["F1"]);
+    const cell = r.problems.find((p: any) => p.kind === "cell-error");
+    assert.deepEqual(cell?.rows, ["Row 3", "Row 4"]);
+    assert.match(cell?.message, /#DIV\/0!/);
+    assert.deepEqual(writes, []);
+});
+
+test("a product without an AUTOID is never PATCHed at INVENTRY('')", async () => {
+    fresh();
+    tables["INVENTRY"]!.push({ AUTOID: "", ID: "NOAID" });
+    const r = await call({ entity: "INVENUNT", csv: "Product,Unit,Multiply,Multiplier\nNOAID,BOX,Larger,6\n" });
+    assert.deepEqual(r.drafts, []);
+    assert.match(r.problems[0].message, /product that is not in COF: "NOAID"/);
+    assert.deepEqual(writes, []);
+});
+
+test("a row window on a units file takes every row inside it, whatever row its product starts on", async () => {
+    fresh();
+    tables["INVENTRY"]!.push({ AUTOID: "pa", ID: "A" }, { AUTOID: "pb", ID: "B" });
+    const csv = "Product,Unit,Multiply,Multiplier\nA,U1,Larger,2\nB,U2,Larger,3\nB,U3,Larger,4\nA,U4,Larger,5\n";
+    const r = await call({ entity: "INVENUNT", csv, rowsFrom: 4, rowsTo: 5 });
+    assert.deepEqual(r.drafts.map((d: any) => d.rows), [[4], [5]]);
+    const capped = await call({ entity: "INVENUNT", csv, maxDrafts: 1 });
+    assert.deepEqual(capped.drafts.map((d: any) => d.rows), [[2, 5]]);
+    assert.equal(capped.nextRowsFrom, 3);
     assert.deepEqual(writes, []);
 });

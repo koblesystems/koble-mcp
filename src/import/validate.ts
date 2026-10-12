@@ -25,6 +25,8 @@ export type IssueKind =
     | "self-component"
     | "quantity"
     | "folder-cycle"
+    | "id-taken"
+    | "cell-error"
     | "write-failed";
 
 export interface Issue {
@@ -91,6 +93,8 @@ export function validateRows(rows: readonly SourceRow[], rule: EntityRule, meta:
             values[field] = coerced.value;
         };
         for (const column of mapping.columns) {
+            const error = source.errors?.[column.header];
+            if (error) { add({ kind: "cell-error", field: column.field, value: error, text: `${column.field}: the cell is ${error}; fix the formula in Excel and save` }); continue; }
             const text = source.cells[column.header] ?? "";
             if (text !== "") fill(column.field, text);
         }
@@ -158,7 +162,7 @@ export function groupIssues(issues: readonly Issue[], context: { company: string
     const out: ProblemGroup[] = [];
     for (const list of groups.values()) {
         const first = list[0] as Issue;
-        const rows = [...new Set(list.map((i) => i.row))];
+        const rows = [...new Set(list.map((i) => i.row))].sort((a, b) => a - b);
         const n = rows.length;
         const values = list.map((i) => i.value);
         const r = plural(n, "row", "rows");
@@ -176,6 +180,8 @@ export function groupIssues(issues: readonly Issue[], context: { company: string
                 case "self-component": return `${n} bill-of-materials ${plural(n, "line lists", "lines list")} the product as its own component`;
                 case "quantity": return `${n} bill-of-materials ${plural(n, "line has", "lines have")} a quantity of 0 or less`;
                 case "folder-cycle": return `${n} ${plural(n, "folder is its", "folders are their")} own ancestor through PARENT_ID`;
+                case "id-taken": return `${n} ${r} ${plural(n, "sits", "sit")} where an earlier run of this import created a different record: the file changed since that run (a row deleted or moved, or another file under the same name). Nothing is skipped on that alone; to treat this as a new file, pass a new importId`;
+                case "cell-error": return `${n} ${r} ${plural(n, "has", "have")} a ${first.field} cell Excel shows as an error or never calculated: ${examples(values)}`;
                 case "write-failed": return `${n} ${r} could not be written to EBMS last time`;
             }
         })();

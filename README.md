@@ -246,7 +246,10 @@ and a Fix column. That workbook can be corrected and handed straight back.
 
 It writes nothing. The `ebms-import` skill shows the mapping, the problems and a few drafts, asks
 once for the file, and writes the drafts in order; every create carries an `EXTERNALID`
-(`claude-import-<importId>-<date>-r<row>`), so a rerun skips what exists and a resend is refused.
+(`claude-import-<importId>-r<row>`), so a rerun skips what exists and a resend is refused. A row
+is only skipped when the record found is the row's own (same key, or same name for a customer EBMS
+numbered); a marker on a different record (a row deleted, or another file under the same name) is
+reported, never skipped.
 `ebms-new-company` puts the files in the order they depend on each other. The shaping the tool
 does (units and vendor records grouped per product, at most 50 to a PATCH; a folder drafted only
 once its parent exists, since EBMS numbers new folders itself) never decides anything: it is

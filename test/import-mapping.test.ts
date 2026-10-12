@@ -86,6 +86,9 @@ test("cells coerce by field type, and a refusal quotes the cell", () => {
     assert.deepEqual(coerce("2026-10-12", m.fields.get("E_DATE")!), { ok: true, value: "2026-10-12" });
     assert.deepEqual(coerce("10/12/2026", m.fields.get("E_DATE")!), { ok: true, value: "2026-10-12" });
     assert.deepEqual(coerce("12.10.2026", m.fields.get("E_DATE")!).ok, false);
+    assert.equal(coerce("2026-02-30", m.fields.get("E_DATE")!).ok, false, "a date that does not exist");
+    assert.equal(coerce("4/31/2026", m.fields.get("E_DATE")!).ok, false);
+    assert.deepEqual(coerce("2/29/2028", m.fields.get("E_DATE")!), { ok: true, value: "2028-02-29" }, "a leap day does");
     assert.deepEqual(coerce("Yes", m.fields.get("INACTIVE")!), { ok: true, value: true });
     assert.deepEqual(coerce("n", m.fields.get("INACTIVE")!), { ok: true, value: false });
     const bad = coerce("maybe", m.fields.get("INACTIVE")!);

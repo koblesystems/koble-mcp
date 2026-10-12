@@ -200,6 +200,9 @@ Verified on SBX, 2026-09-23, with a ZTEST task:
   but defaults to today (its DataType is `DateDefaultedToday`), and `ARCUST.ID` is "required"
   but EBMS makes one from the name when it is blank.
 - `startswith(EXTERNALID,'…')` filters work on `INVENTRY` and `ARCUST`.
+- **`eq` on an ID is case-sensitive**: `ID eq 'padep'` finds nothing while `PADEP` exists.
+  `toupper(ID) eq 'PADEP'` works, ORed too; `tolower(ID) eq …` and `startswith(tolower(ID),…)`
+  fail with "Unhandled exception occurred"; `contains(tolower(ID),'…')` works.
 - `ARCUSTAX` (a customer's tax exemption) can be created but not deleted (403); deleting the
   customer removes it. A sales order lists the rates EBMS considered in `ARINVTAXes`.
 

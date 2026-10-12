@@ -49,8 +49,8 @@ export interface DraftSet {
 }
 
 /** The EXTERNALID a row's create carries: <= 50 characters, and found again by the import's prefix. */
-export function externalIdFor(importId: string, date: string, row: number): string {
-    return `${importPrefix(importId)}${date}-r${row}`;
+export function externalIdFor(importId: string, row: number): string {
+    return `${importPrefix(importId)}r${row}`;
 }
 
 function bodyOf(rule: EntityRule, row: CheckedRow, replace: Record<string, string> | undefined, externalId: string | undefined, leaveOut: readonly string[] = []): Record<string, unknown> {
@@ -72,7 +72,6 @@ const labelOf = (rule: EntityRule, row: CheckedRow): string =>
 export interface DraftOptions {
     company: string;
     importId: string;
-    date: string;
     rowsFrom?: number | undefined;
     rowsTo?: number | undefined;
     maxDrafts: number;
@@ -85,8 +84,9 @@ export function buildDrafts(rule: EntityRule, meta: EntityMeta, rows: readonly C
     const inWindow = (row: number): boolean => row >= (options.rowsFrom ?? 0) && row <= (options.rowsTo ?? Number.MAX_SAFE_INTEGER);
 
     if (rule.route === "child") {
+        // The window applies to each row, not to the first row of a product's group.
         const groups = new Map<string, CheckedRow[]>();
-        for (const row of rows) {
+        for (const row of rows.filter((r) => inWindow(r.row))) {
             const product = String(row.values["ID"] ?? "").trim().toUpperCase();
             groups.set(product, [...(groups.get(product) ?? []), row]);
         }
@@ -111,7 +111,7 @@ export function buildDrafts(rule: EntityRule, meta: EntityMeta, rows: readonly C
     }
 
     const all: Draft[] = [...rows].sort((a, b) => a.row - b.row).map((row) => {
-        const externalId = meta.hasExternalId && typeof row.values["EXTERNALID"] !== "string" ? externalIdFor(options.importId, options.date, row.row) : undefined;
+        const externalId = meta.hasExternalId && typeof row.values["EXTERNALID"] !== "string" ? externalIdFor(options.importId, row.row) : undefined;
         const body = bodyOf(rule, row, lookups.replace.get(row.row), externalId, rule.neverSend);
         return {
             row: row.row,
@@ -131,6 +131,6 @@ function windowed(all: Draft[], inWindow: (row: number) => boolean, maxDrafts: n
     const drafts = candidates.slice(0, maxDrafts);
     const rest = candidates.slice(maxDrafts);
     let nextRowsFrom: number | null = null;
-    if (rest.length > 0) nextRowsFrom = Math.min(...rest.map((d) => d.row));
+    if (rest.length > 0) nextRowsFrom = Math.min(...rest.flatMap((d) => d.rows ?? [d.row]));
     return { drafts, ready, issues: [], nextRowsFrom, notes };
 }

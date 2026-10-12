@@ -153,7 +153,8 @@ export function parseDate(text: string): string | null {
     if (!us) return null;
     const [, m, d, y] = us;
     const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    return Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || Number(m) > 12 || Number(d) > 31 ? null : iso;
+    // A date that does not survive a round trip (4/31, 2/30) does not exist.
+    return Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || new Date(`${iso}T00:00:00Z`).toISOString().slice(0, 10) !== iso ? null : iso;
 }
 
 /**

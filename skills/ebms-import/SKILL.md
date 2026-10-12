@@ -26,7 +26,7 @@ listed at the end.
    round, pad or "fix" an ID, price, folder or quantity; if something looks wrong, the file
    gets fixed and the tool runs again.
 3. **Stop on the first `verification.ok: false`.** Show it, and ask before writing the next one.
-4. **Every create carries an `EXTERNALID`** the tool made (`claude-import-<importId>-<date>-r<row>`),
+4. **Every create carries an `EXTERNALID`** the tool made (`claude-import-<importId>-r<row>`),
    so a rerun of the same file skips what was created and the server refuses a resend.
 5. **What a field means belongs to the per-record skill.** Folders, classification, price,
    cost, units and IDs for products are in **ebms-products**; folders, IDs, names and addresses
@@ -66,6 +66,12 @@ Read out, briefly:
   original columns, a Problem column and an empty Fix column.
 - **`notes`** and **`writeBlocked`** if present.
 - `fatal` with `blocked: true` means nothing can be drafted until that is fixed. Say so.
+- A problem saying rows **sit where an earlier run of this import created a different record**:
+  the file changed since that run (a row deleted or moved), or it is a new file under an old name
+  (this month's `new-customers.csv`). Ask which. A new file: run again with `importId` set to the
+  result's `newImportId`. The same file edited: put the deleted rows back, or ask before using a
+  new ID, because rows already created without a key of their own (customers EBMS numbered) would
+  then be drafted again.
 - `counts.waitingForParent` (folders): rows whose parent folder is another row of this file.
   EBMS numbers a new folder itself, so these are drafted on the next run, once their parent
   exists. A file of nested folders takes one run per level.

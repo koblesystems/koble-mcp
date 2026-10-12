@@ -22,7 +22,9 @@ product already had were left out by the tool; it never removes or replaces anyt
 1. Call `import_from_csv` with the same `company`, `entity` and file. Pass `importId` from the
    first result if the file was renamed. Pass `failedRows` for the rows EBMS refused.
 2. Rows created by any earlier run are in `alreadyCreated`; rows whose key is in EBMS are in
-   `existing`. Neither is drafted.
+   `existing`. Neither is drafted. A row is counted as created only when the record carrying its
+   marker is the row's own (same key, or same name); otherwise it is a problem, not a skip
+   (see SKILL.md section 1).
 3. The exceptions file is rewritten with what is left. If every row passes, no new one is
    written, and an older one is reported as out of date.
 4. `counts.drafted: 0` with `exceptionsFile: null` means the file is done.
