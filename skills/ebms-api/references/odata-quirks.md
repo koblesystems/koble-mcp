@@ -120,12 +120,15 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
   find. Vendor IDs are user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`); always send
   one. `APINV` *does* auto-number, assigning `INVOICE` "PO#174" and `PO_NO` "174", and so does
   `ARCUST`, from the folder's naming rule: `SMIJOE`, then `SMIJOE1`.
-- **A create with a name into a folder that has no default ID method fails** with 422
-  "APCONTACTS: Could not find child APCONTACTS record", and nothing is saved (seen on SBX's
-  vendor folders, 1.8.184; the cause found by Koble, 2026-10-12). `{TREE_ID, ID}` alone saves,
-  and the name and the rest PATCH on afterwards; or set the folder's ID method and retry.
-- **`TREE_ID` must be the first field of a customer or vendor create body** (Koble, 2026-10-12).
-  Both entities need it: a vendor without one fails with "Could not find vendor defaults".
+- **`TREE_ID` must be the first field of a customer or vendor create body.** A vendor create
+  with the name before `TREE_ID` fails with 422 "APCONTACTS: Could not find child APCONTACTS
+  record" and saves nothing; with `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}` saves in one POST
+  (SBX, 1.8.184, 2026-10-12; the ordering found by Koble). Both entities need `TREE_ID`: a vendor
+  without one fails with "Could not find vendor defaults".
+- **Without a folder ID method, a create with no `ID` tries to save a blank ID.** On SBX's
+  vendor folders it was stopped only by an existing blank-ID vendor tripping the unique index
+  `idx_fromcb_apvendor_t1_contact__unique` (folder path + first contact + ID). Send an ID unless
+  the folder is known to generate one.
 - **A child row's `@id` in a `<Nav>@delta` is the plain AUTOID** (`"6HH5TPOJG0R3E1A1"`). The
   entity-qualified form (`"APCONTACTS('…')"`) is ignored with a 200.
 - **`APINV.DESCR_H` truncates at 30 characters** without complaint.

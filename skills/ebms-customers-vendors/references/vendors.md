@@ -19,50 +19,43 @@ enough. Phone and email are on the contact record (`APCONTACTSs`), not on the ve
 ## Create one
 
 Ask for, in one message: the company name, the folder, the address, phone, email, and the lead
-time in days if they know it. Show what will be sent and ask before sending.
+time in days if they know it. Propose the ID (below). Show what will be sent and ask before
+sending.
 
-**One POST, `TREE_ID` first, no `ID`:**
+**One POST: `TREE_ID` first, then `ID`, then everything else** (verified on SBX, 1.8.184):
 
 ```
 ebms_write  method: POST   path: APVENDOR
-            body: {"TREE_ID": "8", "L_NAME": "Bike Parts Co", "ADDRESS1": "2 Industrial Rd",
-                   "ZIP": "17527", "LEAD_DAYS": 21, "EXTERNALID": "claude-2026-10-12-v1"}
+            body: {"TREE_ID": "8", "ID": "BIKEPARTS", "L_NAME": "Bike Parts Co",
+                   "ADDRESS1": "2 Industrial Rd", "ZIP": "17527", "LEAD_DAYS": 21,
+                   "EXTERNALID": "claude-2026-10-12-v1"}
             readBack: {"record": "AUTOID,ID,CITY,STATE,COUNTRY"}
 ```
 
-- **It works** when the folder has a default ID method: EBMS generates the ID. Report it.
-- **It fails with "Could not find child APCONTACTS record"** when the folder has no default ID
-  method. Nothing was saved. Tell the user exactly that, and offer two ways on:
-  1. **Set the folder's default ID method in EBMS** (the vendor folder's defaults), then send
-     the same POST again. Best when more vendors will go in that folder.
-  2. **Choose the ID and create it in two steps**, each with its own yes:
-     ```
-     ebms_write  method: POST   path: APVENDOR
-                 body: {"TREE_ID": "8", "ID": "BIKEPARTS", "EXTERNALID": "claude-2026-10-12-v1"}
-     ebms_write  method: PATCH  path: APVENDOR('<AUTOID from the POST>')
-                 body: {"L_NAME": "Bike Parts Co", "ADDRESS1": "2 Industrial Rd", "ZIP": "17527", "LEAD_DAYS": 21}
-                 readBack: {"record": "ID,CITY,STATE,COUNTRY"}
-     ```
-     The ID is a short mnemonic of the name in capitals, like the existing ones (`BIKEPARTS`,
-     `FARMCO`), at most 10 characters; check it is free (`ID eq '…'`) and let the user change it.
+**Always send an `ID`.** EBMS only generates a vendor ID when the folder has a default ID method,
+and the API cannot tell you whether it has one. Without one, a create with no `ID` does not
+fail cleanly: EBMS tries to save a vendor whose ID is blank, which nothing can look up (on SBX
+it was stopped only because a blank-ID vendor already existed, which tripped a uniqueness rule:
+"duplicate key value violates unique constraint …apvendor…contact__unique"). If the user says the
+folder has an ID method and wants EBMS to choose, leave `ID` out and report the ID it chose —
+and if the answer is that duplicate-key error, the folder has no method: send an ID instead.
 
-If the user wants a particular ID anyway, add `ID` after `TREE_ID` in the one POST.
+The ID is a short mnemonic of the name in capitals, like the existing ones (`BIKEPARTS`,
+`FARMCO`), at most 10 characters; check it is free (`ID eq '…'`) and let the user change it.
 
-In the two-step route the vendor exists without a name until the PATCH lands. If the PATCH
-fails, read the vendor back and send it again (it is safe to repeat); if the user stops in
-between, say the vendor is there unnamed. **A create that answers "This Id already exists"**
-usually means an earlier first step went through: find the vendor by ID, and if it is the
-nameless one, carry on with the PATCH instead of choosing a new ID. Delete a half-made vendor
-only if the user asks.
+**If EBMS answers "Could not find child APCONTACTS record"**, `TREE_ID` was not the first field
+(a create with the name before the folder fails this way). Nothing was saved: send it again with
+`TREE_ID` first. If it still fails, the two-step route also works (verified): POST
+`{"TREE_ID": "8", "ID": "BIKEPARTS", "EXTERNALID": …}`, then PATCH the rest onto the AUTOID it
+returns. Until that PATCH lands the vendor has no name; if it fails, read back and send it again.
+
+**"This Id already exists"** means the ID is taken — usually by a vendor this conversation already
+created: look it up by `EXTERNALID` first, and if it is yours, continue from it.
 
 What EBMS does with it (verified):
 
 - `TREE_ID` is required: without it the create fails with "Could not find vendor defaults".
-- The "APCONTACTS" failure and the two-step route were verified on SBX (1.8.184), whose vendor
-  folders have no default ID method. That the failure *is* the missing ID method, and that
-  `TREE_ID` must come first, was found by Koble (2026-10-12); a one-POST create into a folder
-  with an ID method has not been run here yet.
-- `ZIP` fills in `CITY`, `STATE` and `COUNTRY`.
+- `ZIP` fills in `CITY`, `STATE` and `COUNTRY`; `EXTERNALID` is stored.
 - A contact record is created by itself, blank.
 
 ## Phone, email and the contact's name
@@ -101,8 +94,8 @@ EBMS's vendor screen.
 
 ## Not yet verified
 
-- A create carrying `EXTERNALID`. The field exists and `EXTERNALID eq '…'` filters work on
-  `APVENDOR`; read the verification to confirm it stored.
+- A create without `ID` into a folder that has a default ID method (SBX's vendor folders have
+  none).
 - `MIN_ORDER`, `ACNT_ID`, `GL_CODE`, `PAY_TO` and `CRED_LIM` writes.
 - Adding a second contact (an `APCONTACTSs@delta` entry without `@id`).
 - Deleting a vendor that has history.
