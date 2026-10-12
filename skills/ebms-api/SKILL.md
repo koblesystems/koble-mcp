@@ -1,6 +1,6 @@
 ---
 name: ebms-api
-description: Read and write EBMS / Koble data (Koble Systems ERP) through the koble-mcp server — how to call ebms_companies, ebms_get, ebms_write and ebms_command, OData filter and select syntax, write conventions, how to read a write's verification, and the install-specific quirks that make correct-looking requests fail. Use this whenever a task touches EBMS data: products (INVENTRY), customers (ARCUST), sales orders (ARINV), purchase orders (APINV), vendors (APVENDOR), tasks or workers (TASK/PYEMP), or whenever someone mentions EBMS, Koble, koblesystems.dev, an ERP OData endpoint, or is debugging a 401/422/500 from one. The task skills (ebms-sales-orders, ebms-purchase-orders, ebms-products, ebms-tasks, ebms-mrp) build on this one. Needs the koble-mcp server (tools ebms_companies, ebms_get, ebms_write, ebms_command).
+description: Read and write EBMS / Koble data (Koble Systems ERP) through the koble-mcp server — how to call ebms_companies, ebms_get, ebms_write and ebms_command, OData filter and select syntax, write conventions, how to read a write's verification, and the install-specific quirks that make correct-looking requests fail. Use this whenever a task touches EBMS data: products (INVENTRY), customers (ARCUST), sales orders (ARINV), purchase orders (APINV), vendors (APVENDOR), tasks or workers (TASK/PYEMP), or whenever someone mentions EBMS, Koble, koblesystems.dev, an ERP OData endpoint, or is debugging a 401/422/500 from one. The task skills (ebms-sales-orders, ebms-purchase-orders, ebms-products, ebms-customers-vendors, ebms-tasks, ebms-mrp) build on this one. Needs the koble-mcp server (tools ebms_companies, ebms_get, ebms_write, ebms_command).
 ---
 
 # The EBMS API through koble-mcp
@@ -14,7 +14,8 @@ the koble-mcp server is not connected and stop — do not reach for the network 
 
 Read this page, then open `references/` for the entity you are actually touching. For anything
 beyond a single read or a single field change, use the task skill for that document
-(`ebms-sales-orders`, `ebms-purchase-orders`, `ebms-products`, `ebms-tasks`, `ebms-mrp`); it knows
+(`ebms-sales-orders`, `ebms-purchase-orders`, `ebms-products`, `ebms-customers-vendors`,
+`ebms-tasks`, `ebms-mrp`); it knows
 the procedure and what to confirm.
 
 ## 1. The company
@@ -80,14 +81,14 @@ Three things the server refuses outright, before anything is sent:
 
 - **`PROCESS` anywhere in the body, at any depth.** Posting or unprocessing a document is done
   by a person in EBMS, not through this server. Do not look for a way around it.
-- **A `POST` whose `EXTERNALID` already exists** on `ARINV`, `APINV`, `INMFG` or `TASK`. You get
+- **A `POST` whose `EXTERNALID` already exists** on `ARINV`, `APINV`, `INMFG`, `TASK`, `ARCUST` or `APVENDOR`. You get
   the existing record back. That is the guard working: read it and continue from it rather than
   creating a second one.
 - **A malformed request** — a keyed POST, a body on a DELETE, a PATCH with no key.
 
 ### Mark what you create
 
-Put an `EXTERNALID` on every document you create. It is settable on a POST and filterable, so it
+Put an `EXTERNALID` on every document, customer and vendor you create. It is settable on a POST and filterable, so it
 is how you find out whether a create that timed out actually happened — and it is what makes the
 duplicate guard work. Use something traceable and unique, e.g. `claude-2026-09-21-a1`.
 

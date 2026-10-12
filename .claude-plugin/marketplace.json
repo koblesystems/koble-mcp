@@ -12,7 +12,7 @@
       "name": "koble-mcp",
       "displayName": "Koble",
       "source": "./",
-      "description": "EBMS (Koble) for Claude: sales orders, purchase orders, receiving, products, tasks and MRP.",
+      "description": "EBMS (Koble) for Claude: sales orders, purchase orders, receiving, products, customers, vendors, tasks and MRP.",
       "category": "productivity",
       "homepage": "https://github.com/koblesystems/koble-mcp"
     }
