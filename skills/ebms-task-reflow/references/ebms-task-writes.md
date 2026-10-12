@@ -1,6 +1,6 @@
 # Writing task times in EBMS — what actually happens
 
-Observed on SBX, EBMS 1.8.178, 2026-09-24, by moving 31 tasks, restoring
+Observed on EBMS 1.8.178, 2026-09-24, by moving 31 tasks, restoring
 them, and moving them again.
 
 ## Time format

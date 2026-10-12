@@ -19,10 +19,10 @@ instead.
      does not have a dialog".
    - **Specific quantities:** the user says what shipped on each line.
 
-3. **Shipping moves stock now, not when the order is processed.** On SBX (2026-09-23),
-   `MarkAllAsShipped` on an unprocessed ZTEST order took the product's `T_ON_HAND` from 0 to −7
-   at once — the 4 on a line plus the 3 in a materials list. Deleting the order put it back. Say
-   so when recording a shipment: it is not a draft.
+3. **Shipping moves stock now, not when the order is processed.** In testing (2026-09-23),
+   `MarkAllAsShipped` on an unprocessed throwaway test order took the product's `T_ON_HAND` from
+   0 to −7 at once — the 4 on a line plus the 3 in a materials list. Deleting the order put it
+   back. Say so when recording a shipment: it is not a draft.
 
 4. **Guard the quantities. EBMS checks neither of these:**
    - **Never ship more than ordered** unless the user explicitly says so. EBMS accepts 7 shipped
@@ -32,7 +32,7 @@ instead.
 
 5. **Record the shipment:**
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: PATCH
                path: ARINV('<order AUTOID>')
                body: {"Details@delta": [
@@ -48,7 +48,7 @@ instead.
    and `TOTAL` — the amount that will be invoiced when someone processes it. `TOTAL_SO` is the
    ordered total and does not move.
 
-7. **Then stop, and say what is left.** For example: *"Order 1193 is recorded as shipped: 2 of 3
+7. **Then stop, and say what is left.** For example: *"Order <n> is recorded as shipped: 2 of 3
    mugs, 1 back-ordered, $87.00 to invoice. Processing it into an invoice is done in EBMS —
    this server won't post a document."*
 

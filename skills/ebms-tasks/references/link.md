@@ -2,15 +2,15 @@
 
 Read `../SKILL.md` first for the ground rules.
 
-Verified on SBX, 2026-09-23: `LinkInvoice` makes a real link; writing `DOCUMENT` does not.
+Verified 2026-09-23: `LinkInvoice` makes a real link; writing `DOCUMENT` does not.
 
 ## What a linked task looks like
 
-On SBX, tasks that carry work for a sales order read like this:
+Tasks that carry work for a sales order read like this:
 
 | Field | Example | Writable? |
 |---|---|---|
-| `DOCUMENT` | `1006` — the invoice number | yes (15 chars) |
+| `DOCUMENT` | `<order no>` — the invoice number | yes (15 chars) |
 | `DOC_AID` | the `ARINV` AUTOID | **read-only** |
 | `DOC_STAMP` | the order **line's** `TIMESTAMP`, or empty for the whole order | **read-only** |
 | `DOC_TYPE` | `S` for a sales document, `M` for a manufacturing batch | **read-only** |
@@ -23,7 +23,7 @@ why EBMS provides a command for this.
 ## Link it with `LinkInvoice`
 
 ```
-ebms_command  company: sbx   entity: TASK   key: <task AUTOID>
+ebms_command  company: <company>   entity: TASK   key: <task AUTOID>
               command: LinkInvoice
               body: {"SalesInvoiceAutoID": "<ARINV AUTOID>"}
 ```
@@ -48,7 +48,7 @@ To find the tasks on an order, filter on the invoice number:
 
 ```
 ebms_get  path: TASK
-          filter: not startswith(ID,'($)') and DOCUMENT eq '1193'
+          filter: not startswith(ID,'($)') and DOCUMENT eq '<order no>'
           select: AUTOID,ID,DESCR,TYPE,STATUS,EMP_ID,DOC_STAMP,HOURS
 ```
 

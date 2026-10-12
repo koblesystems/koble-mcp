@@ -4,7 +4,7 @@
 
 ```
 ebms_get  path: APVENDOR
-          filter: not startswith(ID,'($)') and (contains(tolower(L_NAME),'bike parts') or ID eq 'BIKEPARTS')
+          filter: not startswith(ID,'($)') and (contains(tolower(L_NAME),'acme') or ID eq 'ACME')
           select: AUTOID,ID,L_NAME,F_NAME,CITY,STATE,TREE_ID,INACTIVE
           expand: APCONTACTSs($select=AUTOID,NAME,B_PHONE,EMAIL)
 ```
@@ -22,11 +22,11 @@ Ask for, in one message: the company name, the folder, the address, phone, email
 time in days if they know it. Propose the ID (below). Show what will be sent and ask before
 sending.
 
-**One POST: `TREE_ID` first, then `ID`, then everything else** (verified on SBX, 1.8.184):
+**One POST: `TREE_ID` first, then `ID`, then everything else** (verified on 1.8.184):
 
 ```
 ebms_write  method: POST   path: APVENDOR
-            body: {"TREE_ID": "8", "ID": "BIKEPARTS", "L_NAME": "Bike Parts Co",
+            body: {"TREE_ID": "<folder>", "ID": "ACME", "L_NAME": "Acme Supply",
                    "ADDRESS1": "2 Industrial Rd", "ZIP": "17527", "LEAD_DAYS": 21,
                    "EXTERNALID": "claude-2026-10-12-v1"}
             readBack: {"record": "AUTOID,ID,CITY,STATE,COUNTRY"}
@@ -35,21 +35,21 @@ ebms_write  method: POST   path: APVENDOR
 **Always send an `ID`, even if the user believes the folder generates one.** EBMS generates a
 vendor ID only when the folder has a default ID method, and the API cannot show whether it has.
 Without one, a create with no `ID` tries to save a vendor whose ID is blank: no lookup by ID finds
-it, only its AUTOID or `ID eq ''`. (On SBX two such attempts were stopped only because a blank-ID
-vendor already existed, tripping the unique indexes `idx_fromcb_apvendor_t1/t2_contact__unique`;
-otherwise they would most likely have saved.) The koble server refuses a vendor create without an
-`ID`. If a blank `ID` ever comes back in `verification.rows`, say so at once and offer to delete
-it, with a yes.
+it, only its AUTOID or `ID eq ''`. (In testing, two such attempts were stopped only because a
+blank-ID vendor already existed, tripping the unique indexes
+`idx_fromcb_apvendor_t1/t2_contact__unique`; otherwise they would most likely have saved.) The koble
+server refuses a vendor create without an `ID`. If a blank `ID` ever comes back in
+`verification.rows`, say so at once and offer to delete it, with a yes.
 
-The ID is a short mnemonic of the name in capitals, like the existing ones (`BIKEPARTS`,
-`FARMCO`), at most 10 characters; check it is free (`ID eq '…'`) and let the user change it.
+The ID is a short mnemonic of the name in capitals, like `ACME` for Acme Supply, at
+most 10 characters; check it is free (`ID eq '…'`) and let the user change it.
 
 **If EBMS answers "Could not find child APCONTACTS record"**, first search `EXTERNALID eq '…'`
 and `ID eq '…'` to be sure nothing was saved. The usual cause is the name coming before `TREE_ID`
 (on 2026-10-05 a body ordered `ID, L_NAME, TREE_ID, …` failed this way; on 2026-10-12 one with
 `TREE_ID` first saved). If your body had the name first, show it with `TREE_ID` first and ask
 again. If it already had `TREE_ID` first, don't resend it: use the two-step route, each step with
-its own yes — POST only `{"TREE_ID": "8", "ID": "BIKEPARTS", "EXTERNALID": …}` (verified
+its own yes — POST only `{"TREE_ID": "<folder>", "ID": "ACME", "EXTERNALID": …}` (verified
 2026-10-05 with `ID` before `TREE_ID`; with no name in the body, the order did not matter), then
 PATCH the rest onto the AUTOID it returns. Until the PATCH lands
 the vendor has no name: if it fails, read the vendor back and ask before sending it again, and if
@@ -76,7 +76,7 @@ the vendor, with the **plain** AUTOID as `@id`:
 ```
 ebms_write  method: PATCH   path: APVENDOR('<vendor AUTOID>')
             body: {"APCONTACTSs@delta": [{"@id": "<contact AUTOID>", "NAME": "Pat Jones",
-                   "B_PHONE": "(717) 555-0102", "EMAIL": "orders@bikeparts.example"}]}
+                   "B_PHONE": "(717) 555-0102", "EMAIL": "orders@vendor.example"}]}
 ```
 
 An `@id` in any other form (`"APCONTACTS('…')"`) is ignored without an error; the verification
@@ -104,7 +104,7 @@ EBMS's vendor screen.
 
 ## Not yet verified
 
-- A vendor folder with a default ID method: SBX's tested folders have none, and this skill
+- A vendor folder with a default ID method: the folders tested had none, and this skill
   always sends an ID anyway.
 - `MIN_ORDER`, `ACNT_ID`, `GL_CODE`, `PAY_TO` and `CRED_LIM` writes.
 - Adding a second contact (an `APCONTACTSs@delta` entry without `@id`).

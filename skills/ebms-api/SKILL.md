@@ -38,7 +38,7 @@ omit it only when exactly one company is available. `ebms_write` and `ebms_comma
 `orderby`, `top`, `skip`, `count`. Nothing needs percent-encoding; the server does that.
 
 ```
-ebms_get  company: sbx
+ebms_get  company: <company>
           path: INVENTRY
           filter: INACTIVE eq false and contains(tolower(DESCR_1),'shovel')
           select: ID,DESCR_1,COST,BASE
@@ -51,7 +51,7 @@ you have seen everything.
 
 **Always pass `select`, including inside `expand`** (`Details($select=AUTOID,INVEN,M_QUAN_VIS)`).
 It is not a nicety. Requests are cut off at about two minutes, and an unselected read returns
-every field, many computed on the fly (measured on SBX, EBMS 1.8.148):
+every field, many computed on the fly (measured on EBMS 1.8.148):
 
 | Read | No select | With select |
 |---|---|---|

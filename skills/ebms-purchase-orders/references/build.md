@@ -53,12 +53,12 @@ Read `../SKILL.md` first for the ground rules.
 8. **Create it:**
 
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: POST
                path: APINV
-               body: {"ID": "BIKEPARTS", "WAREHOUSE": "MAINSHOP",
+               body: {"ID": "<vendor ID>", "WAREHOUSE": "<warehouse>",
                       "EXTERNALID": "claude-2026-09-21-po1",
-                      "Details": [{"INVEN": "TUBE700C", "O_QUAN_VIS": 35,
+                      "Details": [{"INVEN": "<product ID>", "O_QUAN_VIS": 35,
                                    "UNIT_MEAS": "EA", "UNIT_VIS": 7.50}]}
                readBack: {"record": "INVOICE,PO_NO,SUBTOTAL,TOTAL,TOTAL_PO",
                           "lines": "UNIT_MEAS,UNIT_VIS,O_QUAN_VIS,ETA_DATE,ACCOUNT"}
@@ -67,8 +67,8 @@ Read `../SKILL.md` first for the ground rules.
    No `ETA_DATE`, no `INV_DATE` or `ORDER_DATE` unless the user gave them, no `PROCESS`.
 
 9. **Report from the result.**
-   - The PO number is `record.INVOICE` (`PO#183`) with `PO_NO` (`183`) — give both, since the
-     person will see `183` on the screen.
+   - The PO number is `record.INVOICE` (`PO#<n>`) with `PO_NO` (`<n>`) — give both, since the
+     person will see `<n>` on the screen.
    - Lines come from `verification.rows`: quantity, unit, unit cost, as EBMS stored them.
    - **"The order comes to" is `TOTAL_PO`.** `TOTAL` and `SUBTOTAL` only count what has been
      received, so on a new PO they are near zero. Don't report them as the order's value.

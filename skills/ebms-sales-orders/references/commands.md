@@ -3,8 +3,8 @@
 Read `../SKILL.md` first for the ground rules.
 
 Commands are bound actions, run with `ebms_command`: `entity: ARINV`, `key: <order AUTOID>`,
-`command: <name>`, and `body` only when the command has a dialog. Verified against SBX
-(EBMS 1.8.148, September 2026).
+`command: <name>`, and `body` only when the command has a dialog. Verified against
+EBMS 1.8.148 (September 2026).
 
 The server allows only the four commands below by name — nothing that posts, processes, pays or
 sends. Anything else comes back refused; say so and suggest doing it in EBMS.
@@ -27,7 +27,7 @@ sends. Anything else comes back refused; say so and suggest doing it in EBMS.
 ## Recalculate all prices
 
 ```
-ebms_command  company: sbx   entity: ARINV   key: <order AUTOID>
+ebms_command  company: <company>   entity: ARINV   key: <order AUTOID>
               command: RecalculateAllPrices        (no body)
 ```
 
@@ -50,7 +50,7 @@ A plain `PATCH {"ID": "…"}` is refused: "cannot change the id on a saved entit
 command". Use the command:
 
 ```
-ebms_command  company: sbx   entity: ARINV   key: <order AUTOID>
+ebms_command  company: <company>   entity: ARINV   key: <order AUTOID>
               command: ChangeCustomer
               body: {"NewCustomer": {"Guid": "<new customer's Guid>"},
                      "ChangeAddress": true, "ChangeTerms": true, "RecalculatePrices": true}
@@ -73,7 +73,7 @@ afterwards, and report customer, address, terms and `TOTAL_S_SO` before and afte
 ## Calculate freight
 
 ```
-ebms_command  company: sbx   entity: ARINV   key: <order AUTOID>
+ebms_command  company: <company>   entity: ARINV   key: <order AUTOID>
               command: CalculateFreight           (no body)
 ```
 

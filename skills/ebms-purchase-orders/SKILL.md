@@ -1,6 +1,6 @@
 ---
 name: ebms-purchase-orders
-description: Create and change EBMS / Koble purchase orders (APINV) by hand — ordering products from a vendor, adding, removing or repricing lines, changing quantities, vendor part numbers and purchase units, freight and tax, finding a vendor or an open PO, and recording what was received. Use whenever someone wants to order something from a supplier, raise or edit a purchase order, add a line to a PO, change a cost or a quantity on one, look up what is on order, or record a delivery — "order 10 tubes from Bikeparts", "add two cases to PO 182", "what's on order from Farm Co", "receive PO 119". For orders that come out of an MRP run use ebms-mrp-purchase-orders instead, and for turning a vendor's invoice into a PO use the invoice intake tooling. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
+description: Create and change EBMS / Koble purchase orders (APINV) by hand — ordering products from a vendor, adding, removing or repricing lines, changing quantities, vendor part numbers and purchase units, freight and tax, finding a vendor or an open PO, and recording what was received. Use whenever someone wants to order something from a supplier, raise or edit a purchase order, add a line to a PO, change a cost or a quantity on one, look up what is on order, or record a delivery — "order 10 tubes from Acme Supply", "add two cases to PO 42", "what's on order from Northwind", "receive PO 57". For orders that come out of an MRP run use ebms-mrp-purchase-orders instead, and for turning a vendor's invoice into a PO use the invoice intake tooling. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
 ---
 
 # EBMS purchase orders
@@ -39,7 +39,7 @@ created; after that, change it here.
 
 1. **Name the company before the first write** and confirm it is the one the user means.
 2. **Address a PO by quoted AUTOID** — `APINV('<AUTOID>')` — or by its quoted `INVOICE`, which is
-   the whole string EBMS assigned (`PO#110`), **not** the `PO_NO` (`110`). `APINV('182')` is a
+   the whole string EBMS assigned (`PO#<n>`), **not** the `PO_NO` (`<n>`). `APINV('<n>')` is a
    422. The composite `ID=…,INVOICE=…` form and the `VENDOR|INVOICE` pipe form both fail on this
    build, whatever EBMS's own documentation says.
 3. **Read lines only through the parent document.** A standalone `APINVDET` query returns the
@@ -52,14 +52,13 @@ created; after that, change it here.
 
 ## What EBMS numbers itself
 
-- **`INVOICE` and `PO_NO` are assigned on create.** A new PO comes back as `INVOICE` `PO#175`
-  and `PO_NO` `175`. Do not send them for a new order. (When a vendor's invoice is later recorded
+- **`INVOICE` and `PO_NO` are assigned on create.** A new PO comes back as `INVOICE` `PO#<n>`
+  and `PO_NO` `<n>`. Do not send them for a new order. (When a vendor's invoice is later recorded
   against the PO, `INVOICE` becomes the vendor's own number and `PO_NO` is left alone.)
 - **`ETA_DATE` is EBMS's, not yours.** A date sent on a line came back as a different date or as
   nothing, on four purchase orders. Don't send it; read back what EBMS chose and tell the user
   when a line is expected after it is needed.
-- **`ACCOUNT` is filled in** from the product's purchase account on a line with a product
-  (`60000-000` on SBX).
+- **`ACCOUNT` is filled in** from the product's purchase account on a line with a product.
 - **A line with no `UNIT_VIS` gets the product's own `COST`**, per stock unit.
 - **Totals follow what has been received, like the sales side follows shipped.** `TOTAL_PO` is
   the ordered amount. `SUBTOTAL` and `TOTAL` are the *invoice* amounts — what has been received
@@ -83,17 +82,17 @@ fields. `references/find.md` has more.
 ```
 # Vendors — exclude the folder rows that share this entity set
 path: APVENDOR
-filter: not startswith(ID,'($)') and INACTIVE eq false and (contains(tolower(ID),'bike') or contains(tolower(L_NAME),'bike'))
+filter: not startswith(ID,'($)') and INACTIVE eq false and (contains(tolower(ID),'<term>') or contains(tolower(L_NAME),'<term>'))
 select: AUTOID,ID,L_NAME,F_NAME,CITY,STATE,GL_CODE
 
 # A vendor that is not there yet: the ebms-customers-vendors skill creates it.
 
 # A vendor's open purchase orders
-path: APINV   filter: ID eq 'BIKEPARTS' and STATUS eq 'U'
+path: APINV   filter: ID eq '<vendor ID>' and STATUS eq 'U'
 select: AUTOID,INVOICE,PO_NO,INV_DATE,DUE_DATE,TOTAL_PO,WAREHOUSE
 
 # One PO by its number
-path: APINV   filter: PO_NO eq '182'   select: AUTOID,INVOICE,PO_NO,ID,STATUS
+path: APINV   filter: PO_NO eq '<n>'   select: AUTOID,INVOICE,PO_NO,ID,STATUS
 ```
 
 **Read a purchase order** with this shape every time you read one back:
@@ -110,7 +109,7 @@ document's.
 
 ## Verified, and what is not
 
-Verified end to end on SBX (EBMS 1.8.148, 2026-09-23) with a ZTEST product and PO#186, both
+Verified end to end on EBMS 1.8.148 (2026-09-23) with a throwaway test product and PO, both
 deleted afterwards: creating a PO with a product line in a purchase unit and a charge line;
 addressing it by AUTOID and by `INVOICE`; changing quantity and unit cost, removing a line and
 adding one in one PATCH; `FREIGHT` on a PATCH; receiving part of a line in a larger unit and all

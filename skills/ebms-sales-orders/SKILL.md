@@ -1,6 +1,6 @@
 ---
 name: ebms-sales-orders
-description: Build, change and ship EBMS / Koble sales orders (ARINV) — creating an order for a customer, adding, removing or repricing lines, changing quantities, materials lists on assembly, kit and made-to-order lines, recalculating prices, changing an order's customer, calculating freight, and recording what shipped and what is back-ordered. Handles large orders within the API's 2-minute request limit. Use whenever someone wants to enter, edit, fulfil, ship, back-order, reprice or re-assign a sales order in EBMS or Koble, even if they just say "put in an order for…", "move order 1193 to another customer" or "mark order 1193 shipped". Posting an order into an invoice is not done here. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get, ebms_write, ebms_command).
+description: Build, change and ship EBMS / Koble sales orders (ARINV) — creating an order for a customer, adding, removing or repricing lines, changing quantities, materials lists on assembly, kit and made-to-order lines, recalculating prices, changing an order's customer, calculating freight, and recording what shipped and what is back-ordered. Handles large orders within the API's 2-minute request limit. Use whenever someone wants to enter, edit, fulfil, ship, back-order, reprice or re-assign a sales order in EBMS or Koble, even if they just say "put in an order for…", "move order 1042 to another customer" or "mark order 1042 shipped". Posting an order into an invoice is not done here. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get, ebms_write, ebms_command).
 ---
 
 # EBMS sales orders
@@ -13,7 +13,7 @@ every field.
 
 If those tools are not available, say the koble-mcp server is not connected and stop.
 
-Everything here was verified against a live install (SBX, EBMS 1.8.148, September 2026)
+Everything here was verified against a live install (EBMS 1.8.148, September 2026)
 unless it says otherwise.
 
 ## Which workflow
@@ -107,7 +107,7 @@ path: ARINV   filter: ID eq 'SMIJOH' and STATUS eq 'U'
 select: AUTOID,INVOICE,INV_DATE,DESCR,TOTAL_SO
 
 # One order by number, or by the EXTERNALID you gave it
-path: ARINV('1193')   select: AUTOID,INVOICE,STATUS
+path: ARINV('<invoice>')   select: AUTOID,INVOICE,STATUS
 path: ARINV   filter: EXTERNALID eq 'claude-2026-09-21-a1'   select: AUTOID,INVOICE
 ```
 

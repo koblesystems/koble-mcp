@@ -13,7 +13,7 @@ classification enum and folder details.
 
 If those tools are not available, say the koble-mcp server is not connected and stop.
 
-Verified against a live install (SBX, EBMS 1.8.148, 2026-09-16) by creating, reading,
+Verified against a live install (EBMS 1.8.148, 2026-09-16) by creating, reading,
 updating and deleting a test product. The sections marked *not yet verified* were not.
 
 ## Ground rules
@@ -61,8 +61,8 @@ updating and deleting a test product. The sections marked *not yet verified* wer
 
 6. **Post:**
    ```
-   ebms_write  company: sbx   method: POST   path: INVENTRY
-               body: {"ID": "MUG-12", "DESCR_1": "12 oz ceramic mug", "TREE_ID": "26",
+   ebms_write  company: <company>   method: POST   path: INVENTRY
+               body: {"ID": "MUG-12", "DESCR_1": "12 oz ceramic mug", "TREE_ID": "<folder>",
                       "C_TYPE": 2, "COST": 3.10, "BASE": 7.95,
                       "UPC": "012345678905", "MFG_PART": "CM-12"}
                readBack: {"record": "FOLDERNAME,MARKUP,TAX_GROUP,PUR_ACC"}
@@ -71,14 +71,14 @@ updating and deleting a test product. The sections marked *not yet verified* wer
    `DESCR_1` and `DESCR_2` as the default line description.
 
 7. **Report what came back.** The `readBack.record` fields above put EBMS's own defaults in
-   `verification.rows` alongside what you sent. EBMS fills defaults the user may want to review: on the install tested, `MARKUP` `(None)`,
-   `TAX_GROUP` `Taxable`, and `PUR_ACC` `60000-000`. Those defaults are company configuration
-   and may differ elsewhere. Mention them rather than assuming they're right.
+   `verification.rows` alongside what you sent. EBMS fills defaults the user may want to review,
+   such as `MARKUP` `(None)`, `TAX_GROUP` `Taxable`, and a purchase account in `PUR_ACC`. Those
+   defaults are company configuration and may differ elsewhere. Mention them rather than assuming they're right.
 
 ## Update a product
 
 ```
-ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<AUTOID>')
             body: {"BASE": 8.25, "DESCR_2": "Dishwasher safe"}
 ```
 `verification.ok: false` with a mismatch means EBMS ignored a field it won't accept in the
@@ -119,10 +119,10 @@ ebms_get  path: INVENUNT   filter: ID eq 'MUG-12'
   "" (`Smaller`, multiplier 0), and `EACH_UNIT` and `DEF_UNIT` both "". Lines for it then carry
   `UNIT_MEAS` "". That works, but it is not what a product made in EBMS looks like; mention it.
 
-**Add a unit through the product**, as a child collection (verified on SBX, 2026-09-23):
+**Add a unit through the product**, as a child collection (verified 2026-09-23):
 
 ```
-ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<AUTOID>')
             body: {"INVENUNTs": [{"UNIT": "CASE", "MULTIPLY": "Larger", "MULTIPLIER": 12}]}
 ```
 
@@ -171,11 +171,11 @@ ebms_get  path: INVENDOR   filter: ID eq 'MUG-12'
   It is writable, but setting it through the API has not been tried yet.
 - `ORDER_AMT` is the reorder increment (order in multiples of this).
 
-**Add a vendor record through the product** (verified on SBX, 2026-09-23):
+**Add a vendor record through the product** (verified 2026-09-23):
 
 ```
-ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
-            body: {"INVENDORs": [{"VENDOR_ID": "BIKEPARTS", "PART_NO": "ZT-1",
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<AUTOID>')
+            body: {"INVENDORs": [{"VENDOR_ID": "<vendor ID>", "PART_NO": "<part no>",
                                   "UNIT_MEAS": "CASE", "COST": 30}]}
 ```
 

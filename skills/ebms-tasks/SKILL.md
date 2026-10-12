@@ -33,15 +33,15 @@ If those tools are not available, say the koble-mcp server is not connected and 
 ## The shape of a task
 
 - **`ID` is a 10-character key EBMS assigns on create** (`H3J6K9L2MC`). Never send one.
-- **`TASK` also holds templates.** Rows whose `ID` starts with `($)` — `($)SALES`, `($)WORKCON` —
-  are task templates, one per type, not real tasks. **Exclude them from every search** with
-  `not startswith(ID,'($)')`. SBX has 1,742 rows and 1,726 real tasks.
+- **`TASK` also holds templates.** Rows whose `ID` starts with `($)` — `($)` plus the type
+  name — are task templates, one per type, not real tasks. **Exclude them from every search**
+  with `not startswith(ID,'($)')`. An install can have thousands of rows, nearly all real tasks.
 - **`STATUS` is read-only and derived.** `TASTATUS` rows carry a logic expression that decides it
   from the task's own fields, so you set `COMPLETED` or `APPROVED_C` and EBMS works out whether
   the task reads `Open`, `Pending`, `Waiting for Parts`, `Completed`, `Approved`, `Billed` or
   `Closed`. Never try to write `STATUS`.
-- **`ASSIGN_EMP` is read-only too** — a pipe-wrapped summary (`|RIVALE|`) of the task's assigned
-  workers. Setting `EMP_ID` fills it in; nothing else is needed to assign one worker.
+- **`ASSIGN_EMP` is read-only too** — a pipe-wrapped summary (`|<worker ID>|`) of the task's
+  assigned workers. Setting `EMP_ID` fills it in; nothing else is needed to assign one worker.
 - `DOCUMENT` is the linked document's number, with `DOC_AID`, `DOC_STAMP` and `DOC_TYPE`
   read-only beside it. See `references/link.md`.
 
@@ -51,7 +51,7 @@ A task's type, priority and manager must match a configured row. Read them befor
 anything, and offer the user what exists rather than inventing a value.
 
 ```
-ebms_get  path: TATYPES    select: AUTOID,TYPE,DEF_ID        # e.g. Roasting, Sales, Bike_Repair
+ebms_get  path: TATYPES    select: AUTOID,TYPE,DEF_ID        # configured task types
 ebms_get  path: TAPRIOR    select: AUTOID,PRIORITY,SORT      # Low, Normal, High, Pending
 ebms_get  path: TASTATUS   select: AUTOID,STATUS,SORT        # derived — read only, never written
 ebms_get  path: TAMANAGE   select: AUTOID,MANAGER,ACTIVE     # configured task managers
@@ -73,10 +73,10 @@ ebms_get  path: TASK
           top: 50
 
 # One worker's open tasks
-filter: not startswith(ID,'($)') and COMPLETED eq false and EMP_ID eq 'RIVALE'
+filter: not startswith(ID,'($)') and COMPLETED eq false and EMP_ID eq '<worker ID>'
 
 # A customer's tasks
-filter: not startswith(ID,'($)') and CUST_ID eq 'KIMSAM'
+filter: not startswith(ID,'($)') and CUST_ID eq '<customer ID>'
 ```
 
 Three read quirks to plan around:
@@ -91,7 +91,7 @@ Three read quirks to plan around:
 
 ## Verified, and what is not
 
-Verified end to end on SBX (EBMS 1.8.148, 2026-09-23) with a ZTEST task that was deleted
+Verified end to end on EBMS 1.8.148, 2026-09-23, with a throwaway test task that was deleted
 afterwards: creating a task (EBMS assigns `ID`, derives `STATUS` and `ASSIGN_EMP`); changing it;
 `DUE_BY` as either `09/25/2026` or `2026-09-25`; a valid `PIPE_PHASE` (EBMS derives
 `PHASE_AID`); linking to a sales order with `LinkInvoice`; booking time through `PYTMDETs`;
