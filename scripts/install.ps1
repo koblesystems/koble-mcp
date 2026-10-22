@@ -1,6 +1,6 @@
 # Installs koble on Windows, then runs `koble setup`.
 #
-#   irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex
+#   irm https://github.com/koblesystems/koble-mcp/releases/latest/download/install.ps1 | iex
 #
 # $env:KOBLE_VERSION = 'v0.1.0'   install that release instead of the newest
 # $env:KOBLE_INSTALL_DIR = '...'  install somewhere other than %LOCALAPPDATA%\Programs\koble
@@ -49,6 +49,7 @@ try {
 Write-Host "Installed $target"
 
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+if ($null -eq $userPath) { $userPath = '' }   # a new account may have no user Path at all
 if ((($userPath -split ';') | Where-Object { $_ -eq $dir }).Count -eq 0) {
     [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ";$dir").TrimStart(';')), 'User')
     $env:Path = "$env:Path;$dir"

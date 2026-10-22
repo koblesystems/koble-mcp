@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs koble on macOS or Linux, then runs `koble setup`.
 #
-#   curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash
+#   curl -fsSL https://github.com/koblesystems/koble-mcp/releases/latest/download/install.sh | bash
 #
 # KOBLE_VERSION=v0.1.0   install that release instead of the newest
 # KOBLE_INSTALL_DIR=...  install somewhere other than ~/.local/bin

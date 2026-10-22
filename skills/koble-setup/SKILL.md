@@ -24,8 +24,8 @@ to run anything. Instead:
 2. If it is not, give them the one line for their system and say what it does (downloads the
    koble program from github.com/koblesystems/koble-mcp, checks it, and asks for the EBMS serial
    number, which companies to use, a test company, and a username and password for each):
-   - Windows, in PowerShell: `irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex`
-   - macOS or Linux, in Terminal: `curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash`
+   - Windows, in PowerShell: `irm https://github.com/koblesystems/koble-mcp/releases/latest/download/install.ps1 | iex`
+   - macOS or Linux, in Terminal: `curl -fsSL https://github.com/koblesystems/koble-mcp/releases/latest/download/install.sh | bash`
 3. Tell them to quit Claude Desktop completely (tray icon or menu → Quit) and reopen it
    afterwards.
 
@@ -42,14 +42,14 @@ release's published checksums. Say that, and ask before running it.
 
 - **macOS or Linux:**
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | KOBLE_SKIP_SETUP=1 bash
+  curl -fsSL https://github.com/koblesystems/koble-mcp/releases/latest/download/install.sh | KOBLE_SKIP_SETUP=1 bash
   ```
   It installs to `~/.local/bin/koble`. If that folder is not on PATH, the installer says so. Use
   the full path for the rest of this skill, and tell the user which line to add to their shell
   profile.
 - **Windows (PowerShell):**
   ```powershell
-  $env:KOBLE_SKIP_SETUP = '1'; irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex
+  $env:KOBLE_SKIP_SETUP = '1'; irm https://github.com/koblesystems/koble-mcp/releases/latest/download/install.ps1 | iex
   ```
   It installs to `%LOCALAPPDATA%\Programs\koble\koble.exe` and adds that folder to the user's
   PATH. Use the full path until a new terminal is opened.
