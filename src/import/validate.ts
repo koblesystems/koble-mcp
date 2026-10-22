@@ -5,6 +5,7 @@
  * Problems are kept per row and grouped by kind, so a person reads "9 IDs are over 24
  * characters", not nine messages.
  */
+import { ambiguousDate } from "../mrp/csv.js";
 import type { SourceRow } from "./source.js";
 import type { EntityMeta } from "./metadata.js";
 import type { Mapping } from "./mapping.js";
@@ -27,6 +28,8 @@ export type IssueKind =
     | "folder-cycle"
     | "id-taken"
     | "cell-error"
+    | "unreadable"
+    | "line-break"
     | "write-failed";
 
 export interface Issue {
@@ -58,9 +61,15 @@ export interface Validation {
 }
 
 const SCIENTIFIC = /^\d+(\.\d+)?E\+\d+$/i;
+/** The replacement character: what is left of a letter decoded with the wrong character set. */
+const LOST = "\uFFFD";
+/** A text field this long or shorter holds one line (a name, an ID); longer ones are notes. */
+const SINGLE_LINE = 255;
 
-export const keyOf = (fields: readonly string[], values: Record<string, unknown>): string =>
-    fields.map((f) => String(values[f] ?? "").trim().toUpperCase()).every((v) => v === "") ? "" : fields.map((f) => String(values[f] ?? "").trim().toUpperCase()).join(" / ");
+export const keyOf = (fields: readonly string[], values: Record<string, unknown>): string => {
+    const parts = fields.map((f) => String(values[f] ?? "").trim().toUpperCase());
+    return parts.every((v) => v === "") ? "" : parts.join(" / ");
+};
 
 export function validateRows(rows: readonly SourceRow[], rule: EntityRule, meta: EntityMeta, mapping: Mapping, defaults: Readonly<Record<string, unknown>> = {}): Validation {
     const issues: Issue[] = [];
@@ -78,11 +87,15 @@ export function validateRows(rows: readonly SourceRow[], rule: EntityRule, meta:
     const named = new Set([...rule.lookups.filter((l) => l.byName).map((l) => l.field), ...(rule.folder ? ["PARENT_ID"] : []), ...(rule.neverSend ?? [])]);
     let blank = 0;
     const firstSeen = new Map<string, number>();
+    const datesNoted = new Set<string>();
 
     for (const source of rows) {
         if (source.blank) { blank += 1; continue; }
         const values: Record<string, string | number | boolean> = {};
-        const add = (issue: Omit<Issue, "row">): void => { issues.push({ row: source.row, ...issue }); };
+        // This row's issues, kept apart too so the checks below never scan every row's.
+        const mine: Issue[] = [];
+        const add = (issue: Omit<Issue, "row">): void => { const full = { row: source.row, ...issue }; mine.push(full); issues.push(full); };
+        const flagged = (field: string): boolean => mine.some((i) => i.field === field);
         const fill = (field: string, text: string): void => {
             const info = meta.fields.get(field);
             if (!info) return;
@@ -90,20 +103,29 @@ export function validateRows(rows: readonly SourceRow[], rule: EntityRule, meta:
             if (!coerced.ok) { add({ kind: "type", field, value: text, text: `${field}: ${coerced.why}` }); return; }
             if (coerced.unlisted) notes.add(`${field} "${text}" is not a value seen in EBMS before (${rule.enums[field]?.values.map((v) => v.value).join(", ")}); it is sent as written and the read-back will show what EBMS stored.`);
             if (info.kind === "enum" && !rule.enums[field]) notes.add(`${field} values are sent as written: EBMS does not publish the list of values it accepts.`);
+            if (info.kind === "date" && ambiguousDate(text) && !datesNoted.has(field) && datesNoted.add(field)) notes.add(`${field}: dates like "${text.trim()}" were read as month/day (${String(coerced.value)}). If the file is day/month, fix them before importing.`);
             values[field] = coerced.value;
         };
+        // A cell the CSV could not be read cleanly at puts the whole row in doubt, mapped or not.
+        for (const [header, why] of Object.entries(source.flags ?? {})) {
+            const field = mapping.columns.find((c) => c.header === header)?.field ?? (header === "*" ? "row" : header);
+            add({ kind: "unreadable", field, value: source.cells[header] ?? "", text: `${field}: ${why}` });
+        }
         for (const column of mapping.columns) {
             const error = source.errors?.[column.header];
             if (error) { add({ kind: "cell-error", field: column.field, value: error, text: `${column.field}: the cell is ${error}; fix the formula in Excel and save` }); continue; }
             const text = source.cells[column.header] ?? "";
+            const info = meta.fields.get(column.field);
+            if (text.includes(LOST)) { add({ kind: "unreadable", field: column.field, value: text, text: `${column.field}: "${text}" has a character that was lost before the file reached here (shown as ${LOST}); type it again` }); continue; }
+            if (/[\r\n]/.test(text) && info?.kind === "string" && info.maxLength > 0 && info.maxLength <= SINGLE_LINE) { add({ kind: "line-break", field: column.field, value: text, text: `${column.field} runs over more than one line; EBMS keeps one` }); continue; }
             if (text !== "") fill(column.field, text);
         }
         for (const [field, value] of defaultFields) {
-            const has = values[field] !== undefined || issues.some((i) => i.row === source.row && i.field === field);
+            const has = values[field] !== undefined || flagged(field);
             if (!has && value !== undefined && value !== null && String(value).trim() !== "") fill(field, String(value).trim());
         }
         for (const field of required) {
-            if (values[field] === undefined && !issues.some((i) => i.row === source.row && i.field === field)) add({ kind: "required", field, value: "", text: `${field} is blank` });
+            if (values[field] === undefined && !flagged(field)) add({ kind: "required", field, value: "", text: `${field} is blank` });
         }
         if (rule.oneOf && !rule.oneOf.some((f) => values[f] !== undefined && String(values[f]).trim() !== "")) {
             add({ kind: "one-of", field: rule.oneOf.join("/"), value: "", text: `no name: ${rule.oneOf.join(" and ")} are both blank` });
@@ -132,7 +154,7 @@ export function validateRows(rows: readonly SourceRow[], rule: EntityRule, meta:
             if (first !== undefined) add({ kind: "duplicate", field: keys.join("/"), value: key, text: `${keys.join(" / ")} ${key} is also on row ${first}; this copy is ignored` });
             else firstSeen.set(key, source.row);
         }
-        if (!issues.some((i) => i.row === source.row)) checked.push({ row: source.row, source, values, key });
+        if (mine.length === 0) checked.push({ row: source.row, source, values, key });
     }
     return { rows: checked, issues, blank, notes: [...notes] };
 }
@@ -157,7 +179,9 @@ export function groupIssues(issues: readonly Issue[], context: { company: string
     const groups = new Map<string, Issue[]>();
     for (const issue of issues) {
         const id = `${issue.kind}|${issue.field}`;
-        groups.set(id, [...(groups.get(id) ?? []), issue]);
+        const list = groups.get(id);
+        if (list) list.push(issue);
+        else groups.set(id, [issue]);
     }
     const out: ProblemGroup[] = [];
     for (const list of groups.values()) {
@@ -181,6 +205,10 @@ export function groupIssues(issues: readonly Issue[], context: { company: string
                 case "quantity": return `${n} bill-of-materials ${plural(n, "line has", "lines have")} a quantity of 0 or less`;
                 case "folder-cycle": return `${n} ${plural(n, "folder is its", "folders are their")} own ancestor through PARENT_ID`;
                 case "id-taken": return `${n} ${r} ${plural(n, "sits", "sit")} where an earlier run of this import created a different record: the file changed since that run (a row deleted or moved, or another file under the same name). Nothing is skipped on that alone; to treat this as a new file, pass a new importId`;
+                case "unreadable": return first.field === "row"
+                    ? `${n} ${r} ${plural(n, "has", "have")} more cells than the header row has columns (a comma inside a value that is not in quotes?)`
+                    : `${n} ${r} ${plural(n, "has", "have")} a ${first.field} cell that could not be read cleanly; ${plural(n, "it is", "they are")} in the exceptions file with the reason`;
+                case "line-break": return `${n} ${first.field} ${plural(n, "value runs", "values run")} over more than one line; EBMS keeps one`;
                 case "cell-error": return `${n} ${r} ${plural(n, "has", "have")} a ${first.field} cell Excel shows as an error or never calculated: ${examples(values)}`;
                 case "write-failed": return `${n} ${r} could not be written to EBMS last time`;
             }

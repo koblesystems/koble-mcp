@@ -29,7 +29,7 @@ const isDefaultsRow = (value: unknown): boolean => text(value).startsWith("($)")
 /** The EXTERNALID prefix every record of one import carries. */
 export const importPrefix = (importId: string): string => `claude-import-${importId}-`;
 /** The row an import's EXTERNALID was made for, or null. */
-export function rowOfExternalId(externalId: string, importId: string): number | null {
+function rowOfExternalId(externalId: string, importId: string): number | null {
     if (!externalId.startsWith(importPrefix(importId))) return null;
     const match = /-r(\d+)$/.exec(externalId);
     return match ? Number(match[1]) : null;
@@ -53,6 +53,8 @@ export interface Lookups {
     waiting: Set<number>;
     /** Product ID (upper case) -> AUTOID, for PATCHing child rows onto it. */
     products: Map<string, string>;
+    /** Rows with no key of their own (a customer EBMS numbers) whose name, and ZIP where given, match a record already there. */
+    likely?: Map<number, Row>;
     notes: string[];
 }
 
@@ -119,23 +121,29 @@ export async function lookUp(company: string, rule: EntityRule, meta: EntityMeta
         const there = await readByIdsAnyCase(company, rule.entity, keyField, open.map((r) => String(r.values[keyField])), select);
         const byKey = new Map(there.filter((record) => !isDefaultsRow(record[keyField])).map((record) => [keyOf(keys, record), record]));
         for (const r of open) if (byKey.has(r.key)) out.existing.set(r.row, byKey.get(r.key) as Row);
+        if (rule.keyOptional) await likelyMatches(company, rule, meta, rows.filter((r) => r.key === "" && !out.created.has(r.row) && !taken.has(r.row)), out);
     }
 
     // 2. Products a child row hangs on, and the rows each already has.
     const flagged = new Set(out.issues.map((i) => i.row));
     const pending = rows.filter((r) => !out.created.has(r.row) && !out.existing.has(r.row) && !flagged.has(r.row));
+    // Every product the rows name (a bill of materials' product and its components), read once.
+    const productSpecs = rule.lookups.filter((l) => l.entity === "INVENTRY" && l.key === "ID" && !l.byName && !l.perProduct);
+    const productIds = (of: readonly CheckedRow[]): string[] => [...new Set(productSpecs.flatMap((l) => of.map((r) => text(r.values[l.field]).toUpperCase())).filter(Boolean))];
+    let products: Row[] | null = null;
     if (rule.route === "child") {
-        const ids = [...new Set(pending.map((r) => text(r.values["ID"])))];
+        products = await readByIdsAnyCase(company, "INVENTRY", "ID", productIds(pending), "AUTOID,ID");
         // A product without an AUTOID could only be PATCHed at INVENTRY(''): treat it as missing.
-        for (const record of await readByIdsAnyCase(company, "INVENTRY", "ID", ids, "AUTOID,ID")) if (text(record["AUTOID"])) out.products.set(upper(record["ID"]), text(record["AUTOID"]));
+        for (const record of products) if (text(record["AUTOID"])) out.products.set(upper(record["ID"]), text(record["AUTOID"]));
         const second = keys[1] as string;
-        const children = await readByIdsAnyCase(company, rule.entity, "ID", ids, `ID,${second}`);
+        const children = await readByIdsAnyCase(company, rule.entity, "ID", [...new Set(pending.map((r) => text(r.values["ID"])))], `ID,${second}`);
         const have = new Set(children.map((record) => `${upper(record["ID"])} / ${upper(record[second])}`));
         for (const r of pending) if (have.has(r.key)) out.existing.set(r.row, { ID: r.values["ID"], [second]: r.values[second] });
     }
 
     // 3. Every other record the rows point at.
     const live = pending.filter((r) => !out.existing.has(r.row));
+    if (products === null && productSpecs.length > 1) products = await tryRead<Row[] | null>("Products", out.notes, () => readByIdsAnyCase(company, "INVENTRY", "ID", productIds(live), "ID"), null);
     for (const spec of rule.lookups) {
         if (!meta.fields.has(spec.field) && !(rule.route === "child" && spec.field === "ID")) continue;
         const wanted = live.filter((r) => text(r.values[spec.field]) !== "");
@@ -148,14 +156,12 @@ export async function lookUp(company: string, rule: EntityRule, meta: EntityMeta
             await checkUnits(company, wanted, spec, out);
             continue;
         }
-        const records = await tryRead<Row[] | null>(`${spec.field} (against ${spec.entity})`, out.notes, async () =>
+        const records = products !== null && spec.entity === "INVENTRY" && spec.key === "ID" ? products : await tryRead<Row[] | null>(`${spec.field} (against ${spec.entity})`, out.notes, async () =>
             spec.key === "TREE_ID" || spec.byName
                 ? (await readAll(company, spec.entity, { $select: [spec.key, ...(spec.byName ? [spec.byName] : [])].join(",") })).filter((record) => !isDefaultsRow(record[spec.key]))
                 : readByIdsAnyCase(company, spec.entity, spec.key, wanted.map((r) => text(r.values[spec.field])), spec.entity === "APVENDOR" ? "ID,L_NAME,F_NAME" : spec.key), null);
         if (records === null) continue;
         const byKey = new Map(records.map((record) => [upper(record[spec.key]), record]));
-        // Products earlier in the same file count for a bill of materials' components.
-        const inFile = spec.entity === rule.entity ? new Set(rows.map((r) => r.key)) : new Set<string>();
         for (const r of wanted) {
             const value = text(r.values[spec.field]);
             let record = byKey.get(value.toUpperCase());
@@ -169,7 +175,7 @@ export async function lookUp(company: string, rule: EntityRule, meta: EntityMeta
                 if (record) out.replace.set(r.row, { ...(out.replace.get(r.row) ?? {}), [spec.field]: text(record[spec.key]) });
             }
             if (!record) {
-                if (!inFile.has(value.toUpperCase())) missing(out, r, spec);
+                missing(out, r, spec);
                 continue;
             }
             const resolved = out.resolved.get(r.row) ?? {};
@@ -182,7 +188,7 @@ export async function lookUp(company: string, rule: EntityRule, meta: EntityMeta
 }
 
 /** EBMS's padded form of a folder number: right-aligned in five characters, as it stores and matches them. */
-export const padFolder = (value: string): string => value.trim().padStart(5, " ");
+const padFolder = (value: string): string => value.trim().padStart(5, " ");
 
 /**
  * Folders. EBMS numbers a new folder itself (sending TREE_ID is refused) and finds a parent only by
@@ -273,6 +279,26 @@ function sameRecord(r: CheckedRow, record: Row, keys: readonly string[], labels:
     if (r.key !== "") return keyOf(keys, record) === r.key;
     const named = labels.filter((f) => text(r.values[f]) !== "");
     return named.length > 0 && named.every((f) => upper(record[f]) === upper(r.values[f]));
+}
+
+/**
+ * Rows without a key match nothing by key, so a customer list pasted again would be drafted
+ * again. Same name (and same ZIP, where the row has one) as a record already there is reported,
+ * not skipped: two customers can share a name.
+ */
+async function likelyMatches(company: string, rule: EntityRule, meta: EntityMeta, rows: readonly CheckedRow[], out: Lookups): Promise<void> {
+    const name = rule.label.find((f) => meta.fields.has(f));
+    if (!name || rows.length === 0) return;
+    const zip = meta.fields.has("ZIP") ? "ZIP" : null;
+    const wanted = rows.filter((r) => text(r.values[name]) !== "");
+    const select = [...new Set(["ID", ...rule.label.filter((f) => meta.fields.has(f)), ...(zip ? [zip] : [])])].join(",");
+    const there = await tryRead<Row[]>(`${rule.plural} with the same name`, out.notes, () => readByIdsAnyCase(company, rule.entity, name, wanted.map((r) => text(r.values[name])), select), []);
+    const zipOf = (value: unknown): string => text(value).replace(/\s/g, "").slice(0, 5).toUpperCase();
+    for (const r of wanted) {
+        const match = there.find((record) => rule.label.every((f) => !meta.fields.has(f) || text(r.values[f]) === "" || upper(record[f]) === upper(r.values[f]))
+            && (!zip || text(r.values[zip]) === "" || zipOf(record[zip]) === zipOf(r.values[zip])));
+        if (match) (out.likely ??= new Map()).set(r.row, match);
+    }
 }
 
 function missing(out: Lookups, r: CheckedRow, spec: LookupSpec): void {

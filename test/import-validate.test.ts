@@ -85,3 +85,25 @@ test("an unseen value of an open enum passes with a note", () => {
     assert.equal(w.rows[0]?.values["PAY_TYPE"], "Biweekly");
     assert.match(w.notes.join(" "), /PAY_TYPE "Biweekly" is not a value seen in EBMS before/);
 });
+
+test("a cell the text could not be read cleanly at, a lost character, or a line break in a one-line field is a problem, never imported as read", () => {
+    const r = check("INVENTRY", [
+        "ID,Name,Folder,Classification,Cost",
+        'GOOD,3/4" bolt,1,2,5',
+        '"BROKEN","Two\nlines",1,2,5',
+        "LOST,Caf�,1,2,5",
+        'SPLIT, "Big, red",1,2,5',
+    ].join("\n"));
+    assert.deepEqual(kinds(r), ["3:line-break", "4:unreadable", "5:unreadable", "5:unreadable"]);
+    assert.deepEqual(r.rows.map((x) => [x.row, x.values["DESCR_1"]]), [[2, '3/4" bolt']]);
+    const groups = Object.fromEntries(r.groups.map((g) => [`${g.kind}|${g.field}`, g]));
+    assert.match(groups["line-break|DESCR_1"]!.message, /more than one line/);
+    assert.match(r.issues.find((i) => i.row === 4)!.text, /lost before the file reached here/);
+});
+
+test("a date that reads two ways is read as month/day, with a note; a percent typed with its sign is the percent", () => {
+    const r = check("ARTAX", "ID,Rate,Eff date\nST,6%,03/04/2026\nCO,1.5,2026-03-04\nCI,2,13/04/2026\n");
+    assert.deepEqual(r.rows.map((x) => [x.values["RATE"], x.values["EFF_DATE"]]), [[6, "2026-03-04"], [1.5, "2026-03-04"]]);
+    assert.deepEqual(kinds(r), ["4:type"], "13/04 is no month/day date");
+    assert.match(r.notes.join(" "), /EFF_DATE: dates like "03\/04\/2026" were read as month\/day \(2026-03-04\)/);
+});

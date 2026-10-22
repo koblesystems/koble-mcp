@@ -161,10 +161,9 @@ export function coerce(text: string, field: FieldInfo, spec?: EnumSpec): Coerced
             if (NO.test(text.trim())) return { ok: true, value: false };
             return { ok: false, why: `"${text}" is not yes or no` };
         case "date": {
-            const iso = /^\d{4}-\d{2}-\d{2}(T[\d:.]+Z?)?$/.test(text.trim()) ? text.trim().slice(0, 10) : parseDate(text);
-            // A date that does not survive a round trip does not exist: 2026-02-30 would become 2 March.
-            const real = iso !== null && !Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) && new Date(`${iso}T00:00:00Z`).toISOString().slice(0, 10) === iso;
-            if (iso === null || !real) return { ok: false, why: `"${text}" is not a date (use 2026-10-12 or 10/12/2026)` };
+            // A timestamp counts by its day; a day that does not exist (2026-02-30) is refused.
+            const iso = parseDate(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z?$/.test(text.trim()) ? text.trim().slice(0, 10) : text);
+            if (iso === null) return { ok: false, why: `"${text}" is not a date (use 2026-10-12 or 10/12/2026)` };
             return { ok: true, value: iso };
         }
         default:

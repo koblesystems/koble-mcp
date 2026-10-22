@@ -311,6 +311,3 @@ export const GLOBAL_ALIASES: Readonly<Record<string, string>> = { externalid: "E
 /** A header or field name reduced for matching: lowercase, letters and digits only. */
 export const squash = (value: string): string => value.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-/** Folders that carry a parent are written parent-first; "0" (or blank) is the top. */
-/** "0" (or blank) is above the top folders; new folders always go under an existing one. */
-export const isTopFolder = (value: string): boolean => value.trim() === "" || value.trim() === "0";
