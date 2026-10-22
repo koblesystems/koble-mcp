@@ -39,8 +39,12 @@ export function singleFile(): { getAsset(key: string, encoding: string): string 
 function fromEmbedded(): Map<string, string> | null {
     const sea = singleFile();
     if (!sea) return null;
-    const index = JSON.parse(sea.getAsset("skills/index.json", "utf8")) as string[];
-    return new Map(index.map((path) => [path, sea.getAsset(`skills/${path}`, "utf8")]));
+    try {
+        const index = JSON.parse(sea.getAsset("skills/index.json", "utf8")) as string[];
+        return new Map(index.map((path) => [path, sea.getAsset(`skills/${path}`, "utf8")]));
+    } catch {
+        return null;
+    }
 }
 
 /** Every .md and .py file under a skills folder, by its path there. The single-file build embeds the same set. */

@@ -16,7 +16,8 @@ const BACKUPS = 3;
  */
 export function atomicWrite(path: string, text: string, options: { backup?: boolean; mode?: number } = {}): string | null {
     const exists = existsSync(path);
-    const mode = options.mode ?? (exists ? statSync(path).mode & 0o777 : undefined);
+    // Windows has no permission bits to keep; copying its read-only flag would only break the rename.
+    const mode = options.mode ?? (exists && process.platform !== "win32" ? statSync(path).mode & 0o777 : undefined);
     mkdirSync(dirname(path), { recursive: true, ...(options.mode !== undefined ? { mode: 0o700 } : {}) });
     let backup: string | null = null;
     if (options.backup && exists) {
