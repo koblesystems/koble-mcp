@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
@@ -425,17 +425,14 @@ test("an exceptions file handed back for another company is refused", async () =
 test("when the exceptions file cannot be saved beside the source, it goes to the usual folder and the review still comes back", async () => {
     fresh();
     const path = await file("products.csv", "ID,Folder,Classification\nGOOD,26,2\nBAD,26,Widget\n");
-    await chmod(join(path, ".."), 0o555);
-    try {
-        const r = await call({ entity: "INVENTRY", path });
-        assert.equal(r.blocked, false);
-        assert.equal(r.counts.drafted, 1);
-        assert.equal(r.exceptionsFile, join(process.env["KOBLE_OUTPUT_DIR"] as string, "imports", `inventry-${r.importId}.exceptions.xlsx`));
-        assert.ok(existsSync(r.exceptionsFile));
-        assert.match(r.notes.join(" "), /could not be saved beside the source/);
-    } finally {
-        await chmod(join(path, ".."), 0o755);
-    }
+    // A folder where the file would go: the write fails on every system, as a read-only folder does.
+    await mkdir(join(path, "..", "products.exceptions.xlsx"));
+    const r = await call({ entity: "INVENTRY", path });
+    assert.equal(r.blocked, false);
+    assert.equal(r.counts.drafted, 1);
+    assert.equal(r.exceptionsFile, join(process.env["KOBLE_OUTPUT_DIR"] as string, "imports", `inventry-${r.importId}.exceptions.xlsx`));
+    assert.ok(existsSync(r.exceptionsFile));
+    assert.match(r.notes.join(" "), /could not be saved beside the source/);
 });
 
 test("the exceptions round trip survives a file with its own Row column, and a row the person adds is numbered past the original", async () => {

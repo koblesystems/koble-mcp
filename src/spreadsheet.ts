@@ -10,7 +10,7 @@
 import { realpathSync } from "node:fs";
 import { realpath, stat, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ExcelJS from "exceljs";
 import { configDir } from "./cli/store.js";
 
@@ -22,21 +22,30 @@ const inside = (folder: string, path: string): boolean => {
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 };
 const same = (path: string): string => (process.platform === "win32" || process.platform === "darwin" ? path.toLowerCase() : path);
-/** A folder as given and as it really is, so a real path is compared with a real path. */
-const forms = (folder: string): string[] => {
-    let real = folder;
-    try { real = realpathSync(folder); } catch { /* not there yet */ }
-    return [...new Set([same(resolve(folder)), same(real)])];
+/**
+ * A path as given and as it really is, so a real path is compared with a real path. The native
+ * realpath also expands Windows 8.3 short names (C:\Users\RUNNER~1), which the JavaScript one
+ * leaves as they are.
+ */
+const forms = (path: string): string[] => {
+    let real = resolve(path);
+    try { real = realpathSync.native(path); } catch { /* not there yet */ }
+    return [...new Set([same(resolve(path)), same(real)])];
 };
 
 /** Why koble will not read or write here, or null. The folders that hold secrets, and every dotfile. */
 export function privatePlace(path: string): string | null {
-    const full = same(resolve(path));
-    if (basename(full).startsWith(".")) return "it is a hidden file";
-    if (forms(configDir()).some((config) => inside(config, full))) return "it is in koble's own settings folder";
-    for (const home of forms(homedir())) {
-        const first = inside(home, full) ? relative(home, full).split(sep)[0] ?? "" : "";
-        if (first.startsWith(".")) return `it is in a hidden folder (~${sep}${first})`;
+    if (basename(resolve(path)).startsWith(".")) return "it is a hidden file";
+    // A file not written yet is judged by its folder's real path.
+    const fulls = [...new Set([...forms(path), ...forms(dirname(path)).map((folder) => join(folder, same(basename(resolve(path)))))])];
+    const configs = forms(configDir());
+    const homes = forms(homedir());
+    for (const full of fulls) {
+        if (configs.some((config) => inside(config, full))) return "it is in koble's own settings folder";
+        for (const home of homes) {
+            const first = inside(home, full) ? relative(home, full).split(sep)[0] ?? "" : "";
+            if (first.startsWith(".")) return `it is in a hidden folder (~${sep}${first})`;
+        }
     }
     return null;
 }
