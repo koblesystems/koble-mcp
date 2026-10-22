@@ -4,7 +4,8 @@
  * Owns the token dance (proactive refresh, one retry on a 401), the Basic-auth fallback
  * for an install without /Token, the 150 s timeout, and the Messages[] envelope. Network
  * failures and timeouts come out as EbmsError with `uncertain` set, so callers can tell
- * "EBMS said no" from "nobody knows". Credentials never appear in an error or a result.
+ * "EBMS said no" from "nobody knows". Credentials never appear in an error or a result, and
+ * redirects are refused, so no request (least of all /Token's) leaves the URL safeUrl approved.
  */
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -12,6 +13,9 @@ import { connectionFor, loadSettings, type Connection } from "../config.js";
 import { EbmsError, errorFromBody, warningsFromBody } from "./errors.js";
 
 const TOKEN_LIFETIME_MS = 9 * 60 * 1000; // EBMS tokens last ~10 minutes.
+
+/** How long a 404/405 from /Token is believed before /Token is tried again: a proxy can return one in passing. */
+const BASIC_RECHECK_MS = 10 * 60 * 1000;
 
 /**
  * EBMS cuts requests off at about 2 minutes. This sits above that so it never ends a real
@@ -27,15 +31,15 @@ interface TokenState {
 
 interface CompanyAuth {
     token: TokenState | null;
-    /** Set only when the install has no /Token endpoint (404/405), never on a transient failure. */
-    basic: boolean;
+    /** When /Token last answered 404/405 (no token endpoint, so Basic), never set on another failure. */
+    basicSince: number | null;
 }
 
 const auth = new Map<string, CompanyAuth>();
 const authFor = (company: string): CompanyAuth => {
     let state = auth.get(company);
     if (!state) {
-        state = { token: null, basic: false };
+        state = { token: null, basicSince: null };
         auth.set(company, state);
     }
     return state;
@@ -67,6 +71,7 @@ async function tokenRequest(url: string, payload: unknown): Promise<Response> {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
+            redirect: "error",
             signal: AbortSignal.timeout(30_000),
         });
     } catch (error) {
@@ -81,8 +86,8 @@ async function login(conn: Connection, state: CompanyAuth): Promise<TokenState |
         return { accessToken: body.AccessToken, refreshToken: body.RefreshToken, obtainedAt: Date.now() };
     }
     if (response.status === 404 || response.status === 405) {
-        // No token endpoint on this install: use Basic from here on, for this company.
-        state.basic = true;
+        // No token endpoint on this install: use Basic for this company until the next recheck.
+        state.basicSince = Date.now();
         return null;
     }
     if (response.status === 400 || response.status === 401 || response.status === 403) {
@@ -103,7 +108,11 @@ async function refresh(conn: Connection, state: CompanyAuth, current: TokenState
 async function authHeader(conn: Connection, forceRenew: boolean): Promise<string> {
     const state = authFor(conn.company);
     const basic = (): string => "Basic " + Buffer.from(`${conn.username}:${conn.password}`).toString("base64");
-    if (state.basic) return basic();
+    if (state.basicSince !== null) {
+        if (Date.now() - state.basicSince < BASIC_RECHECK_MS) return basic();
+        state.basicSince = null;
+        state.token = null;
+    }
     const stale = state.token !== null && Date.now() - state.token.obtainedAt > TOKEN_LIFETIME_MS;
     if (state.token === null) state.token = await login(conn, state);
     else if (forceRenew || stale) state.token = await refresh(conn, state, state.token);
@@ -174,7 +183,7 @@ export async function request(company: string, method: string, path: string, bod
         }
         const headers: Record<string, string> = { Authorization: authorization, Accept: "application/json" };
         if (body !== undefined) headers["Content-Type"] = "application/json";
-        const init: RequestInit = { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+        const init: RequestInit = { method, headers, redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
         if (body !== undefined) init.body = JSON.stringify(body);
         try {
             return await fetch(safeUrl(conn.baseUrl, path), init);
@@ -194,7 +203,7 @@ export async function request(company: string, method: string, path: string, bod
 
     try {
         let response = await attempt(false);
-        if (response.status === 401 && !authFor(conn.company).basic) {
+        if (response.status === 401 && authFor(conn.company).basicSince === null) {
             authFor(conn.company).token = null;
             response = await attempt(true);
         }

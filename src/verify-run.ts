@@ -8,7 +8,7 @@
  */
 import { odataString, request } from "./ebms/client.js";
 import { EbmsError } from "./ebms/errors.js";
-import { checkRecord, checkRows, childrenOf, emptyVerification, fieldsOf, finish, shapeOf, type BodyShape, type Json, type Verification } from "./verify.js";
+import { checkRecord, checkRows, childrenOf, emptyVerification, fieldsOf, finish, idOf, shapeOf, type BodyShape, type Json, type Verification } from "./verify.js";
 
 const FIELD_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PARENTS_PER_READ = 20;
@@ -37,7 +37,7 @@ const rowsOf = (record: Json | null, nav: string): Json[] => (Array.isArray(reco
 const idFilter = (ids: readonly string[]): string => ids.map((id) => `AUTOID eq ${odataString(id)}`).join(" or ");
 const allEntries = (shape: BodyShape, nav: string): Json[] => [...(shape.deltas[nav] ?? []), ...(shape.creates[nav] ?? [])];
 const navsOf = (shape: BodyShape): string[] => [...new Set([...Object.keys(shape.deltas), ...Object.keys(shape.creates)])].filter((nav) => FIELD_RE.test(nav));
-const hasAdds = (entries: readonly Json[]): boolean => entries.some((entry) => typeof entry["@id"] !== "string" && typeof entry["#id"] !== "string");
+const hasAdds = (entries: readonly Json[]): boolean => entries.some((entry) => idOf(entry) === undefined);
 
 export interface Before {
     rows: Record<string, Set<string>>;
@@ -59,7 +59,7 @@ export async function readBefore(company: string, path: string, body: unknown): 
     for (const nav of Object.keys(shape.deltas).filter((name) => FIELD_RE.test(name))) {
         const parents = new Map<string, string[]>();
         for (const entry of shape.deltas[nav] ?? []) {
-            const id = typeof entry["@id"] === "string" ? entry["@id"] : undefined;
+            const id = idOf(entry);
             if (id === undefined) continue;
             const kids = childrenOf(entry);
             const childNavs = navsOf(kids).filter((childNav) => hasAdds(allEntries(kids, childNav)));
@@ -111,7 +111,7 @@ export async function verifyWrite(company: string, path: string, body: unknown, 
         entries.forEach((entry, index) => {
             const kids = childrenOf(entry);
             const row = matched[index];
-            const isNew = typeof entry["@id"] !== "string";
+            const isNew = idOf(entry) === undefined;
             if (alwaysChild !== null && isNew && kids.deltas[alwaysChild] === undefined && kids.creates[alwaysChild] === undefined) kids.creates[alwaysChild] = [];
             if (navsOf(kids).length > 0 && row) parents.push({ entry, index, id: String(row["AUTOID"]), kids, isNew });
         });

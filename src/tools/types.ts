@@ -39,11 +39,13 @@ export function errorResult(error: unknown, context: Record<string, unknown> = {
     const isWrite = where["method"] !== undefined || where["command"] !== undefined;
     const ebms = error instanceof EbmsError ? error : null;
     const uncertain = ebms ? ebms.uncertain : afterSend === true;
+    // safeUrl's refusal is an EbmsError too, but it is this server saying no, before anything went out.
+    const ours = ebms?.kind === "refused";
     const advice = uncertain
         ? isWrite
             ? "The outcome is unknown. Read the record back before sending this again; a resent create or add duplicates."
             : "The read did not complete; it is safe to try again."
-        : ebms
+        : ebms && !ours
           ? isWrite
               ? "EBMS refused this request; nothing was saved."
               : "EBMS refused this request."
@@ -51,6 +53,6 @@ export function errorResult(error: unknown, context: Record<string, unknown> = {
     const detail = ebms
         ? { status: ebms.status, kind: ebms.kind, message: ebms.message, detail: ebms.detail, solution: ebms.solution }
         : { message: error instanceof Error ? error.message : String(error) };
-    const body = { error: detail, ...(ebms || uncertain ? {} : { refused: true }), uncertain, advice, ...where };
+    const body = { error: detail, ...((ebms && !ours) || uncertain ? {} : { refused: true }), uncertain, advice, ...where };
     return { content: [{ type: "text", text: JSON.stringify(body, null, 2) }], isError: true };
 }

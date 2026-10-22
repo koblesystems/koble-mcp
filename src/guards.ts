@@ -130,10 +130,23 @@ export function isAllowedCommand(command: string, allowed: readonly string[]): b
     return allowed.some((name) => name.trim().toLowerCase() === wanted);
 }
 
-/** The top-level EXTERNALID a create carries, if any. */
-export function externalIdOf(body: unknown): string | undefined {
+/**
+ * The top-level key spelling `name` in any case, as the PROCESS guard matches. EBMS may bind
+ * JSON keys case-insensitively, so a guard reading one spelling would miss "ExternalId". Two
+ * spellings in one body are refused: which one EBMS keeps is unknown.
+ */
+export function keyNamed(body: unknown, name: string): string | undefined {
     if (!body || typeof body !== "object" || Array.isArray(body)) return undefined;
-    const value = (body as Record<string, unknown>)["EXTERNALID"];
+    const keys = Object.keys(body).filter((key) => key.toUpperCase() === name);
+    if (keys.length > 1) throw new Error(`Refused: the body carries ${name} more than once (${keys.join(", ")}). Send it once.`);
+    return keys[0];
+}
+
+/** The top-level EXTERNALID a create carries, if any, under any spelling of the key. */
+export function externalIdOf(body: unknown): string | undefined {
+    const key = keyNamed(body, "EXTERNALID");
+    if (key === undefined) return undefined;
+    const value = (body as Record<string, unknown>)[key];
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 

@@ -7,7 +7,8 @@
  *   - any write or command to a company that is not configured (or, in testing, not the sandbox)
  *   - any body carrying PROCESS, at any depth
  *   - a POST of a document, customer, vendor, product or worker whose EXTERNALID already exists (a duplicate order is the
- *     costly mistake, and this is the one check a model under time pressure skips)
+ *     costly mistake, and this is the one check a model under time pressure skips), or while a
+ *     create with that EXTERNALID is still in flight or came back uncertain and has not been read back
  *   - a POST of a vendor without an ID (a folder with no ID method would save a blank one)
  *   - any bound action not on the allow-list (EBMS_ALLOWED_COMMANDS)
  *   - paths that are not a plain entity path; keys are validated and percent-encoded
@@ -18,7 +19,7 @@ import { odataString, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { readBefore, verifyDelete, verifyWrite, type Before, type ReadBack } from "../verify-run.js";
 import type { Verification } from "../verify.js";
-import { DOCUMENT_ENTITIES, encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, validateName, validatePath } from "../guards.js";
+import { DOCUMENT_ENTITIES, encodeKey, entityOf, externalIdOf, findProcessKeys, isAllowedCommand, keyNamed, validateName, validatePath } from "../guards.js";
 import { EbmsError } from "../ebms/errors.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
@@ -70,10 +71,40 @@ function checkShape(method: "POST" | "PATCH" | "DELETE", path: string, body: unk
     if (method === "POST" && keyed) throw new Error("POST goes to the entity set, e.g. ARINV, not a keyed path. Bound actions use ebms_command.");
     const processKeys = findProcessKeys(body);
     if (processKeys.length > 0) throw new Error(`Refused: the body carries PROCESS at ${processKeys.join(", ")}. Posting or unposting a document is done by a person in EBMS, not through this server.`);
+    // Keys are matched in any case, and two spellings of one are refused, before anything relies on them.
+    keyNamed(body, "EXTERNALID");
+    const idKey = keyNamed(body, "ID");
     // A vendor folder without an ID method tries to save a vendor whose ID is blank, which no lookup by ID finds.
-    const id = (body as Record<string, unknown> | null)?.["ID"];
+    const id = idKey === undefined ? undefined : (body as Record<string, unknown>)[idKey];
     if (method === "POST" && entityOf(path).toUpperCase() === "APVENDOR" && (typeof id !== "string" || id.trim() === "")) {
         throw new Error("Refused: a new vendor needs an ID: a non-blank string of at most 10 characters. EBMS generates one only when the vendor folder has a default ID method, which the API cannot show; without one it tries to save a vendor with a blank ID.");
+    }
+}
+
+/**
+ * Creates by EXTERNALID that are in flight, and those whose outcome came back unknown. The
+ * duplicate check reads before it writes, so two parallel creates would both read "none", and a
+ * create that timed out may still land after a resend's check. Both cases are refused here.
+ */
+interface Unsure { company: string; entity: string; externalId: string; at: number }
+const creating = new Set<string>();
+const unsure = new Map<string, Unsure>();
+const UNSURE_HOLD_MS = 10 * 60 * 1000;
+/** EBMS ends a request at about 2 minutes, so a read this long after an unknown create sees whatever landed. */
+const SETTLE_MS = 150_000;
+const createKey = (company: string, entity: string, externalId: string): string => JSON.stringify([company, entity, externalId].map((part) => part.toUpperCase()));
+
+/**
+ * A read by EXTERNALID settles an unknown create: it is there (and the duplicate check will now
+ * find it), or a read of exactly that EXTERNALID came back empty once EBMS had time to finish.
+ */
+function settleUnsure(company: string, entity: string, filter: string, rows: unknown[], complete: boolean): void {
+    for (const [key, held] of unsure) {
+        if (Date.now() - held.at >= UNSURE_HOLD_MS) unsure.delete(key);
+        if (held.company.toUpperCase() !== company.toUpperCase() || held.entity.toUpperCase() !== entity.toUpperCase()) continue;
+        const exact = filter.replace(/\s+/g, " ").trim().toUpperCase() === `EXTERNALID EQ ${odataString(held.externalId)}`.toUpperCase();
+        const found = rows.some((row) => String((row as Record<string, unknown> | null)?.["EXTERNALID"] ?? "").toUpperCase() === held.externalId.toUpperCase());
+        if (found || (exact && (rows.length > 0 || (complete && Date.now() - held.at > SETTLE_MS)))) unsure.delete(key);
     }
 }
 
@@ -160,6 +191,9 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const body = result.body as { value?: unknown[]; "@odata.count"?: number } | null;
                 if (isCollection && body && Array.isArray(body.value)) {
                     const total = typeof body["@odata.count"] === "number" ? body["@odata.count"] : null;
+                    const truncated = total !== null && (args.skip ?? 0) + body.value.length < total;
+                    if (args.filter && unsure.size > 0) settleUnsure(company, entityOf(args.path), args.filter, body.value, !truncated && (args.skip ?? 0) === 0);
+                    return jsonResult({ company, rows: body.value, returned: body.value.length, total, truncated, warnings: [...warnings, ...result.warnings], ms: result.ms });
                     const rows = capRows(body.value, args.top === undefined);
                     const clipped = rows.length < body.value.length;
                     const truncated = clipped || (total !== null && (args.skip ?? 0) + body.value.length < total);
@@ -181,7 +215,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 "Refused for a company that is not configured (or not the sandbox, while testing), and refused if the body carries PROCESS anywhere, a POST's EXTERNALID already exists (orders, POs, batches, tasks, customers, vendors, products, workers), or a vendor (APVENDOR) POST has no ID.",
                 "A 2xx is not proof — EBMS silently ignores unknown @ids and unwritable fields — so the server reads back the fields you sent and returns a verification: ok, mismatches (sent vs stored), problems (a row that never appeared or was not removed), notes (rows EBMS added itself) and the stored rows.",
                 "Treat ok:false as a partly failed write and tell the user.",
-                "If the result says uncertain, read back before resending — a resent create or add duplicates.",
+                "If the result says uncertain, read back before resending — a resent create or add duplicates; a create resent by EXTERNALID is refused until a read finds it or confirms it is absent.",
             ].join(" "),
             inputSchema: z.object({
                 company: companyField(true),
@@ -200,6 +234,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
         },
         async (args) => {
             let sent = false;
+            let pending: { key: string; company: string; entity: string; externalId: string } | null = null;
             try {
                 const company = resolveCompany(args.company);
                 assertWriteCompany(company);
@@ -207,6 +242,21 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const entity = entityOf(args.path);
                 checkShape(args.method, path, args.body);
                 const verify = args.verify ?? true;
+
+                const externalId = args.method === "POST" && DOCUMENT_ENTITIES.includes(entity.toUpperCase()) ? externalIdOf(args.body) : undefined;
+                if (externalId !== undefined) {
+                    const wanted = createKey(company, entity, externalId);
+                    if (creating.has(wanted)) {
+                        return jsonResult({ company, refused: true, uncertain: false, reason: `Another create of ${entity} with EXTERNALID ${externalId} is still in progress. Nothing was sent. Wait for it, then read the record back instead of creating another.` });
+                    }
+                    const held = unsure.get(wanted);
+                    if (held && Date.now() - held.at < UNSURE_HOLD_MS) {
+                        return jsonResult({ company, refused: true, uncertain: false, reason: `An earlier create of ${entity} with EXTERNALID ${externalId} came back with an unknown outcome. Nothing was sent. Read back first: ebms_get ${entity} with filter EXTERNALID eq ${odataString(externalId)}. If it is there, continue from it. If it is not, EBMS may still be finishing the first request: read again a few minutes after the failure, and send the create again only once that read is empty.` });
+                    }
+                    unsure.delete(wanted);
+                    creating.add(wanted);
+                    pending = { key: wanted, company, entity, externalId };
+                }
 
                 // Everything up to here, and the two reads below, happen BEFORE the write: if one fails, nothing was sent.
                 let before: Before | null = null;
@@ -244,7 +294,12 @@ export function registerProxyTools(register: ToolRegistrar): void {
                     return jsonResult({ ...base, verification: null, verificationError: error instanceof Error ? error.message : String(error), next: "The write itself returned the status above; only the read-back failed. Read the record before doing anything else, and do not resend the write." });
                 }
             } catch (error) {
+                // A create whose outcome is unknown may still land: hold its EXTERNALID until it is read back.
+                const uncertain = error instanceof EbmsError ? error.uncertain : sent;
+                if (pending !== null && sent && uncertain) unsure.set(pending.key, { company: pending.company, entity: pending.entity, externalId: pending.externalId, at: Date.now() });
                 return errorResult(error, { company: args.company, method: args.method, path: args.path, ...(sent && !(error instanceof EbmsError) ? { afterSend: true } : {}) });
+            } finally {
+                if (pending !== null) creating.delete(pending.key);
             }
         },
     );
