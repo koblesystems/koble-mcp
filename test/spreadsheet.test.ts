@@ -17,7 +17,10 @@ const home = await mkdtemp(join(tmpdir(), "koble-home-"));
 process.env["HOME"] = home;
 process.env["USERPROFILE"] = home;
 delete process.env["XDG_CONFIG_HOME"];
-delete process.env["KOBLE_CONFIG_DIR"];
+// An ordinary-looking folder, so "koble's settings" is tested apart from "hidden folder" on every system
+// (the default is ~/.config/koble on macOS and Linux, %APPDATA%\koble on Windows).
+const settings = join(home, "Koble Settings");
+process.env["KOBLE_CONFIG_DIR"] = settings;
 const SECRET = "koble-mcp:cof: b64:c2VjcmV0";
 
 const put = async (path: string, data: string | Uint8Array): Promise<string> => {
@@ -27,8 +30,9 @@ const put = async (path: string, data: string | Uint8Array): Promise<string> => 
 };
 
 test("only spreadsheets are read: not koble's settings, ~/.ssh, ~/.aws, other hidden folders, dotfiles, links to them, or anything over 20 MB", async () => {
-    const credentials = await put(join(home, ".config", "koble", "credentials.json"), `{"a":"${SECRET}"}`);
-    const disguised = await put(join(home, ".config", "koble", "creds.csv"), `{,${SECRET}\n`);
+    const credentials = await put(join(settings, "credentials.json"), `{"a":"${SECRET}"}`);
+    const disguised = await put(join(settings, "creds.csv"), `{,${SECRET}\n`);
+    const tucked = await put(join(home, ".config", "other", "creds.csv"), `{,${SECRET}\n`);
     const refused = [
         credentials,
         disguised,
@@ -40,7 +44,9 @@ test("only spreadsheets are read: not koble's settings, ~/.ssh, ~/.aws, other hi
     ];
     const link = join(home, "Documents", "products.csv");
     await symlink(disguised, link);
-    refused.push(link);
+    const hiddenLink = join(home, "Documents", "other.csv");
+    await symlink(tucked, hiddenLink);
+    refused.push(tucked, link, hiddenLink);
     for (const path of refused) {
         const opened = await openSpreadsheet(path);
         assert.equal(opened.ok, false, path);
@@ -52,6 +58,10 @@ test("only spreadsheets are read: not koble's settings, ~/.ssh, ~/.aws, other hi
     }
     assert.match((await openSource({ path: credentials })).fatal[0] ?? "", /only \.csv, \.tsv, \.txt and \.xlsx/);
     assert.match((await openSource({ path: link })).fatal[0] ?? "", /settings folder/);
+    assert.match((await openSource({ path: hiddenLink })).fatal[0] ?? "", /hidden folder \(~.\.config\)/);
+    // Hidden folders count only below the home folder: one outside it, as temp paths may have, is fine.
+    const outside = await mkdtemp(join(tmpdir(), "koble-outside-"));
+    assert.equal((await openSpreadsheet(await put(join(outside, ".cache", "list.csv"), "a,b\n1,2\n"))).ok, true);
 
     const big = await put(join(home, "Documents", "big.csv"), "");
     await truncate(big, 21 * 1024 * 1024);
