@@ -6,8 +6,15 @@
  */
 import { z } from "zod/v4";
 
+/**
+ * An EBMS serial number becomes the first label of the server's host name, so it may only be
+ * letters, digits and inner hyphens: anything else (a dot, slash, `?` or `@`) could move the host,
+ * and the password with it. Real serials are 15 digits.
+ */
+export const isSerial = (serial: string): boolean => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?$/.test(serial);
+
 const envSchema = z.object({
-    EBMS_SERIAL_NUMBER: z.string().min(1),
+    EBMS_SERIAL_NUMBER: z.string().refine(isSerial, "not an EBMS serial number"),
     EBMS_USERNAME: z.string().min(1).optional(),
     EBMS_PASSWORD: z.string().min(1).optional(),
     /**
@@ -189,10 +196,16 @@ export function connectionFor(company: string): Connection {
     if (!username || !password) {
         throw new Error(`koble-mcp: no credentials for company ${id}. Set EBMS_USERNAME/EBMS_PASSWORD or EBMS_${key}_USERNAME/EBMS_${key}_PASSWORD.`);
     }
-    return { company: id, baseUrl: `https://${serial}.koblesystems.dev/MyEbms/${id}/OData`, username, password };
+    return { company: id, baseUrl: onKoble(`https://${serial}.koblesystems.dev/MyEbms/${id}/OData`), username, password };
 }
 
 /** The unauthenticated company-list endpoint for this serial. */
 export function companyListUrl(): string {
-    return `https://${loadSettings().serial}.koblesystems.dev/ebmscompanylist/myebms/companies`;
+    return onKoble(`https://${loadSettings().serial}.koblesystems.dev/ebmscompanylist/myebms/companies`);
+}
+
+/** A second check behind isSerial: credentials only ever go to a koblesystems.dev host. */
+function onKoble(url: string): string {
+    if (!new URL(url).hostname.endsWith(".koblesystems.dev")) throw new Error("koble-mcp: refusing a URL outside koblesystems.dev.");
+    return url;
 }

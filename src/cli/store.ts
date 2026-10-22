@@ -7,9 +7,10 @@
  * store is plain ASCII: macOS prints a non-ASCII password back as hex otherwise.
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
+import { atomicWrite } from "./files.js";
 
 const SERVICE = "koble-mcp";
 
@@ -39,14 +40,8 @@ export interface StoredConfig {
 
 const configPath = (): string => join(configDir(), "config.json");
 
-/** Written whole to a temporary file, then renamed over the old one, readable by the user only. */
-function writePrivate(path: string, text: string): void {
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const temp = `${path}.tmp-${process.pid}`;
-    writeFileSync(temp, text, { mode: 0o600 });
-    renameSync(temp, path);
-    if (process.platform !== "win32") chmodSync(path, 0o600);
-}
+/** Written whole, readable by the user only. */
+const writePrivate = (path: string, text: string): void => void atomicWrite(path, text, { mode: 0o600 });
 
 export function readConfig(): StoredConfig | null {
     try {
@@ -79,7 +74,7 @@ export function loginFor(config: StoredConfig, company: string): { username: str
 }
 
 /** The variable-name form of a company ID, as the server reads per-company credentials: EBMS_<KEY>_USERNAME. */
-export const companyKey = (company: string): string => company.toUpperCase().replace(/[^A-Z0-9]/g, "_");
+const companyKey = (company: string): string => company.toUpperCase().replace(/[^A-Z0-9]/g, "_");
 
 const encode = (secret: string): string => `b64:${Buffer.from(secret, "utf8").toString("base64")}`;
 const decode = (stored: string): string => (stored.startsWith("b64:") ? Buffer.from(stored.slice(4), "base64").toString("utf8") : stored);

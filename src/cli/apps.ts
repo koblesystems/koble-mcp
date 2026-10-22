@@ -4,14 +4,15 @@
  * config file each, in the format that app documents.
  */
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { skillFiles } from "../guide.js";
 import { VERSION } from "../version.js";
-import { accountHasKoblePlugin, claudeCodeHasPlugin, claudeCodeHasServer, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, desktopEntry, disconnectClaudeCode, mergeServerEntry, readServerEntry, removeServerEntry, SERVER_NAME, type Launch, type MergeResult, type RemoveResult } from "./hosts.js";
+import { atomicWrite } from "./files.js";
+import { accountHasKoblePlugin, claudeCodeHasPlugin, claudeCodeHasServer, claudeCodeRunner, claudeCodeServer, connectClaudeCode, connectDesktop, desktopConfigPaths, disconnectClaudeCode, mergeServerEntry, readServerEntry, removeServerEntry, SERVER_NAME, type Launch, type MergeResult, type RemoveResult } from "./hosts.js";
 
-export interface AppStatus {
+interface AppStatus {
     status: "ok" | "warn" | "fail" | "info";
     detail: string;
     fix?: string;
@@ -39,7 +40,6 @@ function describeRemove(result: RemoveResult, what: string): string[] {
 
 function describeMerge(result: MergeResult): string {
     if (result.status === "invalid") return result.reason;
-    if (result.status === "not-installed") return "not installed — skipped.";
     const verb = result.status === "unchanged" ? "already connected" : result.status === "added" ? "connected" : "updated";
     return `${verb}.${result.replaced.length ? ` Replaced the older entry ${result.replaced.join(", ")}.` : ""}${result.backup ? ` Backup: ${result.backup}` : ""}`;
 }
@@ -78,10 +78,6 @@ const codexHome = (): string => process.env["CODEX_HOME"] ?? join(home(), ".code
 /** A TOML string for a path: a literal string unless the value itself has a single quote. */
 const tomlString = (value: string): string => (value.includes("'") ? JSON.stringify(value) : `'${value}'`);
 
-/**
- * Replaces the [mcp_servers.koble-mcp] table (and any sub-table of it) in Codex's config.toml and
- * leaves every other line exactly as it was.
- */
 /** Codex's config.toml without koble's table and its sub-tables; every other line kept as it was. */
 export function stripCodexServer(text: string): string[] {
     const header = /^\s*\[\s*mcp_servers\s*\.\s*(?:koble-mcp|"koble-mcp")\s*(?:\.[^\]]*)?\]\s*$/;
@@ -120,14 +116,7 @@ const codex: App = {
         const before = existsSync(path) ? readFileSync(path, "utf8") : "";
         const after = upsertCodexServer(before, launch);
         if (after === before) return ["already connected."];
-        mkdirSync(dirname(path), { recursive: true });
-        let backup = "";
-        if (existsSync(path)) {
-            backup = `${path}.koble-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-            copyFileSync(path, backup);
-        }
-        writeFileSync(`${path}.tmp-${process.pid}`, after);
-        renameSync(`${path}.tmp-${process.pid}`, path);
+        const backup = atomicWrite(path, after, { backup: true });
         return [`connected.${backup ? ` Backup: ${backup}` : ""}`];
     },
     footprint: () => {
@@ -139,11 +128,8 @@ const codex: App = {
         if (!existsSync(path)) return [];
         const before = readFileSync(path, "utf8");
         if (codexCommandLine(before) === null) return [];
-        const backup = `${path}.koble-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-        copyFileSync(path, backup);
         const kept = stripCodexServer(before);
-        writeFileSync(`${path}.tmp-${process.pid}`, kept.length ? `${kept.join("\n")}\n` : "");
-        renameSync(`${path}.tmp-${process.pid}`, path);
+        const backup = atomicWrite(path, kept.length ? `${kept.join("\n")}\n` : "", { backup: true });
         return [`removed the koble-mcp table from ${path}. Backup: ${backup}`];
     },
     check: (launch) => {
@@ -160,7 +146,7 @@ const codex: App = {
 const MARKER = ".koble-skill";
 
 /** Claude Code's own skills folder, where each skill is also a `/` command: `/ebms-mrp`. */
-export const claudeSkillsDir = (): string => join(process.env["CLAUDE_CONFIG_DIR"] ?? join(home(), ".claude"), "skills");
+const claudeSkillsDir = (): string => join(process.env["CLAUDE_CONFIG_DIR"] ?? join(home(), ".claude"), "skills");
 
 /**
  * Copies the skills built into this koble into Claude Code's skills folder. Only folders koble put
@@ -220,7 +206,7 @@ const markedSkills = (dir = claudeSkillsDir()): string[] => {
     }
 };
 
-export function claudeSkillsInstalled(dir = claudeSkillsDir()): string | null {
+function claudeSkillsInstalled(dir = claudeSkillsDir()): string | null {
     const marker = join(dir, "ebms-api", MARKER);
     return existsSync(marker) ? readFileSync(marker, "utf8").trim() : null;
 }
@@ -274,12 +260,12 @@ const claudeDesktop: App = {
         const paths = desktopConfigPaths();
         return paths.map((path) => `${paths.length > 1 ? `${path}: ` : ""}${describeMerge(connectDesktop(launch, path))}`);
     },
-    footprint: () => desktopConfigPaths().filter((path) => typeof desktopEntry(path) === "object").map((path) => `the koble-mcp entry in ${path}`),
+    footprint: () => desktopConfigPaths().filter((path) => typeof readServerEntry(path, "mcpServers") === "object").map((path) => `the koble-mcp entry in ${path}`),
     disconnect: () => desktopConfigPaths().flatMap((path) => describeRemove(removeServerEntry(path, "mcpServers", "Claude Desktop"), `the koble-mcp entry from ${path}`)),
     check: (launch) => {
         const missing = desktopConfigPaths().filter((path) => {
-            const e = desktopEntry(path);
-            return typeof e !== "object" || !sameLaunch(e as unknown as Record<string, unknown>, launch);
+            const e = readServerEntry(path, "mcpServers");
+            return typeof e !== "object" || !sameLaunch(e, launch);
         });
         return missing.length ? { status: "fail", detail: `not connected in ${missing.join(", ")}`, fix: "koble connect" } : { status: "ok", detail: "connected to this koble" };
     },

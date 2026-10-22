@@ -6,13 +6,13 @@
  * written whole. Claude Code is connected through its own `claude` command.
  */
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, sep } from "node:path";
+import { atomicWrite, readJsonConfig } from "./files.js";
 
 export const SERVER_NAME = "koble-mcp";
-export const MARKETPLACE = "koblesystems/koble-mcp";
-export const PLUGIN = "koble-mcp@koblesystems";
+const PLUGIN = "koble-mcp@koblesystems";
 
 export interface Launch {
     command: string;
@@ -55,16 +55,9 @@ export function desktopConfigPaths(): string[] {
     return existsSync(dirname(path)) ? [path] : [];
 }
 
-/** The file Claude Desktop reads first, for messages: the package folder's on the packaged build. */
-export function findDesktopConfig(): string | null {
-    return desktopConfigPaths()[0] ?? null;
-}
-
 export type MergeResult =
     | { status: "added" | "updated" | "unchanged"; path: string; backup: string | null; replaced: string[] }
-    | { status: "not-installed" }
     | { status: "invalid"; path: string; reason: string };
-export type DesktopResult = MergeResult;
 
 /** Entries that are an older koble-mcp: by name, or by what they run. */
 function isOurs(name: string, entry: unknown): boolean {
@@ -80,17 +73,8 @@ function isOurs(name: string, entry: unknown): boolean {
  * older koble entries replaced, everything else kept, and written whole.
  */
 export function mergeServerEntry(path: string, key: string, entry: Record<string, unknown>, app: string): MergeResult {
-    let config: Record<string, unknown> = {};
-    if (existsSync(path)) {
-        const text = readFileSync(path, "utf8");
-        try {
-            const parsed = text.trim() ? (JSON.parse(text.replace(/^﻿/, "")) as unknown) : {};
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("it is not a JSON object");
-            config = parsed as Record<string, unknown>;
-        } catch (error) {
-            return { status: "invalid", path, reason: `${app}'s config is not plain JSON (${error instanceof Error ? error.message : String(error)}). Nothing was changed. Fix the file, or move it aside, and run koble connect again.` };
-        }
-    }
+    const config = readJsonConfig(path);
+    if (config instanceof Error) return { status: "invalid", path, reason: `${app}'s config is not plain JSON (${config.message}). Nothing was changed. Fix the file, or move it aside, and run koble connect again.` };
     const servers = (config[key] && typeof config[key] === "object" ? config[key] : {}) as Record<string, unknown>;
     const replaced = Object.keys(servers).filter((name) => name !== SERVER_NAME && isOurs(name, servers[name]));
     const current = servers[SERVER_NAME];
@@ -100,15 +84,7 @@ export function mergeServerEntry(path: string, key: string, entry: Record<string
     servers[SERVER_NAME] = entry;
     config[key] = servers;
 
-    let backup: string | null = null;
-    if (existsSync(path)) {
-        backup = `${path}.koble-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-        copyFileSync(path, backup);
-    }
-    mkdirSync(dirname(path), { recursive: true });
-    const temp = `${path}.tmp-${process.pid}`;
-    writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`);
-    renameSync(temp, path);
+    const backup = atomicWrite(path, `${JSON.stringify(config, null, 2)}\n`, { backup: true });
     return { status: current === undefined && replaced.length === 0 ? "added" : "updated", path, backup, replaced };
 }
 
@@ -117,41 +93,28 @@ export type RemoveResult = { status: "removed"; path: string; backup: string } |
 /** Takes koble-mcp (and any older koble entry) out of a JSON config; backs the file up first. */
 export function removeServerEntry(path: string, key: string, app: string): RemoveResult {
     if (!existsSync(path)) return { status: "absent" };
-    let config: Record<string, unknown>;
-    try {
-        const text = readFileSync(path, "utf8").replace(/^﻿/, "");
-        const parsed = text.trim() ? (JSON.parse(text) as unknown) : {};
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("it is not a JSON object");
-        config = parsed as Record<string, unknown>;
-    } catch (error) {
-        return { status: "invalid", path, reason: `${app}'s config is not plain JSON (${error instanceof Error ? error.message : String(error)}); it was left alone. Remove the koble-mcp entry by hand.` };
-    }
+    const config = readJsonConfig(path);
+    if (config instanceof Error) return { status: "invalid", path, reason: `${app}'s config is not plain JSON (${config.message}); it was left alone. Remove the koble-mcp entry by hand.` };
     const servers = config[key];
     if (!servers || typeof servers !== "object") return { status: "absent" };
     const ours = Object.keys(servers).filter((name) => isOurs(name, (servers as Record<string, unknown>)[name]));
     if (ours.length === 0) return { status: "absent" };
     for (const name of ours) delete (servers as Record<string, unknown>)[name];
-    const backup = `${path}.koble-backup-${new Date().toISOString().replace(/[:.]/g, "-")}`;
-    copyFileSync(path, backup);
-    const temp = `${path}.tmp-${process.pid}`;
-    writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`);
-    renameSync(temp, path);
+    const backup = atomicWrite(path, `${JSON.stringify(config, null, 2)}\n`, { backup: true }) ?? "";
     return { status: "removed", path, backup };
 }
 
 /** What a JSON config has as koble-mcp: the entry, or why not. */
 export function readServerEntry(path: string, key: string): Record<string, unknown> | "missing" | "invalid" {
     if (!existsSync(path)) return "missing";
-    try {
-        const entry = ((JSON.parse(readFileSync(path, "utf8").replace(/^﻿/, "")) as Record<string, Record<string, unknown> | undefined>)[key] ?? {})[SERVER_NAME];
-        return (entry as Record<string, unknown> | undefined) ?? "missing";
-    } catch {
-        return "invalid";
-    }
+    const config = readJsonConfig(path);
+    if (config instanceof Error) return "invalid";
+    const servers = config[key];
+    const entry = servers && typeof servers === "object" ? (servers as Record<string, unknown>)[SERVER_NAME] : undefined;
+    return entry && typeof entry === "object" ? (entry as Record<string, unknown>) : "missing";
 }
 
-export function connectDesktop(launch: Launch, path = findDesktopConfig()): DesktopResult {
-    if (!path) return { status: "not-installed" };
+export function connectDesktop(launch: Launch, path: string): MergeResult {
     return mergeServerEntry(path, "mcpServers", { command: launch.command, args: launch.args }, "Claude Desktop");
 }
 
@@ -234,18 +197,6 @@ export function accountHasKoblePlugin(): boolean | null {
     return sawManifest ? false : null;
 }
 
-/** What Claude Desktop is configured to run for koble-mcp, for the doctor. */
-export function desktopEntry(path = findDesktopConfig()): Launch | "missing" | "invalid" | "not-installed" {
-    if (!path) return "not-installed";
-    if (!existsSync(path)) return "missing";
-    try {
-        const entry = ((JSON.parse(readFileSync(path, "utf8")) as { mcpServers?: Record<string, Launch> }).mcpServers ?? {})[SERVER_NAME];
-        return entry ?? "missing";
-    } catch {
-        return "invalid";
-    }
-}
-
 /** The first file with this exact name under a folder, looking at most `depth` levels down. */
 function findFile(dir: string, name: string, depth: number): string | null {
     let entries: string[] = [];
@@ -278,7 +229,7 @@ const byVersionDesc = (a: string, b: string): number => b.localeCompare(a, undef
  * but never installed the `claude` command. It reads and writes the same user settings as the
  * command, so registering koble through it connects the Code tab.
  */
-export function bundledClaudeCode(): string | null {
+function bundledClaudeCode(): string | null {
     const roots = process.platform === "darwin" ? [join(homedir(), "Library", "Application Support", "Claude")] : desktopConfigPaths().map(dirname);
     for (const root of roots) {
         const base = join(root, "claude-code");
@@ -332,13 +283,15 @@ function claude(args: string[]): { status: number | null; out: string } {
     return { status: viaShell.error ? null : viaShell.status, out: `${viaShell.stdout ?? ""}${viaShell.stderr ?? ""}` };
 }
 
-export function claudeCodeInstalled(): boolean {
-    return claudeCodeRunner() !== null;
-}
+let hasPlugin: boolean | undefined;
 
+/** Asked once per run: `claude plugin list` is slow, and connect, doctor and uninstall each ask several times. */
 export function claudeCodeHasPlugin(): boolean {
-    const r = claude(["plugin", "list"]);
-    return r.status === 0 && r.out.includes(SERVER_NAME);
+    if (hasPlugin === undefined) {
+        const r = claude(["plugin", "list"]);
+        hasPlugin = r.status === 0 && r.out.includes(SERVER_NAME);
+    }
+    return hasPlugin;
 }
 
 /** Takes koble out of Claude Code: the user-level server, and the plugin and its marketplace if they were added. */
@@ -348,6 +301,7 @@ export function disconnectClaudeCode(): string[] {
     if (claude(["mcp", "remove", SERVER_NAME, "--scope", "user"]).status === 0) lines.push("removed the koble-mcp server.");
     if (claudeCodeHasPlugin()) {
         const r = claude(["plugin", "uninstall", PLUGIN]);
+        if (r.status === 0) hasPlugin = false;
         lines.push(r.status === 0 ? "removed the koble-mcp plugin." : `removing the koble-mcp plugin failed: ${r.out.trim().split("\n")[0]}`);
     }
     const markets = claude(["plugin", "marketplace", "list"]);
@@ -364,7 +318,7 @@ export function claudeCodeHasServer(): boolean {
     return r.status === 0 && new RegExp(`^${SERVER_NAME}:`, "m").test(r.out);
 }
 
-export interface ClaudeCodeServer {
+interface ClaudeCodeServer {
     command: string;
     args: string[];
     /** Claude Code's own health check: it starts the server and reports whether it connected. */
@@ -387,7 +341,7 @@ export function claudeCodeServer(): ClaudeCodeServer | null {
  * a plugin someone installed themselves is only kept up to date.
  */
 export function connectClaudeCode(launch: Launch): { ok: boolean; lines: string[] } {
-    if (!claudeCodeInstalled()) return { ok: false, lines: ["not installed here — skipped."] };
+    if (!claudeCodeRunner()) return { ok: false, lines: ["not installed here — skipped."] };
     const lines: string[] = [];
     claude(["mcp", "remove", SERVER_NAME, "--scope", "user"]);
     const add = claude(["mcp", "add", "--scope", "user", SERVER_NAME, "--", launch.command, ...launch.args]);

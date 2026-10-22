@@ -1,13 +1,16 @@
 // Builds `koble` as one executable for the platform it runs on: the whole program bundled into
 // one script, the skills embedded as assets, injected into a copy of the Node that runs this.
-// Release builds run it once per platform in CI. Usage: node scripts/build-single.mjs
+// Release builds run it once per platform in CI. Usage: npm run build && node scripts/build-single.mjs
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+// The skills are found the way the server finds them, so both always see the same files.
+if (!existsSync(join(root, "src", "guide.js"))) throw new Error("run `npm run build` first");
+const { fromFolder } = await import("../src/guide.js");
 const dist = join(root, "dist");
 const os = process.platform === "win32" ? "windows" : process.platform;
 const name = `koble-${os}-${process.arch}${process.platform === "win32" ? ".exe" : ""}`;
@@ -31,15 +34,7 @@ await build({
 
 // 2. The skills, as assets: an index plus one asset per file.
 const skillsDir = join(root, "skills");
-const files = [];
-const walk = (dir) => {
-    for (const entry of readdirSync(dir).sort()) {
-        const full = join(dir, entry);
-        if (statSync(full).isDirectory()) walk(full);
-        else if (/\.(md|py)$/.test(entry)) files.push(relative(skillsDir, full).split(sep).join("/"));
-    }
-};
-walk(skillsDir);
+const files = [...fromFolder(skillsDir).keys()];
 writeFileSync(join(dist, "skills-index.json"), JSON.stringify(files));
 const assets = { "skills/index.json": join(dist, "skills-index.json") };
 for (const file of files) assets[`skills/${file}`] = join(skillsDir, ...file.split("/"));
