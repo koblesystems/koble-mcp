@@ -20,7 +20,7 @@ the address, phone and email. Then show the body and ask before sending.
 
 ```
 ebms_write  method: POST   path: ARCUST
-            body: {"TREE_ID": "24", "F_NAME": "Joe", "L_NAME": "Smith",
+            body: {"TREE_ID": "<folder>", "F_NAME": "Joe", "L_NAME": "Smith",
                    "ADDRESS1": "100 Main St", "ZIP": "17527",
                    "PHONE": "(717) 555-0101", "EMAIL": "joe@example.com",
                    "EXTERNALID": "claude-2026-10-05-c1"}
@@ -34,11 +34,11 @@ What EBMS does with it (verified):
   taken (`SMIJOE1`). Report the ID it chose. Send an `ID` only if the user asks for a particular
   one, at most 10 characters. What it generates for a company (last name only) was not tried:
   report whatever comes back, and offer to change it if it reads badly.
-  This needs the folder to have a default ID method (SBX's customer folders all do). **Always check
-  the `ID` in `verification.rows`:** if it is blank, the folder has no method — say so, offer to
-  delete that customer (with a yes), and create it again with an `ID` the user chooses. A
-  "duplicate key … contact" error, seen for vendors when a blank-ID record already exists,
-  would mean the same thing here: nothing was saved; ask for an `ID`.
+  This needs the folder to have a default ID method (the customer folders tested all had one).
+  **Always check the `ID` in `verification.rows`:** if it is blank, the folder has no method —
+  say so, offer to delete that customer (with a yes), and create it again with an `ID` the user
+  chooses. A "duplicate key … contact" error, seen for vendors when a blank-ID record already
+  exists, would mean the same thing here: nothing was saved; ask for an `ID`.
 - **The folder's defaults are copied in**: price level (`IN_LEVEL`), charge and discount terms,
   which payment methods are allowed, shipping method, freight formula, mailing and email lists.
   A Wholesale folder gives a Wholesale price level.
@@ -83,5 +83,5 @@ invoices should be made inactive instead.
 - Sales-tax settings and exemptions (`ARCUSTAXs`), ship-to addresses (`ARCUSSITEs`) and extra
   contacts: set these in EBMS for now.
 - Deleting a customer that has history.
-- Install-specific custom fields (on SBX: bike, roast, subscription fields): list them with
+- Install-specific custom fields (fields an install has added): list them with
   `EntityMetaData('ARCUST')` and ask before writing one.

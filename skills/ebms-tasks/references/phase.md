@@ -2,8 +2,8 @@
 
 Read `../SKILL.md` first for the ground rules.
 
-A task type can have a pipeline — an ordered set of phases like *In Process*, *Waiting on Parts*,
-*Waiting on Client*, *Pending*. The phases belong to the **type**, not to tasks in general.
+A task type can have a pipeline — an ordered set of named phases a job moves through. The
+phases belong to the **type**, not to tasks in general.
 
 ## The rule that matters
 
@@ -19,13 +19,13 @@ EBMS client is the only thing that checks, and a phase that is not real leaves t
 `TAPIPELINE` holds one row per phase per type, keyed to the type by `TATYPE_AID`:
 
 ```
-ebms_get  path: TATYPES      filter: TYPE eq 'Bike_Repair'   select: AUTOID,TYPE
+ebms_get  path: TATYPES      filter: TYPE eq '<task type>'   select: AUTOID,TYPE
 ebms_get  path: TAPIPELINE   filter: TATYPE_AID eq '<that AUTOID>'
                              select: AUTOID,PIPE_PHASE
 ```
 
-If the type has no rows, it has no pipeline — say so instead of inventing phases. SBX has 25
-phase rows across its types.
+If the type has no rows, it has no pipeline — say so instead of inventing phases. An install can
+have dozens of phase rows across its types.
 
 `TASK.PIPE_PHASEItems` is EBMS's own list of the valid phases for a task, but it is one of the
 virtual fields that appears neither in a plain read nor under `select: *`; name it explicitly in
@@ -34,8 +34,8 @@ virtual fields that appears neither in a plain read nor under `select: *`; name 
 ## Move the task
 
 ```
-ebms_write  company: sbx   method: PATCH   path: TASK('<task AUTOID>')
-            body: {"PIPE_PHASE": "Waiting on Parts"}
+ebms_write  company: <company>   method: PATCH   path: TASK('<task AUTOID>')
+            body: {"PIPE_PHASE": "<phase>"}
             readBack: {"record": "PIPE_PHASE,PHASE_AID,STATUS,PIPE_RANK"}
 ```
 
@@ -48,7 +48,7 @@ the user asks.
 
 ## Verified
 
-On SBX, 2026-09-23: moving a ZTEST `Bike_Repair` task to `Waiting on Parts` stored that phase and
+On 2026-09-23: moving a throwaway test task to another phase of its type stored that phase and
 EBMS derived the matching `PHASE_AID` from `TAPIPELINE`. `STATUS` did not change (`Open`).
-That an invalid string is also accepted comes from earlier testing of this install, and is why
+That an invalid string is also accepted comes from earlier testing, and is why
 the read-back check above is not optional.

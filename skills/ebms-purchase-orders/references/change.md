@@ -19,7 +19,7 @@ Read `../SKILL.md` first for the ground rules.
    `Details@delta`, always as **absolute values**:
 
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: PATCH
                path: APINV('<PO AUTOID>')
                body: {"FREIGHT": 42.50,
@@ -27,7 +27,7 @@ Read `../SKILL.md` first for the ground rules.
                         {"@id": "<line AUTOID>", "O_QUAN_VIS": 48},
                         {"@id": "<line AUTOID>", "UNIT_VIS": 7.25},
                         {"@id": "<line AUTOID>", "@removed": true},
-                        {"INVEN": "SADDLE", "O_QUAN_VIS": 2, "UNIT_MEAS": "EA"}
+                        {"INVEN": "<product ID>", "O_QUAN_VIS": 2, "UNIT_MEAS": "EA"}
                       ]}
                readBack: {"record": "SUBTOTAL,TOTAL,TOTAL_PO,FREIGHT,TAX",
                           "lines": "O_QUAN_VIS,SHIP_VIS,UNIT_VIS,UNIT_MEAS,ETA_DATE"}

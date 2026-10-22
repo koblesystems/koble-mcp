@@ -100,7 +100,7 @@ Tell the user, in these words or close to them:
 > one with EBMS before saving it.
 
 Wait until they say it's done. `koble login` prints "<company>: signed in as …" for each one that
-worked. `koble login COF` signs in to just that company.
+worked. `koble login <company>` signs in to just that company.
 
 ## Companies later
 

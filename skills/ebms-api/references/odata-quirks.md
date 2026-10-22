@@ -36,20 +36,35 @@ Document detail rows carry `_VIS` fields (the visible, unit-aware quantity and c
 Querying the detail entity **standalone** returns the rows with those fields reading **0**:
 
 ```
-/APINVDET?$filter=DOC_AID eq 'PQ4RZT81HKVW2C00'&$select=INVEN,O_QUAN_VIS,UNIT_VIS
-  -> {"INVEN":"TUBE700C","O_QUAN_VIS":0.00,"UNIT_VIS":0.00}
+/APINVDET?$filter=DOC_AID eq '<PO AUTOID>'&$select=INVEN,O_QUAN_VIS,UNIT_VIS
+  -> {"INVEN":"<product ID>","O_QUAN_VIS":0.00,"UNIT_VIS":0.00}
 
-/APINV('PQ4RZT81HKVW2C00')?$expand=Details($select=INVEN,O_QUAN_VIS,UNIT_VIS)
-  -> {"INVEN":"TUBE700C","O_QUAN_VIS":35.00,"UNIT_VIS":7.50}
+/APINV('<PO AUTOID>')?$expand=Details($select=INVEN,O_QUAN_VIS,UNIT_VIS)
+  -> {"INVEN":"<product ID>","O_QUAN_VIS":35.00,"UNIT_VIS":7.50}
 ```
 
 The row, the `AUTOID` and non-`_VIS` fields such as `COST` and `UNIT_MEAS` are identical
 either way, so nothing errors — the numbers are just silently zero. Verified on two POs
-against SBX on EBMS 1.8.148; `$expand=APINVDETs` works as well as `Details`.
+on EBMS 1.8.148; `$expand=APINVDETs` works as well as `Details`.
 
 This is worth knowing before writing anything: a diff built from a standalone read sets
 quantities from a baseline of zero and reports cost changes that never happened. Always
 reach detail rows through the parent document.
+
+## Detail tables can't be written directly
+
+Writing a product's detail table on its own path fails:
+
+```
+PATCH INVENUNT('<unit AUTOID>')  {"UNIT": "<new name>"}
+  -> 422 "Attempted to write to detail without parent."
+     INVENUNT: Cannot modify detail table INVENUNT without accessing it through a parent entity!
+```
+
+Nothing is saved. Write through the parent instead — `PATCH INVENTRY('<AUTOID>')` with
+`INVENUNTs@delta: [{"@id": "<unit AUTOID>", …}]` — the same delta pattern as document lines.
+Verified for `INVENUNT` on EBMS 1.8.184, 2026-10-12. `INVENDOR` likely behaves the same;
+not verified.
 
 ## Selecting
 
@@ -64,15 +79,15 @@ EBMS reports a wrong key form inconsistently: sometimes 404, sometimes 400 or 42
 "Key not found". So a 404 on a keyed request usually means the key form, not a missing
 record.
 
-**Verified 2026-09-16 on SBX, EBMS 1.8.148**, for GET, PATCH and DELETE on `INVENTRY`,
+**Verified 2026-09-16 on EBMS 1.8.148**, for GET, PATCH and DELETE on `INVENTRY`,
 `ARINV` and `ARCUST`:
 
 | Path form | Result |
 |---|---|
-| `/ARINV('7XQPR42LM8W91000')` — AUTOID, **quoted** | works |
-| `/ARINV(7XQPR42LM8W91000)` — AUTOID, unquoted | **404, every verb** |
-| `/ARINV('1193')` — natural key, quoted | works |
-| `/ARINV(INVOICE='1193')` — natural key, named | works |
+| `/ARINV('<AUTOID>')` — AUTOID, **quoted** | works |
+| `/ARINV(<AUTOID>)` — AUTOID, unquoted | **404, every verb** |
+| `/ARINV('<invoice>')` — natural key, quoted | works |
+| `/ARINV(INVOICE='<invoice>')` — natural key, named | works |
 
 Koble's own documentation shows unquoted AUTOID for DELETE; on this build it 404s like the
 rest. Earlier versions of this file said to try unquoted AUTOID first — that only ever cost a
@@ -82,15 +97,15 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
 - The natural key, quoted. Invoice numbers are `EbmsLeftPad` and may be space-padded, which
   makes natural keys fragile.
 - **`APINV` is keyed by `INVOICE` alone, like `ARINV`** — and its `INVOICE` is the whole
-  string EBMS assigned, `PO#110`, not the `PO_NO` `110`. Verified 2026-09-21 on SBX:
+  string EBMS assigned, `PO#<n>`, not the `PO_NO` `<n>`. Verified 2026-09-21:
 
   | Path form | Result |
   |---|---|
-  | `APINV('PQ4RZT81HKVW2C00')` — quoted AUTOID | works |
-  | `APINV('PO#110')` — quoted INVOICE | works (the `#` is encoded for you) |
-  | `APINV('182')` — the PO_NO | **422 Key not found** |
-  | `APINV(ID='PARTSDIR',INVOICE='PO#110')` — composite | **404** |
-  | `APINV('PARTSDIR\|PO#110')` — EBMS's pipe convention | **422 Key not found** |
+  | `APINV('<PO AUTOID>')` — quoted AUTOID | works |
+  | `APINV('PO#<n>')` — quoted INVOICE | works (the `#` is encoded for you) |
+  | `APINV('<n>')` — the PO_NO | **422 Key not found** |
+  | `APINV(ID='<vendor ID>',INVOICE='PO#<n>')` — composite | **404** |
+  | `APINV('<vendor ID>\|PO#<n>')` — EBMS's pipe convention | **422 Key not found** |
 
   The composite and pipe forms appear in EBMS's own documentation and in other clients, but
   this build takes neither. Find a PO by `PO_NO` with a filter, then address it by AUTOID.
@@ -100,7 +115,7 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
 - **`APINV.TOP_TOTAL` is silently dropped.** POST and PATCH both return 200 and leave it at
   0. `TAX` and `FREIGHT` on the same header do persist, and `TOTAL` recomputes from them.
   Anything that diffs a document against a source will never satisfy a `TOP_TOTAL` change,
-  so don't send it. (SBX, 1.8.148.)
+  so don't send it. (EBMS 1.8.148.)
 - **`APINVDET.COST` is not the line amount you think it is.** On a line with a product,
   PATCHing `COST: 75` onto a `10 @ 7.50` line rewrote `UNIT_VIS` to **75**. Quantity
   (`O_QUAN_VIS`) and unit cost (`UNIT_VIS`) are the only safe things to write on a matched
@@ -120,16 +135,16 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
   `ID` tries to save a vendor with a blank ID, found only by its AUTOID or `ID eq ''` (seen
   2026-09: one was saved; 2026-10-12: two attempts were stopped only by an existing blank-ID
   vendor tripping `idx_fromcb_apvendor_t1/t2_contact__unique`). The koble server refuses a vendor
-  POST without an `ID`. Vendor IDs are user-assigned mnemonics (`PARTSDIR`, `BAKSUP`, `FARMCO`).
-  `APINV` auto-numbers (`INVOICE` "PO#174", `PO_NO` "174"), and so does `ARCUST` where its folder
-  has a method (SBX's do): `SMIJOE`, then `SMIJOE1`.
+  POST without an `ID`. Vendor IDs are user-assigned mnemonics (e.g. `ACME` for Acme Supply).
+  `APINV` auto-numbers (`INVOICE` "PO#<n>", `PO_NO` "<n>"), and so does `ARCUST` where its folder
+  has a method: last name then first name, Joe Smith -> `SMIJOE`, then `SMIJOE1`.
 - **Put `TREE_ID` first in a customer or vendor create body.** A vendor body with `L_NAME` before
   `TREE_ID` fails with 422 "APCONTACTS: Could not find child APCONTACTS record" and saves nothing
-  (`ID, L_NAME, TREE_ID, …`, SBX 2026-10-05); with `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}`
+  (`ID, L_NAME, TREE_ID, …`, 2026-10-05); with `TREE_ID` first, `{TREE_ID, ID, L_NAME, …}`
   saves in one POST (2026-10-12). `{ID, TREE_ID}` with no name also saves. Customers were created
   with the name first and saved; `TREE_ID` first is the safe order for both. The ordering was found
   by Koble. Both need `TREE_ID`: a vendor without one fails with "Could not find vendor defaults".
-- **A child row's `@id` in a `<Nav>@delta` is the plain AUTOID** (`"6HH5TPOJG0R3E1A1"`). The
+- **A child row's `@id` in a `<Nav>@delta` is the plain AUTOID** (`"<AUTOID>"`). The
   entity-qualified form (`"APCONTACTS('…')"`) is ignored with a 200.
 - **`APINV.DESCR_H` truncates at 30 characters** without complaint.
 - **`PIPE_PHASE` accepts any string** with a 200 and leaves the derived `PHASE_AID` stale.
@@ -142,7 +157,7 @@ rest. Earlier versions of this file said to try unquoted AUTOID first — that o
 
 ## Stock moves before processing
 
-Verified on SBX, 2026-09-23, with a ZTEST product:
+Verified 2026-09-23, with a throwaway test product:
 
 - **Shipping an unprocessed sales order changes `T_ON_HAND` at once** (`MarkAllAsShipped`
   took it from 0 to −7, materials included). Deleting the order restored it.
@@ -152,7 +167,7 @@ Verified on SBX, 2026-09-23, with a ZTEST product:
 
 ## Tasks and time
 
-Verified on SBX, 2026-09-23, with a ZTEST task:
+Verified 2026-09-23, with a throwaway test task:
 
 - `POST TASK` assigns `ID`; `STATUS` and `ASSIGN_EMP` are derived (from the `TASTATUS` logic
   expressions and from `EMP_ID`). Completing a task may approve it in the same step
@@ -218,7 +233,7 @@ Verified on SBX, 2026-09-23, with a ZTEST task:
 
 ## Sales documents: creating, editing, shipping, processing
 
-All verified 2026-09-16 against SBX on EBMS 1.8.148, using a throwaway customer, product and
+All verified 2026-09-16 on EBMS 1.8.148, using a throwaway customer, product and
 orders that were deleted afterwards. The `ebms-sales-orders` skill turns these into
 step-by-step workflows.
 
@@ -238,8 +253,8 @@ step-by-step workflows.
   work in one PATCH, and re-sending the same absolute values changes nothing.
 - **An unknown `@id` is silently ignored**: 200, no error, no change, no phantom line. A
   mistyped line AUTOID looks like success. Read the document back and check each change.
-- **An aborted POST still consumes an invoice number.** Orders `1193` and `1195` were created
-  either side of a POST that aborted; `1194` does not exist. Validate a document before
+- **An aborted POST still consumes an invoice number.** Orders `<n>` and `<n+2>` were created
+  either side of a POST that aborted; `<n+1>` does not exist. Validate a document before
   POSTing it rather than relying on EBMS to reject it, or the numbering gains gaps.
 
 **Totals**
@@ -275,7 +290,7 @@ step-by-step workflows.
 
 ## Document size and the 2-minute limit
 
-API requests are limited to about 2 minutes. Measured against SBX on EBMS 1.8.148,
+API requests are limited to about 2 minutes. Measured on EBMS 1.8.148,
 2026-09-17, with test orders that were deleted afterwards:
 
 | Write on `ARINV` | Time |
@@ -305,7 +320,7 @@ API requests are limited to about 2 minutes. Measured against SBX on EBMS 1.8.14
 
 ## Commands (bound actions)
 
-Verified against SBX on EBMS 1.8.148, 2026-09-17, with test records deleted afterwards.
+Verified on EBMS 1.8.148, 2026-09-17, with test records deleted afterwards.
 
 - **Invoke as `POST /<ENTITY>('<AUTOID>')/Model.Entities.<Command>`.**
 - **A command with no dialog must have no request body.** Even `{}` returns
@@ -332,7 +347,7 @@ Verified against SBX on EBMS 1.8.148, 2026-09-17, with test records deleted afte
 
 ## Materials lists on sales lines
 
-Verified against SBX on EBMS 1.8.148, 2026-09-17.
+Verified on EBMS 1.8.148, 2026-09-17.
 
 - Nest them as `Materials` inside a `Details` entry on create. They are **not** top-level lines:
   read them with `$expand=Details($expand=Materials)`. Each links to its parent by `PAR_TIME` =
@@ -349,14 +364,14 @@ Verified against SBX on EBMS 1.8.148, 2026-09-17.
 ## Natural keys are silently truncated
 
 A natural key longer than its field's maximum is **cut to length without an error**. An
-`ARCUST.ID` of `ZTSKL71323A` (11 characters, max 10) was stored as `ZTSKL71323`. Two different
+`ARCUST.ID` of `ABCDEFGHIJK` (11 characters, max 10) was stored as `ABCDEFGHIJ`. Two different
 over-long IDs can therefore collide, and the second create fails with "This Id already exists"
 for an ID you never sent. Check lengths against `references/entities/<ENTITY>.md` before
-creating. (SBX, 1.8.148, 2026-09-17.)
+creating. (EBMS 1.8.148, 2026-09-17.)
 
 ## Reading materials: never `$expand=Materials`
 
-Verified against SBX on EBMS 1.8.148, 2026-09-17, on a 120-line order with 3 materials.
+Verified on EBMS 1.8.148, 2026-09-17, on a 120-line order with 3 materials.
 
 | Read of the order's lines | Time |
 |---|---|

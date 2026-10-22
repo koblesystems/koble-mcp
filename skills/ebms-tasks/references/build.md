@@ -2,7 +2,7 @@
 
 Read `../SKILL.md` first for the ground rules and the lookup tables.
 
-Verified on SBX, 2026-09-23, with a ZTEST task created, changed, completed and deleted.
+Verified 2026-09-23, with a throwaway test task created, changed, completed and deleted.
 
 ## Raise a task
 
@@ -39,11 +39,11 @@ Verified on SBX, 2026-09-23, with a ZTEST task created, changed, completed and d
 5. **Create it:**
 
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: POST
                path: TASK
-               body: {"TYPE": "Bike_Repair", "DESCR": "Tube change and new chain",
-                      "CUST_ID": "RIVALE", "EMP_ID": "RIVALE", "PRIORITY": "Normal",
+               body: {"TYPE": "<task type>", "DESCR": "Tube change and new chain",
+                      "CUST_ID": "<customer ID>", "EMP_ID": "<worker ID>", "PRIORITY": "Normal",
                       "DUE_BY": "09/25/2026", "NOTE": "Customer will collect Friday",
                       "EXTERNALID": "claude-2026-09-21-t1"}
                readBack: {"record": "ID,STATUS,CREATE_D,ASSIGN_EMP,PIPE_PHASE"}
@@ -57,12 +57,12 @@ Verified on SBX, 2026-09-23, with a ZTEST task created, changed, completed and d
 ## Change a task
 
 ```
-ebms_write  company: sbx   method: PATCH   path: TASK('<AUTOID>')
-            body: {"EMP_ID": "LEEJAN", "PRIORITY": "High", "DUE_BY": "09/26/2026"}
+ebms_write  company: <company>   method: PATCH   path: TASK('<AUTOID>')
+            body: {"EMP_ID": "<worker ID>", "PRIORITY": "High", "DUE_BY": "09/26/2026"}
             readBack: {"record": "STATUS,ASSIGN_EMP"}
 ```
 
-Address the task by quoted AUTOID, or by its quoted `ID` (`TASK('K7Q2M9X4LA')`). Reassigning is
+Address the task by quoted AUTOID, or by its quoted `ID` (`TASK('<task ID>')`). Reassigning is
 just `EMP_ID`: EBMS rebuilds `ASSIGN_EMP` from it. Several workers on one task would go through
 the `TAEMPs` child rows, which have not been tested.
 
@@ -71,12 +71,12 @@ the `TAEMPs` child rows, which have not been tested.
 `COMPLETED` is the writable flag; `STATUS`, `COMP_D` and `COMP_U` are EBMS's.
 
 ```
-ebms_write  company: sbx   method: PATCH   path: TASK('<AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: TASK('<AUTOID>')
             body: {"COMPLETED": true}
             readBack: {"record": "STATUS,COMPLETED,COMP_D,COMP_U"}
 ```
 
-EBMS stamps `COMP_D` and `COMP_U` itself. **It may approve the task in the same step**: on SBX,
+EBMS stamps `COMP_D` and `COMP_U` itself. **It may approve the task in the same step**: in testing,
 completing the test task also set `APPROVED_C` and `STATUS` came back `Approved`, not
 `Completed` — most likely because the signed-in user is a task manager. Older tasks read
 `Closed`. The `TASTATUS` logic expressions decide, so **report the status EBMS derived** rather

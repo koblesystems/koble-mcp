@@ -3,17 +3,17 @@
 Read `../SKILL.md` first for the ground rules and the performance limits.
 
 A materials list is a set of lines nested under one order line — the parts that make up an
-assembly, a kit, or a job. Verified against SBX (EBMS 1.8.148, September 2026).
+assembly, a kit, or a job. Verified against EBMS 1.8.148 (September 2026).
 
 ## Two kinds, and they price differently
 
 - **An assembly kit** is a product with its own default materials list and **its own price**,
-  which EBMS distributes down to the children. Order 1088: `FLATREPAIR` priced at 16, its
-  children rescaled to 0.25 × 31.35 + 8.16.
+  which EBMS distributes down to the children. On a test order, a kit priced at 16 had
+  its children rescaled to 0.25 × 31.35 + 8.16.
 - **An ad hoc materials list** has a **description-only parent** — a line with no `INVEN`, just a
   `DESCR` — and **the parent's price is the sum of its children**. This is the **typical** case in
   EBMS, not an edge case. The G/L account sits on the materials, so such a parent needs **no
-  `ACCOUNT`** (verified by write, order 1209): the "description-only line needs an `ACCOUNT`"
+  `ACCOUNT`** (verified by write): the "description-only line needs an `ACCOUNT`"
   rule applies only to a description line with no materials.
 
 Both are built the same way; only the pricing differs. Ask which one the user means when it
@@ -29,10 +29,10 @@ isn't obvious from whether they named a product.
 - **On an ad hoc list the parent's price is the sum of its materials**, per parent unit. A
   product given an explicit `Materials` array priced the same way: a `BASE` 100 product came out
   at 22.91 because its materials came to 1 × 5.00 + 3 × 5.97.
-- **A product with default components brings them in by itself.** Posting one `FLATREPAIR` line
-  with no `Materials` came back with its 2 default components attached (TUBE-26 ×0.25,
-  TUBE700C ×1 @ 8.33). Ask for them back with `readBack.children: "Materials"` and they arrive
-  in `verification.notes` — rows EBMS added, not an error. In that case the parent stayed at
+- **A product with default components brings them in by itself.** Posting one line for such a
+  product with no `Materials` came back with its 2 default components attached (`<component>`
+  ×0.25, `<component>` ×1 @ 8.33). Ask for them back with `readBack.children: "Materials"` and
+  they arrive in `verification.notes` — rows EBMS added, not an error. In that case the parent stayed at
   price 0, because its own `BASE` is 0: EBMS did **not** price it as the sum of its materials.
   Report what EBMS stored.
 - **Setting a price on the parent line spreads it down.** Setting the assembly to 99 rescaled its
@@ -70,7 +70,7 @@ EBMS means them: "per assembly".
 Nest `Materials` inside the line, with quantities **per parent unit**:
 
 ```
-ebms_write  company: sbx   method: POST   path: ARINV
+ebms_write  company: <company>   method: POST   path: ARINV
             body: {"ID": "SMIJOH", "EXTERNALID": "claude-2026-09-21-b1",
                    "Details": [
                      {"INVEN": "BENCH-KIT", "M_QUAN_VIS": 2,
@@ -95,7 +95,7 @@ Count materials toward the 50-line limit per request.
 Use a delta **inside** a `Details@delta` entry for the parent line:
 
 ```
-ebms_write  company: sbx   method: PATCH   path: ARINV('<order AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: ARINV('<order AUTOID>')
             body: {"Details@delta": [
                      {"@id": "<parent line AUTOID>",
                       "Materials@delta": [

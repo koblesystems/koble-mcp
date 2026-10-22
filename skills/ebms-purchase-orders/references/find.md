@@ -9,13 +9,13 @@ is in the metadata but 422s in a filter.
 
 ```
 ebms_get  path: APVENDOR
-          filter: not startswith(ID,'($)') and INACTIVE eq false and (contains(tolower(ID),'bike') or contains(tolower(L_NAME),'bike'))
+          filter: not startswith(ID,'($)') and INACTIVE eq false and (contains(tolower(ID),'<term>') or contains(tolower(L_NAME),'<term>'))
           select: AUTOID,ID,L_NAME,F_NAME,CITY,STATE,GL_CODE,TREE_ID,MIN_ORDER
           top: 20
 ```
 
 - **Exclude `($)` rows.** `APVENDOR` holds category folders in the same entity set, exactly as
-  `INVENTRY` does. SBX has 73 real vendors and a wall of tax authorities.
+  `INVENTRY` does. An install can have dozens of real vendors and a wall of tax authorities.
 - A company's vendor name usually lives in `L_NAME`, with `F_NAME` empty.
 - `GL_CODE` is the vendor's G/L account, which matters for a description-only charge line.
 - `MIN_ORDER` is the vendor's minimum order; mention it when an order looks small.
@@ -32,7 +32,7 @@ from.
 
 ```
 ebms_get  path: INVENDOR
-          filter: ID eq 'TUBE700C'
+          filter: ID eq '<product ID>'
           select: AUTOID,ID,VENDOR_ID,PART_NO,UNIT_MEAS,COST,ORDER_AMT
 ```
 
@@ -55,7 +55,7 @@ product's stock unit at whatever cost EBMS supplies, and the quantity deserves a
 To turn a number printed on a vendor's quote or invoice into a product:
 
 ```
-ebms_get  path: INVENDOR   filter: VENDOR_ID eq 'PARTSDIR' and PART_NO eq 'CM-12'
+ebms_get  path: INVENDOR   filter: VENDOR_ID eq '<vendor ID>' and PART_NO eq '<part no>'
           select: ID,VENDOR_ID,PART_NO,UNIT_MEAS,COST
 ```
 
@@ -71,12 +71,12 @@ ebms_get  path: APINV   filter: STATUS eq 'U'
           select: AUTOID,INVOICE,PO_NO,ID,INV_DATE,DUE_DATE,TOTAL_PO,WAREHOUSE   top: 50
 
 # One vendor's
-ebms_get  path: APINV   filter: ID eq 'BIKEPARTS' and STATUS eq 'U'
+ebms_get  path: APINV   filter: ID eq '<vendor ID>' and STATUS eq 'U'
           select: AUTOID,INVOICE,PO_NO,INV_DATE,DUE_DATE,TOTAL_PO
 
 # By PO number, or by an EXTERNALID a tool gave it
-ebms_get  path: APINV   filter: PO_NO eq '182'   select: AUTOID,INVOICE,PO_NO,ID,STATUS
-ebms_get  path: APINV   filter: EXTERNALID eq 'mrp-sbx-20260921-1526-BIKEPARTS'   select: AUTOID,INVOICE
+ebms_get  path: APINV   filter: PO_NO eq '<n>'   select: AUTOID,INVOICE,PO_NO,ID,STATUS
+ebms_get  path: APINV   filter: EXTERNALID eq 'mrp-<company>-<run>-<vendor ID>'   select: AUTOID,INVOICE
 ```
 
 `STATUS eq 'U'` is what "open" means — but remember a `'U'` purchase order may already be fully

@@ -14,7 +14,7 @@ Read `../SKILL.md` first for the ground rules and the performance limits.
 3. **Build one PATCH for everything.** Header fields go at the top level; line changes go in
    `Details@delta`, always as **absolute values**, never increments:
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: PATCH
                path: ARINV('<order AUTOID>')
                body: {"PO_NO": "PO-5521-R1",

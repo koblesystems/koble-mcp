@@ -1,6 +1,6 @@
 ---
 name: ebms-customers-vendors
-description: Create and update customers (ARCUST) and vendors (APVENDOR) in EBMS / Koble — checking for an existing record first, choosing the folder that supplies the defaults (price level, terms, GL), letting EBMS generate a customer ID or choosing a vendor ID, name and address (a ZIP fills in city and state), phone and email, lead days, moving a record to another folder, and marking it inactive. Use whenever someone wants to add, set up, create or edit a customer, client, account, dealer, supplier or vendor in EBMS or Koble — "add a customer for Smith Roofing", "set up Bike Parts Co as a vendor", "change Joe's phone number", "make that customer wholesale", "mark that vendor inactive" — or when a sales order or purchase order needs a customer or vendor that doesn't exist yet. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
+description: Create and update customers (ARCUST) and vendors (APVENDOR) in EBMS / Koble — checking for an existing record first, choosing the folder that supplies the defaults (price level, terms, GL), letting EBMS generate a customer ID or choosing a vendor ID, name and address (a ZIP fills in city and state), phone and email, lead days, moving a record to another folder, and marking it inactive. Use whenever someone wants to add, set up, create or edit a customer, client, account, dealer, supplier or vendor in EBMS or Koble — "add a customer for Smith Roofing", "set up Acme Supply as a vendor", "change Joe's phone number", "make that customer wholesale", "mark that vendor inactive" — or when a sales order or purchase order needs a customer or vendor that doesn't exist yet. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
 ---
 
 # EBMS customers and vendors
@@ -16,6 +16,7 @@ stop.
 | Add or change a customer | `references/customers.md` |
 | Add or change a vendor | `references/vendors.md` |
 
+Verified on EBMS 1.8.184 with throwaway test customers and vendors that were created, changed
 For many customers or vendors at once, from a CSV or Excel file, use **ebms-import**; it applies
 this skill's rules to every row.
 
@@ -38,8 +39,8 @@ each reference.
    **only when the record is created**; moving it later keeps its old price level and terms.
 5. **Company names go in `L_NAME`, with `F_NAME` left blank.** People: first name in `F_NAME`,
    last name in `L_NAME`.
-6. **IDs are at most 10 characters and are cut short silently** — `ZTSKL71323A` was stored as
-   `ZTSKL71323`, and two long IDs can then collide. Count before you send one.
+6. **IDs are at most 10 characters and are cut short silently** — `ABCDEFGHIJK` was stored as
+   `ABCDEFGHIJ`, and two long IDs can then collide. Count before you send one.
 7. **Prefer inactive to delete.** A customer or vendor with history should be marked
    `INACTIVE: true`; delete only a record created by mistake, and only with a yes.
    **Never send a vendor create without an `ID`** (the server refuses one), and never a customer
@@ -60,7 +61,8 @@ Each folder can have a **default ID method** (set on the folder's defaults in EB
 letters of last name and first 3 letters of first name"). With one, EBMS generates the ID when
 the create leaves `ID` out; without one, EBMS saves a blank ID. The API cannot show which folders
 have a method (only product folders publish it). So: **customers** leave `ID` out and check the
-`ID` that comes back (SBX's customer folders all generate one); **vendors** always send an `ID`.
+`ID` that comes back (folders with a default ID method generate one); **vendors** always send an
+`ID`.
 
 ## Folders
 

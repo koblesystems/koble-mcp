@@ -69,7 +69,7 @@ For every draft that is not `alreadyCreated`, show:
   ordered in the stock unit because the chosen vendor has no record for the product needs a
   second look at its quantity.
 
-Then ask plainly, per purchase order: *"Create this purchase order for BIKEPARTS — 2 lines,
+Then ask plainly, per purchase order: *"Create this purchase order for <vendor> — 2 lines,
 about $1,350?"* A yes to one is not a yes to the next. If they say "yes to all", list the
 vendors back once and confirm, then proceed in order.
 
@@ -87,7 +87,7 @@ Read the result before moving on:
   stored lines from `verification.rows`: quantity, unit, cost. Use EBMS's values, not the
   worksheet's. Then look at each line's `ETA_DATE`: EBMS sets it itself, from the vendor's lead
   time. Hold it against the draft's `neededBy` for that product and say plainly which lines are
-  **expected after they are needed** ("SADDLE is needed 25 Sep; EBMS expects it 5 Oct") and
+  **expected after they are needed** ("<product> is needed 25 Sep; EBMS expects it 5 Oct") and
   which have **no expected date**. That is the planner's cue to call the vendor.
 - **`verification.ok` is false** — stop. Show every mismatch and problem exactly as returned
   (for example a quantity stored as 0, which means the product's unit is set up wrongly). The

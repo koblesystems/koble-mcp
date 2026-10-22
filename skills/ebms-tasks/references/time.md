@@ -6,19 +6,19 @@ Read `../SKILL.md` first for the ground rules.
 gets billed for. Confirm the worker, the date, the hours and the work code back to the user
 before every single entry, and never batch several past one yes.
 
-Verified on SBX, 2026-09-23, with a ZTEST task: an entry was booked, then removed.
+Verified 2026-09-23, with a throwaway test task: an entry was booked, then removed.
 
 ## What a time entry looks like
 
-Time lives in `PYTMDET`, one row per worker per day per task. On SBX:
+Time lives in `PYTMDET`, one row per worker per day per task:
 
 | Field | Example | What it is |
 |---|---|---|
-| `ID` | `RIVALE` | the **worker** (`PYEMP.ID`) |
-| `TASK_ID` | `R5T8W2N6PB` | the task's `ID` — **empty on a plain timecard row** |
+| `ID` | `<worker ID>` | the **worker** (`PYEMP.ID`) |
+| `TASK_ID` | `<task ID>` | the task's `ID` — **empty on a plain timecard row** |
 | `DATE` | `2026-05-13` | the day worked |
 | `HOURS` | `3` | hours, decimal |
-| `WORK_CODE` | `BIKE` | a `PYWORK.ID` — `ROAST`, `BIKE`, `BAKE`, `OFFICE` on SBX |
+| `WORK_CODE` | `<work code>` | a `PYWORK.ID` |
 
 A row with no `TASK_ID` is ordinary timecard time, not task time. Do not create one.
 
@@ -36,17 +36,17 @@ A row with no `TASK_ID` is ordinary timecard time, not task time. Do not create 
              select: AUTOID,ID,TASK_ID,DATE,HOURS,WORK_CODE
    ```
 
-4. **Say it back and wait:** *"3 hours for Alex Rivera on 13 May, work code BIKE, against task
-   R5T8W2N6PB — book it?"*
+4. **Say it back and wait:** *"3 hours for <worker name> on 13 May, work code <work code>,
+   against task <task ID> — book it?"*
 
 ## Write it
 
 Through the task, as a child collection:
 
 ```
-ebms_write  company: sbx   method: PATCH   path: TASK('<task AUTOID>')
-            body: {"PYTMDETs": [{"ID": "RIVALE", "DATE": "05/13/2026",
-                                 "HOURS": 3, "WORK_CODE": "BIKE"}]}
+ebms_write  company: <company>   method: PATCH   path: TASK('<task AUTOID>')
+            body: {"PYTMDETs": [{"ID": "<worker ID>", "DATE": "05/13/2026",
+                                 "HOURS": 3, "WORK_CODE": "<work code>"}]}
             readBack: {"record": "ACT_TIME,HOURS,BILL_TIME,STATUS"}
 ```
 
@@ -65,7 +65,7 @@ question as an error ("This timecard line is attached to a task and contributes 
 time total. Are you sure…?"). Removing it **through the task** works:
 
 ```
-ebms_write  company: sbx   method: PATCH   path: TASK('<task AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: TASK('<task AUTOID>')
             body: {"PYTMDETs@delta": [{"@id": "<time entry AUTOID>", "@removed": true}]}
             readBack: {"record": "ACT_TIME"}
 ```

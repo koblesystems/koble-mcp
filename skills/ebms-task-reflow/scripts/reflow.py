@@ -16,7 +16,7 @@ input.json:
     "day_map": {"2026-09-21": "2026-09-28"}   # optional: preferred new day per old day
   },
   "tasks": [
-    {"id": "TK00001234", "autoid": "...", "worker": "RIVALE",
+    {"id": "TK00001234", "autoid": "...", "worker": "<worker ID>",
      "start_date": "2026-09-21", "start_time": "PT9H", "end_time": "PT9H30M",
      "hours": 0.5, "priority_sort": 2, "due": "2026-09-30"}
   ]

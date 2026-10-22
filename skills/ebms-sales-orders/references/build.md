@@ -32,7 +32,7 @@ Read `../SKILL.md` first for the ground rules and the performance limits.
    sending. For up to 50 lines, one call is the whole order:
 
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: POST
                path: ARINV
                body: {"ID": "SMIJOH", "PO_NO": "PO-5521", "DESCR": "Spring restock",

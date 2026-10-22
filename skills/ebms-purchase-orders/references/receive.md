@@ -6,11 +6,11 @@ Receiving records how much of each line has actually come in. It is **not** proc
 received purchase order still has `STATUS` `'U'`, and turning the receiving list into an expense
 invoice is done by a person in EBMS.
 
-**Receiving moves stock, immediately.** On SBX (2026-09-23), receiving 1 CASE (12 each) and 4
-each on a ZTEST PO raised the product's `T_ON_HAND` by 16 the moment the PATCH returned — no
-processing needed. Every quantity here changes what the company believes it has on hand, and it
-is the one workflow in this skill that another person will notice at once. Confirm each document,
-line by line, before writing.
+**Receiving moves stock, immediately.** In testing (2026-09-23), receiving 1 CASE (12 each) and 4
+each on a PO for a throwaway test product raised the product's `T_ON_HAND` by 16 the moment the
+PATCH returned — no processing needed. Every quantity here changes what the company believes it
+has on hand, and it is the one workflow in this skill that another person will notice at once.
+Confirm each document, line by line, before writing.
 
 ## Steps
 
@@ -38,7 +38,7 @@ line by line, before writing.
 6. **Write it:**
 
    ```
-   ebms_write  company: sbx
+   ebms_write  company: <company>
                method: PATCH
                path: APINV('<PO AUTOID>')
                body: {"Details@delta": [
@@ -60,7 +60,7 @@ line by line, before writing.
 ## Undoing a receipt
 
 Set the line's `SHIP_VIS` back to what it was — 0 to undo it entirely. Verified: that took the
-ZTEST product's on-hand straight back down and the line's `COST` back to 0. `RDATE` is left as
+test product's on-hand straight back down and the line's `COST` back to 0. `RDATE` is left as
 it was. This changes stock again, so confirm it the same way as the receipt.
 
 ## Back orders

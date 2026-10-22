@@ -13,6 +13,7 @@ classification enum and folder details.
 
 If those tools are not available, say the koble-mcp server is not connected and stop.
 
+Verified against a live install (EBMS 1.8.148, 2026-09-16) by creating, reading,
 For many products at once, from a CSV or Excel file, use **ebms-import**; it applies this
 skill's rules to every row. The server refuses a product POST whose `EXTERNALID` already exists
 (since 0.1.0-rc.14), as it does for orders: read the existing product and continue from it.
@@ -65,8 +66,8 @@ updating and deleting a test product. The sections marked *not yet verified* wer
 
 6. **Post:**
    ```
-   ebms_write  company: sbx   method: POST   path: INVENTRY
-               body: {"ID": "MUG-12", "DESCR_1": "12 oz ceramic mug", "TREE_ID": "26",
+   ebms_write  company: <company>   method: POST   path: INVENTRY
+               body: {"ID": "MUG-12", "DESCR_1": "12 oz ceramic mug", "TREE_ID": "<folder>",
                       "C_TYPE": 2, "COST": 3.10, "BASE": 7.95,
                       "UPC": "012345678905", "MFG_PART": "CM-12"}
                readBack: {"record": "FOLDERNAME,MARKUP,TAX_GROUP,PUR_ACC"}
@@ -75,14 +76,14 @@ updating and deleting a test product. The sections marked *not yet verified* wer
    `DESCR_1` and `DESCR_2` as the default line description.
 
 7. **Report what came back.** The `readBack.record` fields above put EBMS's own defaults in
-   `verification.rows` alongside what you sent. EBMS fills defaults the user may want to review: on the install tested, `MARKUP` `(None)`,
-   `TAX_GROUP` `Taxable`, and `PUR_ACC` `60000-000`. Those defaults are company configuration
-   and may differ elsewhere. Mention them rather than assuming they're right.
+   `verification.rows` alongside what you sent. EBMS fills defaults the user may want to review,
+   such as `MARKUP` `(None)`, `TAX_GROUP` `Taxable`, and a purchase account in `PUR_ACC`. Those
+   defaults are company configuration and may differ elsewhere. Mention them rather than assuming they're right.
 
 ## Update a product
 
 ```
-ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<AUTOID>')
             body: {"BASE": 8.25, "DESCR_2": "Dishwasher safe"}
 ```
 `verification.ok: false` with a mismatch means EBMS ignored a field it won't accept in the
@@ -110,23 +111,51 @@ ebms_get  path: INVENUNT   filter: ID eq 'MUG-12'
   the API puts on a new order line.
 - **A `Larger` unit with `MULTIPLIER` 0 is broken**: one of it is zero main units, so a line in
   that unit saves as quantity 0 at price 0, with a 200 and no warning. When a quantity comes back
-  0, read the product's units before blaming stock. Seen live on TEAMJERSEY in SBX.
+  0, read the product's units before blaming stock. Seen live on two products in two different
+  companies (most recently EBMS 1.8.184, 2026-10-12), so it is not a one-off. **Whenever you
+  work on a product's units, check for `Larger` with `MULTIPLIER` 0 and point it out to the
+  user.** Pointing `DEF_UNIT` at a sound unit stops new API order lines defaulting to the broken
+  one, but the broken unit is still there.
+- **`INVENUNT` cannot be written directly.** `PATCH INVENUNT('<AUTOID>')` returns 422 "Cannot
+  modify detail table INVENUNT without accessing it through a parent entity!" and saves nothing
+  (EBMS 1.8.184, 2026-10-12). Every unit change goes through `INVENTRY('<AUTOID>')`.
 - `ID` on an `INVENUNT` row is the product ID and is read-only.
 - **A product created through the API gets a blank main unit**: one `INVENUNT` row with `UNIT`
   "" (`Smaller`, multiplier 0), and `EACH_UNIT` and `DEF_UNIT` both "". Lines for it then carry
   `UNIT_MEAS` "". That works, but it is not what a product made in EBMS looks like; mention it.
 
-**Add a unit through the product**, as a child collection (verified on SBX, 2026-09-23):
+**Add a unit through the product**, as a child collection (verified 2026-09-23):
 
 ```
-ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<AUTOID>')
             body: {"INVENUNTs": [{"UNIT": "CASE", "MULTIPLY": "Larger", "MULTIPLIER": 12}]}
 ```
 
 The new row comes back in `verification.rows` with its AUTOID. **Never create a `Larger` unit
-with a multiplier of 0** — that is exactly the broken unit that zeroes order lines. Changing or
-removing an existing unit has not been tested; a unit already used on documents is better changed
-in EBMS.
+with a multiplier of 0** — that is exactly the broken unit that zeroes order lines. Adding uses
+the plain `INVENUNTs` collection; changing an existing unit uses `INVENUNTs@delta`, below.
+
+### Change an existing unit
+
+Through the product, as a delta naming the unit's AUTOID in `@id` — the same pattern as document
+lines in `ebms-api`. Renaming verified on EBMS 1.8.184, 2026-10-12:
+
+```
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<product AUTOID>')
+            body: {"INVENUNTs@delta": [{"@id": "<INVENUNT AUTOID>", "UNIT": "<new name>"}]}
+            readBack: {"record": "EACH_UNIT,DEF_UNIT"}
+```
+
+- The row keeps its AUTOID; only `UNIT` changes.
+- **Renaming the main unit** (the `Smaller` row with `MULTIPLIER` 0) **updates `EACH_UNIT` to
+  match**, without sending it. Read `EACH_UNIT` back to confirm.
+- **`DEF_UNIT` can be set with a plain PATCH** on the product, e.g. `{"DEF_UNIT": "<unit>"}`
+  (verified on EBMS 1.8.184, 2026-10-12). Use a unit the product already has; only that was
+  tested.
+- **Not verified:** changing `MULTIPLIER` or `MULTIPLY` on an existing unit, removing a unit
+  (`{"@id": "…", "@removed": true}`), and whether a sales order line in a renamed unit saves the
+  right quantity and price. Say so if a request depends on them, and read the units back after
+  any attempt. A unit already used on documents is safer to change in EBMS.
 
 ## Vendor records — `INVENDOR`
 
@@ -147,17 +176,19 @@ ebms_get  path: INVENDOR   filter: ID eq 'MUG-12'
   It is writable, but setting it through the API has not been tried yet.
 - `ORDER_AMT` is the reorder increment (order in multiples of this).
 
-**Add a vendor record through the product** (verified on SBX, 2026-09-23):
+**Add a vendor record through the product** (verified 2026-09-23):
 
 ```
-ebms_write  company: sbx   method: PATCH   path: INVENTRY('<AUTOID>')
-            body: {"INVENDORs": [{"VENDOR_ID": "BIKEPARTS", "PART_NO": "ZT-1",
+ebms_write  company: <company>   method: PATCH   path: INVENTRY('<AUTOID>')
+            body: {"INVENDORs": [{"VENDOR_ID": "<vendor ID>", "PART_NO": "<part no>",
                                   "UNIT_MEAS": "CASE", "COST": 30}]}
 ```
 
 `UNIT_MEAS` must be one of the product's units — add the unit first. Adding a vendor record does
 **not** set `PRI_VENDOR`; set that on the product separately if this vendor should be the
-primary. Changing an existing vendor record has not been tested.
+primary. Changing an existing vendor record has not been tested; like units, it probably has to
+go through the product as `INVENDORs@delta` (writing `INVENDOR` directly is likely refused, not
+verified).
 
 Deleting a product takes its units and vendor records with it.
 
@@ -184,7 +215,8 @@ component's base unit**. Changing a bill of materials is **not yet verified**.
 ## Not yet verified
 
 Say so if a request depends on these: moving a product to another folder by changing `TREE_ID`;
-price levels (`INVPRICE`) and markup templates; **changing or removing** existing units or
-vendor records (adding them is verified); bills of materials (`INVENDET`) — reading is verified,
-writing is not; serialized or lot-tracked setup; product images and documents; and changing a
-product's ID (the `ChangeID` action, which is not on the server's command allow-list).
+price levels (`INVPRICE`) and markup templates; changing a unit's multiplier or removing a unit
+(adding and renaming units are verified); changing or removing vendor records (adding them is
+verified); bills of materials (`INVENDET`) — reading is verified, writing is not; serialized or
+lot-tracked setup; product images and documents; and changing a product's ID (the `ChangeID`
+action, which is not on the server's command allow-list).
