@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configure } from "../src/config.js";
 import { resetAuth } from "../src/ebms/client.js";
-import { checkCode, toCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
+import { checkCode, externalIdFor, toCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
 import { registerMrpTools } from "../src/tools/mrp-tools.js";
 import { registerWorksheetTools } from "../src/tools/worksheet-tools.js";
 import type { McpToolResult } from "../src/tools/types.js";
@@ -105,7 +105,7 @@ test("an untouched row is ordered exactly as the run wrote it, and the tool neve
     fresh();
     const r = await call({ company: "sbx", path: worksheet({ L0001: { Approve: "Y" } }) });
     assert.equal(r.runRecordFound, true);
-    assert.deepEqual(r.drafts[0].write.body, { ID: "V1", EXTERNALID: `${RUN}-V1`, Details: [{ INVEN: "WIDGET", O_QUAN_VIS: 2, UNIT_MEAS: "CASE", UNIT_VIS: 48 }] });
+    assert.deepEqual(r.drafts[0].write.body, { ID: "V1", EXTERNALID: externalIdFor(RUN, "V1"), Details: [{ INVEN: "WIDGET", O_QUAN_VIS: 2, UNIT_MEAS: "CASE", UNIT_VIS: 48 }] });
     assert.deepEqual(r.drafts[0].changedByPlanner, []);
     assert.deepEqual(writes, []);
 });

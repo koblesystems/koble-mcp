@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BOM, COLUMNS, checkCode, draftPurchaseOrders, externalIdFor, parseCsv, parseDate, parseQuantity, readSheet, toCsv as writeCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
+import { COLUMNS, checkCode, draftPurchaseOrders, externalIdFor, parseCsv, parseDate, parseQuantity, readSheet, toCsv as writeCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
+import { BOM } from "../src/spreadsheet.js";
 import { baseUnitOf, fromBaseUnits, type UnitRow } from "../src/mrp/units.js";
 
 const RUN = "mrp-sbx-20260921-140533";
@@ -41,9 +42,9 @@ test("only approved BUY rows become purchase-order lines, one order per vendor, 
     assert.deepEqual(reading.counts, { rows: 4, candidates: 3, approved: 2, notApproved: 1 });
     const drafts = draftPurchaseOrders(reading);
     assert.deepEqual(drafts.map((d) => d.vendor), ["BIKEPARTS", "PACKCO"]);
-    assert.equal(drafts[0]?.externalId, `${RUN}-BIKEPARTS`);
+    assert.match(drafts[0]?.externalId ?? "", /^mrp-20260921140533-[0-9a-f]{6}-BIKEPARTS$/);
     assert.equal(drafts[0]?.estCost, 1125);
-    assert.deepEqual(drafts[0]?.body, { ID: "BIKEPARTS", EXTERNALID: `${RUN}-BIKEPARTS`, Details: [{ INVEN: "SADDLE", O_QUAN_VIS: 50, UNIT_MEAS: "Each", UNIT_VIS: 22.5 }] });
+    assert.deepEqual(drafts[0]?.body, { ID: "BIKEPARTS", EXTERNALID: externalIdFor(RUN, "BIKEPARTS"), Details: [{ INVEN: "SADDLE", O_QUAN_VIS: 50, UNIT_MEAS: "Each", UNIT_VIS: 22.5 }] });
     assert.deepEqual(drafts[0]?.neededBy, { SADDLE: "2026-09-25" }, "the needed-by day is kept to compare with the expected date EBMS assigns; it is not sent");
 });
 
@@ -151,8 +152,30 @@ test("stock units convert into the vendor's unit, whole cases rounded up; the st
 test("a semicolon-separated save is named for what it is; the vendor survives a long run ID; the earliest need wins", () => {
     const semi = toCsv([{ ...rows[0], Approve: "Y" }]).replace(/,/g, ";");
     assert.match(readSheet(semi).problems.join("\n"), /separated by semicolons/);
-    assert.equal(externalIdFor("mrp-acompanywithaverylongidentifier-20260921-140533", "BIKEPARTS"), "mrp-acompanywithaverylongidentifier-2026-BIKEPARTS");
-    assert.equal(externalIdFor("mrp-acompanywithaverylongidentifier-20260921-140533", "BIKEPARTS").length, 50);
+    // However long the company and vendor, the run's time is never cut: a second run that day is a different order.
+    const long = "mrp-acompanywithaverylongidentifierofthirty-20260921-140533";
+    assert.match(externalIdFor(long, "BIKEPARTS"), /^mrp-20260921140533-[0-9a-f]{6}-BIKEPARTS$/);
+    assert.notEqual(externalIdFor(long, "make-L0001"), externalIdFor(long.replace("140533", "160000"), "make-L0001"));
+    assert.ok(externalIdFor(long, "AVENDORWITHAVERYLONGIDENTIFIERX").length <= 50);
     const two = readSheet(toCsv([{ ...rows[0], Approve: "Y", "Needed By": "2026-10-20" }, { ...rows[0], Line: "L0008", Approve: "Y", "Needed By": "2026-09-25" }]));
     assert.deepEqual(draftPurchaseOrders(two)[0]?.neededBy, { SADDLE: "2026-09-25" });
+});
+
+test("the company is the run's, not the cells': an edited Company cell is a mix of companies, not another company's orders", () => {
+    const edited = toCsv([{ ...rows[0], Company: "COF", Approve: "Y" }]);
+    const withRecord = readSheet(edited, manifest);
+    assert.equal(withRecord.company, "SBX");
+    assert.match(withRecord.problems.join(" "), /mixes companies: its Company cells say COF but its run record says SBX/);
+    assert.deepEqual(withRecord.approved, []);
+    const withoutRecord = readSheet(edited);
+    assert.equal(withoutRecord.company, "SBX", "the run ID names the company too");
+    assert.match(withoutRecord.problems.join(" "), /mixes companies/);
+    assert.deepEqual(readSheet(toCsv([{ ...rows[0], Approve: "Y" }]), manifest).problems, []);
+});
+
+test("a needed-by date that reads two ways is read as month/day, and says so", () => {
+    const reading = readSheet(toCsv([{ ...rows[0], Approve: "Y", "Needed By": "03/04/2026" }]));
+    assert.equal(reading.approved[0]?.neededBy, "2026-03-04");
+    assert.match(reading.notes.join(" "), /read as month\/day/);
+    assert.doesNotMatch(readSheet(toCsv([{ ...rows[0], Approve: "Y", "Needed By": "10/25/2026" }])).notes.join(" "), /month\/day/);
 });
