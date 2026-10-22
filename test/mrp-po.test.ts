@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { configure } from "../src/config.js";
 import { resetAuth } from "../src/ebms/client.js";
-import { checkCode, toCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
+import { checkCode, externalIdFor, toCsv, type RunManifest, type SheetRow } from "../src/mrp/csv.js";
 import { registerMrpTools } from "../src/tools/mrp-tools.js";
 import { registerWorksheetTools } from "../src/tools/worksheet-tools.js";
 import type { McpToolResult } from "../src/tools/types.js";
@@ -170,11 +170,12 @@ test("one worksheet, both kinds approved: each tool takes its own rows and neith
 
 test("drafts already created for this run are found in one read and not offered again", async () => {
     fresh();
-    tables["APINV"] = [{ AUTOID: "po1", INVOICE: "1201", EXTERNALID: `${RUN}-V1` }];
+    const created = { AUTOID: "po1", INVOICE: "1201", EXTERNALID: externalIdFor(RUN, "V1") };
+    tables["APINV"] = [created];
     try {
         const r = await call({ company: "sbx", path: worksheet({ L0001: { Approve: "Y" }, L0002: { Approve: "Y", Vendor: "V2" } }) });
         assert.deepEqual(r.drafts.map((d: any) => [d.vendor, typeof d.write === "string" ? d.write : "write"]), [["V1", "Already created for this run; do not create it again."], ["V2", "write"]]);
-        assert.deepEqual(r.drafts[0].alreadyCreated, { AUTOID: "po1", INVOICE: "1201", EXTERNALID: `${RUN}-V1` });
+        assert.deepEqual(r.drafts[0].alreadyCreated, created);
         assert.equal(reads.filter((read) => read.includes("EXTERNALID")).length, 1, "one request for every draft");
     } finally {
         tables["APINV"] = [];
