@@ -4,7 +4,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
@@ -296,12 +296,25 @@ test("two exports with the same filename at once each get their own file", async
     for (const r of [a, b]) assert.equal((await readFile(String(r.path), "utf8")).split("\r\n").filter(Boolean).length, 301);
 });
 
-test("a folder that cannot be written fails the call instead of the server", async () => {
+test("a folder that does not exist is refused, not created", async () => {
     fresh();
     serve = pages(lines(10));
     const missing = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder: join(out, "no", "such") });
     assert.equal(missing.isError, true);
     assert.match(missing.raw, /does not exist/);
-    const readOnly = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder: "/" });
-    assert.equal(readOnly.isError, true);
+});
+
+// chmod does not stop writes on Windows, nor for root.
+test("a folder that cannot be written to fails the call, not the server", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+    fresh();
+    serve = pages(lines(10));
+    const locked = await mkdtemp(join(out, "locked-"));
+    await chmod(locked, 0o500);
+    try {
+        const r = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder: locked });
+        assert.equal(r.isError, true);
+        assert.match(r.raw, /EACCES|EPERM/);
+    } finally {
+        await chmod(locked, 0o700);
+    }
 });
