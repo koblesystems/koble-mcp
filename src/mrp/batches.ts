@@ -15,6 +15,7 @@
  */
 import { externalIdFor, type ApprovedLine } from "./csv.js";
 import { baseUnitOf, type UnitRow } from "./units.js";
+import { round } from "./values.js";
 
 export interface BatchComponent {
     item: string;
@@ -35,7 +36,7 @@ export interface BatchInputs {
     warehouse?: string | undefined;
 }
 
-export interface BatchDraft {
+interface BatchDraft {
     line: string;
     item: string;
     qty: number;
@@ -50,7 +51,6 @@ export interface BatchDraft {
     body: Record<string, unknown>;
 }
 
-const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 
 export function draftBatches(lines: readonly ApprovedLine[], inputs: BatchInputs): { drafts: BatchDraft[]; problems: string[] } {
     const drafts: BatchDraft[] = [];

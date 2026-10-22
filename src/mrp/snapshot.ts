@@ -7,74 +7,173 @@ import { odataString, request } from "../ebms/client.js";
 import { EbmsError } from "../ebms/errors.js";
 import type { Demand, ItemParams, Supply } from "./engine.js";
 import type { BomItem } from "./tree.js";
-import { toBaseUnits, type UnitRow } from "./units.js";
+import { toBaseUnits, unitsByItem, unitsOf, type UnitRow } from "./units.js";
+import { num, round, text } from "./values.js";
 
 type Row = Record<string, unknown>;
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
-const num = (value: unknown): number => (typeof value === "number" ? value : 0);
 const day = (value: unknown): string | null => (typeof value === "string" && value.length >= 10 ? value.slice(0, 10) : null);
-const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 
 const PAGE_CAP = 2000;
+const refused = (error: unknown): boolean => error instanceof EbmsError && error.status >= 400 && error.status < 500;
+const keyOf = (row: Row | undefined): string | null => (typeof row?.["AUTOID"] === "string" ? row["AUTOID"] : null);
 
 /**
- * Pages a collection with $skip/$top and refuses to return a partial answer quietly.
- * EBMS has no nextLink, so pages are read in AUTOID order where the entity allows it (it does on
- * SBX's INVENTRY and ARINVDET; not every entity or build accepts it, so a refusal falls back to
- * the server's own order). Rows are still de-duplicated by AUTOID in case pages shift while
- * reading; if the server gives no count, paging continues until a short page; and
- * a read that is still short of the server's count, or that hits the page cap, throws rather
- * than handing the planner half a company.
+ * Reads a whole collection and refuses to return a partial answer quietly. EBMS has no nextLink.
+ *
+ * Where the entity sorts by AUTOID (SBX's INVENTRY and ARINVDET do; not every entity or build
+ * does), pages are read by key: each asks for the rows after the last AUTOID seen. A row that
+ * leaves the filtered set while reading (a sales order posted mid-read) then cannot shift a live
+ * row out of the next page, as it would with $skip. EBMS's count on such a page is what is left,
+ * so the page that holds all of it is the last.
+ *
+ * Elsewhere it pages with $skip, keeps the highest count EBMS gave, and throws if the distinct
+ * rows fall short of it. Without a count only an empty page ends a read, because a server may
+ * cap $top below what was asked. Hitting the page cap throws too.
  */
 export async function readAll(company: string, entity: string, params: Record<string, string>, pageSize = 200): Promise<Row[]> {
     const select = params["$select"];
     const withKey = select && !select.split(",").map((name) => name.trim()).includes("AUTOID") ? { ...params, $select: `AUTOID,${select}` } : params;
-    let ordered = params["$orderby"] === undefined;
-    const seen = new Set<string>();
-    const rows: Row[] = [];
-    let fetched = 0;
-    let total: number | null = null;
-    for (let page = 0; ; page += 1) {
-        if (page >= PAGE_CAP) throw new Error(`Reading ${entity} did not finish after ${PAGE_CAP} pages (${fetched} rows). Refusing to plan on a partial read; narrow the scope.`);
-        const ask = (withOrder: boolean) => request(company, "GET", `${entity}?${new URLSearchParams({ ...withKey, ...(withOrder ? { $orderby: "AUTOID" } : {}), $top: String(pageSize), $skip: String(fetched), $count: "true" }).toString()}`);
-        let response;
-        try {
-            response = await ask(ordered);
-        } catch (error) {
-            // Only the first page may fall back: changing the order part-way would scramble the pages.
-            const refusedOrder = ordered && page === 0 && error instanceof EbmsError && error.status >= 400 && error.status < 500;
-            if (!refusedOrder) throw error;
-            ordered = false;
-            response = await ask(false);
-        }
+    const page = async (extra: Record<string, string>): Promise<{ rows: Row[]; count: number | null }> => {
+        const response = await request(company, "GET", `${entity}?${new URLSearchParams({ ...withKey, $top: String(pageSize), $count: "true", ...extra }).toString()}`);
         const body = response.body as { value?: Row[]; "@odata.count"?: number } | null;
-        const batch = body?.value ?? [];
-        if (typeof body?.["@odata.count"] === "number") total = body["@odata.count"];
-        fetched += batch.length;
-        for (const row of batch) {
-            const key = typeof row["AUTOID"] === "string" ? row["AUTOID"] : null;
-            if (key !== null && seen.has(key)) continue;
-            if (key !== null) seen.add(key);
-            rows.push(row);
+        return { rows: body?.value ?? [], count: typeof body?.["@odata.count"] === "number" ? body["@odata.count"] : null };
+    };
+    const tooLong = (read: number): Error => new Error(`Reading ${entity} did not finish after ${PAGE_CAP} pages (${read} rows). Refusing to plan on a partial read; narrow the scope.`);
+
+    /** Null when the server will not page by key after all; the read then starts again with $skip. */
+    const byKey = async (first: { rows: Row[]; count: number | null }): Promise<Row[] | null> => {
+        const rows: Row[] = [];
+        const seen = new Set<string>();
+        for (let batch = first, pages = 1; ; pages += 1) {
+            let added = 0;
+            for (const row of batch.rows) {
+                const key = keyOf(row);
+                if (key === null) return null;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                rows.push(row);
+                added += 1;
+            }
+            if (batch.rows.length === 0 || (batch.count !== null && batch.rows.length >= batch.count)) return rows;
+            // A full page of rows already read: the server ignored the key filter.
+            if (added === 0) return null;
+            if (pages >= PAGE_CAP) throw tooLong(rows.length);
+            const after = `AUTOID gt ${odataString(keyOf(batch.rows.at(-1)) ?? "")}`;
+            try {
+                batch = await page({ $orderby: "AUTOID", $filter: params["$filter"] ? `(${params["$filter"]}) and ${after}` : after });
+            } catch (error) {
+                if (!refused(error)) throw error;
+                return null;
+            }
         }
-        if (batch.length === 0) break;
-        if (total !== null ? fetched >= total : batch.length < pageSize) break;
+    };
+
+    const bySkip = async (ordered: boolean): Promise<Row[]> => {
+        const rows: Row[] = [];
+        const seen = new Set<string>();
+        let fetched = 0;
+        let most: number | null = null;
+        for (let pages = 0; ; pages += 1) {
+            if (pages >= PAGE_CAP) throw tooLong(fetched);
+            const batch = await page({ ...(ordered ? { $orderby: "AUTOID" } : {}), $skip: String(fetched) });
+            // The highest count seen: a row that leaves the set mid-read lowers the next one, and
+            // would otherwise hide the live row its page shift pushed past.
+            if (batch.count !== null) most = Math.max(most ?? 0, batch.count);
+            fetched += batch.rows.length;
+            for (const row of batch.rows) {
+                const key = keyOf(row);
+                if (key !== null && seen.has(key)) continue;
+                if (key !== null) seen.add(key);
+                rows.push(row);
+            }
+            if (batch.rows.length === 0 || (most !== null && fetched >= most)) break;
+        }
+        if (most !== null && rows.length < most) {
+            throw new Error(`Reading ${entity} returned ${rows.length} distinct rows but EBMS counted ${most}; the data changed while it was being read. Run the plan again.`);
+        }
+        return rows;
+    };
+
+    if (params["$orderby"] !== undefined) return bySkip(false);
+    let first;
+    try {
+        first = await page({ $orderby: "AUTOID" });
+    } catch (error) {
+        if (!refused(error)) throw error;
+        return bySkip(false);
     }
-    if (total !== null && rows.length < total) {
-        throw new Error(`Reading ${entity} returned ${rows.length} distinct rows but EBMS counted ${total}; the data changed while it was being read. Run the plan again.`);
-    }
-    return rows;
+    return (await byKey(first)) ?? bySkip(true);
 }
 
-/** Rows of an entity whose `field` is one of `ids`, asked for fifteen at a time to keep the filter short. */
+/** IDs per request: about 50, with the filter kept short enough that the URL stays under 2 KB. */
+const IDS_PER_READ = 50;
+const FILTER_LENGTH = 1500;
+/** Requests in flight at once. EBMS works through them largely in turn, so a few is plenty. */
+const PARALLEL_READS = 4;
+const encodedLength = (value: string): number => new URLSearchParams({ f: value }).toString().length - 2;
+
+/** Rows of an entity whose `field` is one of `ids`, many IDs to a request and a few requests at a time. */
 export async function readByIds(company: string, entity: string, field: string, ids: readonly string[], select: string, also = ""): Promise<Row[]> {
-    const unique = [...new Set(ids.filter(Boolean))];
-    const rows: Row[] = [];
-    for (let i = 0; i < unique.length; i += 15) {
-        const anyOf = unique.slice(i, i + 15).map((id) => `${field} eq ${odataString(id)}`).join(" or ");
-        rows.push(...(await readAll(company, entity, { $filter: also ? `${also} and (${anyOf})` : anyOf, $select: select })));
+    const chunks: string[][] = [];
+    let chunk: string[] = [];
+    let length = also ? encodedLength(`${also} and ()`) : 0;
+    for (const id of new Set(ids.filter(Boolean))) {
+        const clause = `${field} eq ${odataString(id)}`;
+        const more = encodedLength(clause) + (chunk.length > 0 ? 4 : 0);
+        if (chunk.length > 0 && (chunk.length >= IDS_PER_READ || length + more > FILTER_LENGTH)) {
+            chunks.push(chunk);
+            chunk = [];
+            length = also ? encodedLength(`${also} and ()`) : 0;
+        }
+        chunk.push(clause);
+        length += encodedLength(clause) + (chunk.length > 1 ? 4 : 0);
     }
-    return rows;
+    if (chunk.length > 0) chunks.push(chunk);
+
+    const read = (clauses: string[]): Promise<Row[]> => readAll(company, entity, { $filter: also ? `${also} and (${clauses.join(" or ")})` : clauses.join(" or "), $select: select });
+    const results: Row[][] = [];
+    // The first alone, so a company that has not signed in yet signs in once.
+    if (chunks[0]) results[0] = await read(chunks[0]);
+    let next = 1;
+    const worker = async (): Promise<void> => {
+        while (next < chunks.length) {
+            const index = next;
+            next += 1;
+            results[index] = await read(chunks[index] as string[]);
+        }
+    };
+    await Promise.all(Array.from({ length: Math.min(PARALLEL_READS, chunks.length - 1) }, worker));
+    return results.flat();
+}
+
+/**
+ * Every item that has ever been the finished good of a batch, without reading every batch line
+ * ever written: lines are read in item order, and each page starts after the last item seen, so
+ * a long history costs at most a page per made item. A server that will not sort or filter
+ * batch lines that way is read in full.
+ */
+async function madeItems(company: string): Promise<Set<string>> {
+    const made = new Set<string>();
+    const readFully = async (): Promise<Set<string>> => new Set((await readAll(company, "APINVDET", { $filter: BATCH_LINES, $select: "INVEN" })).map((row) => text(row["INVEN"])).filter(Boolean));
+    let after: string | null = null;
+    for (let pages = 0; ; pages += 1) {
+        if (pages >= PAGE_CAP) throw new Error(`Reading which items are made did not finish after ${PAGE_CAP} pages.`);
+        let response;
+        try {
+            response = await request(company, "GET", `APINVDET?${new URLSearchParams({ $filter: after === null ? BATCH_LINES : `${BATCH_LINES} and INVEN gt ${odataString(after)}`, $select: "INVEN", $orderby: "INVEN", $top: "200", $count: "true" }).toString()}`);
+        } catch (error) {
+            if (!refused(error)) throw error;
+            return readFully();
+        }
+        const body = response.body as { value?: Row[]; "@odata.count"?: number } | null;
+        const rows = body?.value ?? [];
+        for (const row of rows) if (text(row["INVEN"])) made.add(text(row["INVEN"]));
+        if (rows.length === 0 || (typeof body?.["@odata.count"] === "number" && rows.length >= body["@odata.count"])) return made;
+        const last = rows.at(-1)?.["INVEN"];
+        // Not moving forward means the filter was ignored.
+        if (typeof last !== "string" || last === after) return readFully();
+        after = last;
+    }
 }
 
 export interface ProductInfo {
@@ -95,9 +194,34 @@ export interface ProductInfo {
     leadDays: number;
 }
 
+export interface Vendor { id: string; name: string; leadDays: number }
+
+/** A product's record for one vendor (INVENDOR): what that vendor sells it in, for how much, as which part. */
+export interface VendorRecord { item: string; vendor: string; unit: string; cost: number | null; partNo: string; leadDays: number }
+
+export const vendorRecordOf = (row: Row): VendorRecord => ({
+    item: text(row["ID"]),
+    vendor: text(row["VENDOR_ID"]),
+    unit: text(row["UNIT_MEAS"]),
+    cost: num(row["COST"]) > 0 ? num(row["COST"]) : null,
+    partNo: text(row["PART_NO"]),
+    leadDays: num(row["LEAD_DAYS"]),
+});
+
+/** Vendor records by product ID. */
+export function recordsByItem(records: readonly VendorRecord[]): Map<string, VendorRecord[]> {
+    const byItem = new Map<string, VendorRecord[]>();
+    for (const record of records) {
+        const list = byItem.get(record.item);
+        if (list) list.push(record);
+        else byItem.set(record.item, [record]);
+    }
+    return byItem;
+}
+
 /** Where an item's lead time came from, most specific first. */
-export type LeadSource = "you" | "product" | "vendor" | "your default";
-export interface LeadTime { days: number; from: LeadSource }
+type LeadSource = "you" | "product" | "vendor" | "your default";
+interface LeadTime { days: number; from: LeadSource }
 
 /**
  * A purchased item's lead time: what the user gave for it, else the product's record for its
@@ -129,6 +253,12 @@ export interface Snapshot {
     /** The planning day, local to the server. */
     today: string;
     products: Map<string, ProductInfo>;
+    /** Every vendor, by upper-case ID. */
+    vendors: Map<string, Vendor>;
+    /** Every product's vendor records, by product ID. */
+    vendorRecords: Map<string, VendorRecord[]>;
+    /** Every product's units of measure; look one up with unitsOf. */
+    units: Map<string, UnitRow[]>;
     /** Every planned item with a known lead time, and where it came from. */
     leadTimes: Map<string, LeadTime>;
     /** False on an EBMS that does not publish LEAD_DAYS through its API. */
@@ -152,7 +282,7 @@ const isStockedLine = (row: Row): boolean => {
     return label === "" || label.startsWith("stocked");
 };
 
-export interface SnapshotOptions {
+interface SnapshotOptions {
     today: string;
     /** The end of the time frame. A receipt with no expected date is counted here, the latest it can help. */
     through?: string | undefined;
@@ -161,9 +291,20 @@ export interface SnapshotOptions {
     buyInstead?: readonly string[] | undefined;
     leadTimeDays?: number | undefined;
     leadTimes?: Readonly<Record<string, number>> | undefined;
-    /** Default true. The item view does not date anything, so it skips the lead-day reads. */
-    readLeadDays?: boolean | undefined;
+    /**
+     * Default true. False reads only products, bills of materials and which items are made: the
+     * item view dates nothing and orders nothing, so it needs no documents, vendors or units.
+     */
+    documents?: boolean | undefined;
+    /**
+     * Called once products and vendors are read. True stops the snapshot there, so a question
+     * about the scope is asked before the long reads rather than after them.
+     */
+    stopAfterProducts?: ((found: Pick<Snapshot, "products" | "vendors">) => boolean) | undefined;
 }
+
+/** How many inactive items a warning names before it only counts them. */
+const NAMED = 5;
 
 export async function takeSnapshot(company: string, options: SnapshotOptions): Promise<Snapshot> {
     const warnings: string[] = [];
@@ -178,53 +319,33 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             timings[name] = Date.now() - started;
         }
     };
+    const documents = options.documents !== false;
+    /** A table read with its LEAD_DAYS where this EBMS publishes it, and without where it does not. */
+    let leadDaysPublished = false;
+    const withLeadDays = async (name: string, entity: string, select: string): Promise<Row[]> => {
+        try {
+            const rows = await timed(name, () => readAll(company, entity, { $select: `${select},LEAD_DAYS` }));
+            leadDaysPublished = true;
+            return rows;
+        } catch (error) {
+            if (!lacksField(error, "LEAD_DAYS")) throw error;
+            warnings.push(`This EBMS version does not publish ${entity}.LEAD_DAYS through its API, so those lead times are not used.`);
+            return timed(name, () => readAll(company, entity, { $select: select }));
+        }
+    };
 
-    // One at a time: EBMS works through requests in turn (running these together was measured
-    // and gained nothing), and live users share the same server.
-    const types = options.includeJobs === false ? "DOC_TYPE eq 'S'" : "(DOC_TYPE eq 'S' or DOC_TYPE eq 'J')";
+    // One table at a time: EBMS works through requests in turn (running these together was
+    // measured and gained nothing), and live users share the same server.
     const productRows = await timed("products", () =>
         readAll(company, "INVENTRY", {
             $filter: "not startswith(ID,'($)') and INACTIVE eq false",
             $select: "ID,DESCR_1,C_TYPE,PURC_METH,PRI_VENDOR,T_ON_HAND,MIN_INVEN,MAX_INVEN,ORDER_AMT,QUAN2ORDER,PUR_O,PUR_S,M_IN_O,M_IN_S,SALES_O,SALES_S,M_OUT_O,M_OUT_S,JOB_OUT_O,JOB_OUT_S",
         }),
     );
-    // Lead days: on a product's vendor record (INVENDOR) and on the vendor (APVENDOR). Read
-    // directly, only the rows that set one: as an $expand on the products they made that read
-    // about five times slower on SBX, with the same values.
-    const leadRows = async (entity: string, select: string): Promise<Row[] | null> => {
-        if (options.readLeadDays === false) return [];
-        try {
-            return await timed(`leadDays ${entity}`, () => readAll(company, entity, { $filter: "LEAD_DAYS gt 0", $select: select }));
-        } catch (error) {
-            if (!lacksField(error, "LEAD_DAYS")) throw error;
-            warnings.push(`This EBMS version does not publish ${entity}.LEAD_DAYS through its API, so those lead times are not used.`);
-            return null;
-        }
-    };
-    const productLeadDays = new Map<string, number>();
-    const vendorLeadDays = new Map<string, number>();
-    const productRecords = await leadRows("INVENDOR", "ID,VENDOR_ID,LEAD_DAYS");
-    for (const row of productRecords ?? []) productLeadDays.set(`${text(row["ID"])}|${text(row["VENDOR_ID"]).toUpperCase()}`, num(row["LEAD_DAYS"]));
-    const vendorRecords = await leadRows("APVENDOR", "ID,LEAD_DAYS");
-    for (const row of vendorRecords ?? []) vendorLeadDays.set(text(row["ID"]).toUpperCase(), num(row["LEAD_DAYS"]));
-    const leadDaysPublished = productRecords !== null || vendorRecords !== null;
-    const bomRows = await timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
-    const madeRows = await timed("made", () => readAll(company, "APINVDET", { $filter: BATCH_LINES, $select: "INVEN" }));
-    const lineRows = await timed("sales", () =>
-        readAll(company, "ARINVDET", { $filter: `${types} and STATUS eq 'SalesOrder'`, $select: "INVOICE,INVEN,QUAN,SHIP,SHIP_DATE,DOC_TYPE,PURC_M_VIS,PAR_TIME,TIMESTAMP" }),
-    );
-    const batches = await timed("batches", () =>
-        readAll(company, "INMFG", {
-            $filter: "STATUS eq 0",
-            $select: "AUTOID,BATCH,DATE,END_DATE",
-            $expand: "FinishedDetails($select=INVEN,O_QUAN_VIS,SHIP_VIS,UNIT_MEAS,ETA_DATE),ARINVDETs($select=INVEN,QUAN,SHIP)",
-        }, 50),
-    );
-    const orders = await timed("purchases", () =>
-        readAll(company, "APINV", { $filter: "STATUS eq 'U'", $select: "AUTOID,INVOICE,ID,INV_DATE", $expand: "Details($select=INVEN,O_QUAN_VIS,SHIP_VIS,UNIT_MEAS,ETA_DATE,DOC_TYPE,PURC_M_VIS)" }, 20),
-    );
-
-    // Products: planning parameters and EBMS's own running totals, one paged read.
+    const vendors = new Map<string, Vendor>();
+    for (const row of documents ? await withLeadDays("vendors", "APVENDOR", "ID,F_NAME,L_NAME") : []) {
+        vendors.set(text(row["ID"]).toUpperCase(), { id: text(row["ID"]), name: `${text(row["F_NAME"])} ${text(row["L_NAME"])}`.trim(), leadDays: num(row["LEAD_DAYS"]) });
+    }
     const products = new Map<string, ProductInfo>();
     for (const row of productRows) {
         const incoming = num(row["PUR_O"]) - num(row["PUR_S"]) + num(row["M_IN_O"]) - num(row["M_IN_S"]);
@@ -241,17 +362,46 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             max: num(row["MAX_INVEN"]),
             increment: num(row["ORDER_AMT"]),
             ebmsQtyToOrder: num(row["QUAN2ORDER"]),
-            // The primary vendor's record: the one the worksheet orders from and EBMS dates a PO line by.
-            leadDays: productLeadDays.get(`${text(row["ID"])}|${text(row["PRI_VENDOR"]).toUpperCase()}`) ?? 0,
+            leadDays: 0,
         });
     }
+    const empty = (): Snapshot => ({ company, takenAt: new Date().toISOString(), today: options.today, products, vendors, vendorRecords: new Map(), units: new Map(), leadTimes: new Map(), leadDaysPublished, made: new Set(), bom: [], items: [], demands: [], supplies: [], skipped, warnings, timings });
+    if (options.stopAfterProducts?.({ products, vendors })) return empty();
 
-    // Bill of materials. QUAN is per ONE parent, already in the component's base unit.
+    // Read whole, once: the plan's lead days, the worksheet's vendor terms and the supplies' units all come from these.
+    const vendorRecords = recordsByItem((documents ? await withLeadDays("vendorRecords", "INVENDOR", "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO") : []).map(vendorRecordOf));
+    const units = unitsByItem(documents ? ((await timed("units", () => readAll(company, "INVENUNT", { $select: "ID,UNIT,MULTIPLIER,MULTIPLY" }))) as unknown as UnitRow[]) : []);
+    // The primary vendor's record: the one the worksheet orders from and EBMS dates a PO line by.
+    for (const product of products.values()) product.leadDays = vendorRecords.get(product.id)?.find((record) => record.vendor.toUpperCase() === product.vendor.toUpperCase())?.leadDays ?? 0;
 
-    // An item is manufactured if it has ever been the finished good of a batch.
-    const made = new Set(madeRows.map((row) => text(row["INVEN"])).filter(Boolean));
-    for (const id of options.alsoMade ?? []) made.add(id.trim());
-    for (const id of options.buyInstead ?? []) made.delete(id.trim());
+    const bomRows = await timed("bom", () => readAll(company, "INVENDET", { $select: "ID,COMP_ID,QUAN,CATEGORY" }));
+    // An item is manufactured if it has ever been the finished good of a batch. IDs the planner
+    // names are matched to products whatever their case.
+    const byUpper = new Map([...products.keys()].map((id) => [id.toUpperCase(), id]));
+    const productId = (given: string): string => byUpper.get(given.trim().toUpperCase()) ?? given.trim();
+    const made = await timed("made", () => madeItems(company));
+    for (const id of options.alsoMade ?? []) made.add(productId(id));
+    for (const id of options.buyInstead ?? []) made.delete(productId(id));
+
+    const types = options.includeJobs === false ? "DOC_TYPE eq 'S'" : "(DOC_TYPE eq 'S' or DOC_TYPE eq 'J')";
+    const lineRows = documents
+        ? await timed("sales", () => readAll(company, "ARINVDET", { $filter: `${types} and STATUS eq 'SalesOrder'`, $select: "INVOICE,INVEN,QUAN,SHIP,SHIP_DATE,DOC_TYPE,PURC_M_VIS,PAR_TIME,TIMESTAMP" }))
+        : [];
+    // Open batches: finished goods are supply, consumables are demand; both net of progress.
+    const batches = documents
+        ? await timed("batches", () =>
+            readAll(company, "INMFG", {
+                $filter: "STATUS eq 0",
+                $select: "AUTOID,BATCH,DATE,END_DATE",
+                $expand: "FinishedDetails($select=INVEN,O_QUAN_VIS,SHIP_VIS,UNIT_MEAS,ETA_DATE),ARINVDETs($select=INVEN,QUAN,SHIP)",
+            }, 50))
+        : [];
+    // Open purchase orders, through the header: purchase lines only carry _VIS quantities, and
+    // those read 0 on a standalone detail query.
+    const orders = documents
+        ? await timed("purchases", () =>
+            readAll(company, "APINV", { $filter: "STATUS eq 'U'", $select: "AUTOID,INVOICE,ID,INV_DATE", $expand: "Details($select=INVEN,O_QUAN_VIS,SHIP_VIS,UNIT_MEAS,ETA_DATE,DOC_TYPE,PURC_M_VIS)" }, 20))
+        : [];
 
     // Sales and job demand: QUAN and SHIP are base-unit fields and read correctly standalone;
     // this read also returns materials-list children, which the header's Details does not.
@@ -270,18 +420,8 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
         demands.push({ item, qty: remaining, date: day(row["SHIP_DATE"]) ?? options.today, kind: text(row["DOC_TYPE"]) === "J" ? "job" : "sales", ref: text(row["INVOICE"]) });
     }
 
-    // Open batches: finished goods are supply, consumables are demand; both net of progress.
-
-    // Open purchase orders, through the header: purchase lines only carry _VIS quantities, and
-    // those read 0 on a standalone detail query.
-
-    // Units, only for items whose supply is written in a named unit.
-    const needUnits = new Set<string>();
-    for (const batch of batches) for (const line of (batch["FinishedDetails"] as Row[] | undefined) ?? []) if (text(line["UNIT_MEAS"])) needUnits.add(text(line["INVEN"]));
-    for (const order of orders) for (const line of (order["Details"] as Row[] | undefined) ?? []) if (text(line["UNIT_MEAS"])) needUnits.add(text(line["INVEN"]));
-    const unitRows = (await timed("units", () => readByIds(company, "INVENUNT", "ID", [...needUnits], "ID,UNIT,MULTIPLIER,MULTIPLY"))) as unknown as UnitRow[];
     const convert = (item: string, qty: number, unit: unknown): number => {
-        const result = toBaseUnits(item, qty, text(unit), unitRows);
+        const result = toBaseUnits(item, qty, text(unit), unitsOf(units, item));
         if (result.warning && !warnings.includes(result.warning)) warnings.push(result.warning);
         return result.qty;
     };
@@ -324,8 +464,7 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
         }
     }
 
-    // Planning parameters. Service items are not materials; only stocked products are planned.
-    const bom: BomItem[] = [];
+    // Bill of materials. QUAN is per ONE parent, already in the component's base unit.
     const componentsOf = new Map<string, Array<{ item: string; qtyPer: number }>>();
     for (const row of bomRows) {
         const parent = text(row["ID"]);
@@ -333,15 +472,20 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
         list.push({ item: text(row["COMP_ID"]), qtyPer: num(row["QUAN"]) });
         componentsOf.set(parent, list);
     }
+
+    // Planning parameters. Service items are not materials; only stocked products are planned.
+    const bom: BomItem[] = [];
     const involved = new Set<string>([...demands.map((d) => d.item), ...supplies.map((s) => s.item), ...componentsOf.keys(), ...[...componentsOf.values()].flat().map((c) => c.item)]);
     for (const product of products.values()) if (product.min > 0) involved.add(product.id);
+    const vendorLeadDays = new Map([...vendors].map(([id, vendor]) => [id, vendor.leadDays]));
     const items: ItemParams[] = [];
     const leadTimes = new Map<string, LeadTime>();
+    const inactive: string[] = [];
     for (const id of involved) {
         const product = products.get(id);
         const service = product?.classification === 0;
         bom.push({ id, make: made.has(id), components: componentsOf.get(id) ?? [], ...(service ? { nonStock: true } : {}) });
-        if (!product) { warnings.push(`${id} appears on a document or bill of materials but is not an active product; it was not planned.`); continue; }
+        if (!product) { inactive.push(id); continue; }
         if (service) continue;
         if (product.purchaseMethod !== 0) { skip(`product not planned: purchase method ${product.purchaseMethod}`); continue; }
         const leadTime = leadTimeFor(id, product, made.has(id), vendorLeadDays, options);
@@ -357,6 +501,13 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
             components: (componentsOf.get(id) ?? []).filter((c) => products.get(c.item)?.classification !== 0),
         });
     }
+    // An inactive item matters to the plan when something is due in or out of it; one that is only
+    // on old bills of materials is counted, not listed, or a company's history buries the result.
+    const moving = new Set([...demands.map((d) => d.item), ...supplies.map((s) => s.item)]);
+    for (const id of inactive.filter((id) => moving.has(id))) warnings.push(`${id} has open demand or supply but is not an active product; it was not planned.`);
+    const idle = inactive.filter((id) => !moving.has(id));
+    if (idle.length > 0) warnings.push(`${idle.length} item(s) on bills of materials are not active products (${idle.slice(0, NAMED).join(", ")}${idle.length > NAMED ? ", …" : ""}); they were not planned.`);
+
     const planned = new Set(items.map((item) => item.id));
     const before = demands.length;
     const keptDemands = demands.filter((d) => planned.has(d.item));
@@ -366,5 +517,5 @@ export async function takeSnapshot(company: string, options: SnapshotOptions): P
     if (keptSupplies.length !== supplies.length) skipped["incoming supply for an item that is not planned (service, non-stocked or inactive)"] = supplies.length - keptSupplies.length;
     if (undatedDemand > 0) warnings.push(`${undatedDemand} open demand line(s) have no ship date in EBMS and were planned as due today.`);
 
-    return { company, takenAt: new Date().toISOString(), today: options.today, products, leadTimes, leadDaysPublished, made, bom, items, demands: keptDemands, supplies: keptSupplies, skipped, warnings, timings };
+    return { ...empty(), vendorRecords, units, leadTimes, made, bom, items, demands: keptDemands, supplies: keptSupplies };
 }

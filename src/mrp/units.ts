@@ -7,6 +7,8 @@
  * with MULTIPLIER 0 is a setup mistake — EBMS then stores such a line as quantity 0 — so it
  * is reported rather than trusted.
  */
+import { round } from "./values.js";
+
 export interface UnitRow {
     ID: string;
     UNIT: string;
@@ -14,14 +16,25 @@ export interface UnitRow {
     MULTIPLY: string;
 }
 
-export interface Conversion {
+interface Conversion {
     qty: number;
     /** Set when the number could not be converted with confidence. */
     warning?: string;
 }
 
 const norm = (value: string | null | undefined): string => (value ?? "").trim().toLowerCase();
-const round = (value: number): number => Math.round(value * 10_000) / 10_000;
+
+/** Unit rows by product, so a lookup does not scan every product's units. */
+export function unitsByItem(rows: readonly UnitRow[]): Map<string, UnitRow[]> {
+    const byItem = new Map<string, UnitRow[]>();
+    for (const row of rows) {
+        const list = byItem.get(norm(row.ID));
+        if (list) list.push(row);
+        else byItem.set(norm(row.ID), [row]);
+    }
+    return byItem;
+}
+export const unitsOf = (byItem: ReadonlyMap<string, UnitRow[]>, item: string): UnitRow[] => byItem.get(norm(item)) ?? [];
 
 export function toBaseUnits(item: string, qty: number, unit: string | null | undefined, rows: readonly UnitRow[]): Conversion {
     const wanted = norm(unit);

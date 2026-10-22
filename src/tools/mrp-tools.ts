@@ -106,10 +106,21 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 if (through < now) return ask(`${through} is already in the past (today is ${now}). Ask the user how far ahead the plan should cover.`);
 
                 const started = Date.now();
-                const snapshot = await takeSnapshot(id, { today: now, through, includeJobs: args.includeJobs, alsoMade: args.alsoMade, buyInstead: args.buyInstead, leadTimeDays: args.leadTimeDays, leadTimes: args.leadTimes });
+                // The scope is settled as soon as products and vendors are read: a vendor name that
+                // fits two vendors is asked about before the long reads, not after them.
+                const resolved: { scope?: ReturnType<typeof resolveScope> } = {};
+                const wanted = { scope: args.scope, vendors: args.vendors, items: args.items };
+                const snapshot = await takeSnapshot(id, {
+                    today: now, through, includeJobs: args.includeJobs, alsoMade: args.alsoMade, buyInstead: args.buyInstead, leadTimeDays: args.leadTimeDays, leadTimes: args.leadTimes,
+                    stopAfterProducts: (found) => "ask" in (resolved.scope = resolveScope(found, wanted)),
+                });
+                const scope = resolved.scope;
+                if (!scope) throw new Error("The plan's scope was not worked out.");
+                if ("ask" in scope) {
+                    const { ask: question, ...extra } = scope;
+                    return ask(question, extra);
+                }
                 const plan = runMrp({ today: now, through, minimumRule: args.minimumRule, items: snapshot.items, demands: snapshot.demands, supplies: snapshot.supplies });
-                const scope = await resolveScope(id, snapshot, { scope: args.scope, vendors: args.vendors, items: args.items });
-                if ("ask" in scope) return ask(scope.ask, { vendorsWithProducts: scope.vendorsWithProducts });
 
                 const result: Record<string, unknown> = {
                     company: id,
@@ -122,7 +133,7 @@ export function registerMrpTools(register: ToolRegistrar): void {
                 if (args.worksheet === false) return jsonResult({ ...result, ms: { ...snapshot.timings, total: Date.now() - started } });
 
                 const run = runId(id);
-                const sheet = await buildWorksheet(id, run, snapshot, plan, scope.inScope);
+                const sheet = buildWorksheet(id, run, snapshot, plan, scope.inScope);
                 const fileName = `${run} through ${through}.xlsx`;
                 const saved = await saveWorksheet(args.saveTo, fileName, sheet.rows, sheet.manifest, { company: id, run, from: now, through, notes: summaryNotes(result, sheet.warnings) });
                 const byType: Record<string, number> = {};
@@ -173,12 +184,15 @@ export function registerMrpTools(register: ToolRegistrar): void {
         async (args) => {
             try {
                 const id = resolveCompany(args.company);
-                const snapshot = await takeSnapshot(id, { today: today(), alsoMade: args.alsoMade, buyInstead: args.buyInstead, readLeadDays: false });
-                const item = args.item.trim();
-                if (!snapshot.products.has(item)) return jsonResult({ company: id, error: `No active product "${item}".` });
+                // Products, bills of materials and which items are made: no documents, vendors or units.
+                const snapshot = await takeSnapshot(id, { today: today(), alsoMade: args.alsoMade, buyInstead: args.buyInstead, documents: false });
+                const item = [...snapshot.products.keys()].find((key) => key.toUpperCase() === args.item.trim().toUpperCase());
+                if (item === undefined) return jsonResult({ company: id, error: `No active product "${args.item.trim()}".` });
                 const onHandOnly = args.availability === "onHand";
                 const available = Object.fromEntries([...snapshot.products.values()].map((p) => [p.id, onHandOnly ? p.onHand : p.available]));
-                const { root, totals, canBuildFromStock } = buildTree({ item, qty: args.qty, items: snapshot.bom, available });
+                // Without documents, a product on no bill of materials is not in the snapshot's list; it still exists.
+                const items = snapshot.bom.some((entry) => entry.id === item) ? snapshot.bom : [...snapshot.bom, { id: item, make: snapshot.made.has(item), components: [] }];
+                const { root, totals, canBuildFromStock } = buildTree({ item, qty: args.qty, items, available });
                 const short = totals.filter((t) => t.short > 0);
                 return jsonResult({
                     company: id,
