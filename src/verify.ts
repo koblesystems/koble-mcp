@@ -83,7 +83,8 @@ export function shapeOf(body: unknown): BodyShape {
     return shape;
 }
 
-const idOf = (entry: Json): string | undefined => {
+/** The row an entry points at, by `@id` or `#id`; undefined for an entry that adds a row. */
+export const idOf = (entry: Json): string | undefined => {
     const id = entry["@id"] ?? entry["#id"];
     return typeof id === "string" ? id : undefined;
 };
