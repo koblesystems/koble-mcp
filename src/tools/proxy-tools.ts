@@ -191,12 +191,11 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const body = result.body as { value?: unknown[]; "@odata.count"?: number } | null;
                 if (isCollection && body && Array.isArray(body.value)) {
                     const total = typeof body["@odata.count"] === "number" ? body["@odata.count"] : null;
-                    const truncated = total !== null && (args.skip ?? 0) + body.value.length < total;
-                    if (args.filter && unsure.size > 0) settleUnsure(company, entityOf(args.path), args.filter, body.value, !truncated && (args.skip ?? 0) === 0);
-                    return jsonResult({ company, rows: body.value, returned: body.value.length, total, truncated, warnings: [...warnings, ...result.warnings], ms: result.ms });
+                    const short = total !== null && (args.skip ?? 0) + body.value.length < total;
+                    if (args.filter && unsure.size > 0) settleUnsure(company, entityOf(args.path), args.filter, body.value, !short && (args.skip ?? 0) === 0);
                     const rows = capRows(body.value, args.top === undefined);
                     const clipped = rows.length < body.value.length;
-                    const truncated = clipped || (total !== null && (args.skip ?? 0) + body.value.length < total);
+                    const truncated = clipped || short;
                     if (clipped) warnings.push(`EBMS returned ${body.value.length} rows; only the first ${rows.length} are shown, to keep the conversation from filling up. Do not page through the rest with skip: use ebms_export with the same path, select and filter, which writes them all to a file and returns a summary, then analyse the file with a script.`);
                     return jsonResult({ company, rows, returned: rows.length, ...(clipped ? { received: body.value.length } : {}), total, truncated, warnings: [...warnings, ...result.warnings], ms: result.ms });
                 }
