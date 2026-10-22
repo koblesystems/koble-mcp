@@ -22,8 +22,9 @@ and stop.
 
 - It is the workbook `mrp_plan` saved, with rows approved (**Yes**) on its **To make** tab: pass
   its path as `path`. Without a path, call `batches_from_csv` with none to list the newest
-  worksheets, and ask the user which. An older CSV worksheet still works, passed as `csv`
-  exactly as received. The same worksheet can carry approved
+  worksheets, and ask the user which. A CSV works too: the **To make** tab saved as CSV from
+  Excel (by path), or an older CSV worksheet, passed as `csv` exactly as received. A path in a
+  hidden or settings folder is refused; ask for a copy in an ordinary folder. The same worksheet can carry approved
   `BUY` rows as well; those belong to the ebms-mrp-purchase-orders skill and are ignored here.
 - Confirm the company by name. It must be the company the worksheet was made for.
 - **Ask about the warehouse** if the company has more than one: "Which warehouse are these

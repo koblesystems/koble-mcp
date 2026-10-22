@@ -156,3 +156,23 @@ test("an empty tab says so and stops, and the newest worksheets are offered when
     await saveWorksheet(out, `${RUN} through 2026-11-04.xlsx`, rows, manifest, context);
     assert.deepEqual((await recentWorksheets(out)).map((p) => basename(p)), [`${RUN} through 2026-11-04.xlsx`, "mrp-sbx-20261001-090000 through 2026-10-31.xlsx"]);
 });
+
+test("the To order tab saved as CSV from Excel is read through the tab's own headers", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "koble-wb-"));
+    const saved = await saveWorksheet(dir, `${RUN}.xlsx`, rows, manifest, context);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(saved.path);
+    const order = book.getWorksheet("To order")!;
+    order.getCell("A2").value = "Yes";
+    order.getCell("B2").value = 12;
+    // What "Save As CSV" writes: every column of the tab, hidden ones too, under the headers shown.
+    const quote = (value: unknown): string => { const text = value instanceof Date ? value.toISOString().slice(0, 10) : typeof value === "object" && value !== null ? String((value as { result?: unknown }).result ?? "") : String(value ?? ""); return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text; };
+    const lines: string[] = [];
+    order.eachRow((row) => { lines.push(Array.from({ length: order.columnCount }, (_, i) => quote(row.getCell(i + 1).value)).join(",")); });
+    assert.match(lines[0] ?? "", /^Approve,Qty,Unit,Vendor/);
+    const path = join(dir, "approved.csv");
+    await writeFile(path, lines.join("\r\n"));
+    const reading = await readWorksheet({ path }, "BUY");
+    assert.deepEqual(reading.problems, []);
+    assert.deepEqual(reading.approved.map((l) => `${l.item} ${l.qty} ${l.vendor}`), ["CRANK 12 IKAWA"]);
+});

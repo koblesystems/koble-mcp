@@ -2,23 +2,38 @@
  * The exceptions workbook: only the rows that need a person, each with its original columns as
  * they were, the row number it had in the file, what is wrong, and an empty Fix column for
  * notes. It can be corrected and handed straight back to import_from_csv, which reads the
- * About sheet to continue the same import and ignores the Row, Problem and Fix columns.
+ * About sheet to continue the same import and ignores the ⚑ Row, ⚑ Problem and ⚑ Fix columns.
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import ExcelJS from "exceljs";
 import { outputDir } from "../mrp/files.js";
-import { ABOUT_SHEET, EXCEPTIONS_SHEET, type Source } from "./source.js";
+import { privatePlace } from "../spreadsheet.js";
+import { ABOUT_SHEET, EXCEPTION_COLUMNS, EXCEPTIONS_SHEET, type Source } from "./source.js";
 import type { Issue, ProblemGroup } from "./validate.js";
 
 const HEADER_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF1EFE8" } };
 const EDIT_FILL: ExcelJS.Fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE8F0FB" } };
 const PROBLEM_FONT: Partial<ExcelJS.Font> = { color: { argb: "FFA32D2D" } };
 
-/** Beside the source as <name>.exceptions.xlsx; a returned exceptions file is replaced in place. */
+/** Where an exceptions file goes when beside the source cannot be written: the usual output folder. */
+export const fallbackPath = (entity: string, importId: string): string => join(outputDir(), "imports", `${entity.toLowerCase()}-${importId}.exceptions.xlsx`);
+
+/**
+ * Beside the source as <name>.exceptions.xlsx; a returned exceptions file is replaced in place.
+ * A path the caller gives must be a new .xlsx, never the source itself, and never in a hidden or
+ * settings folder.
+ */
 export function exceptionsPath(source: Source, entity: string, importId: string, given?: string): string {
-    if (given?.trim()) return resolve(given.trim());
-    if (!source.path) return join(outputDir(), "imports", `${entity.toLowerCase()}-${importId}.exceptions.xlsx`);
+    if (given?.trim()) {
+        const path = resolve(given.trim());
+        if (!/\.xlsx$/i.test(path)) throw new Error(`exceptionsTo must name an .xlsx file; ${path} does not.`);
+        if (source.path && resolve(source.path) === path && !source.fromExceptions) throw new Error(`exceptionsTo is the file being imported; it would be overwritten. Leave exceptionsTo out to write beside it.`);
+        const why = privatePlace(path);
+        if (why) throw new Error(`The exceptions file cannot go to ${path}: ${why}. Leave exceptionsTo out to write beside the source.`);
+        return path;
+    }
+    if (!source.path) return fallbackPath(entity, importId);
     const stem = basename(source.path, extname(source.path)).replace(/\.exceptions$/i, "");
     return join(dirname(source.path), `${stem}.exceptions.xlsx`);
 }
@@ -33,7 +48,11 @@ export interface ExceptionsInfo {
 export async function buildExceptions(source: Source, issues: readonly Issue[], groups: readonly ProblemGroup[], info: ExceptionsInfo): Promise<{ data: Buffer; rows: number }> {
     const rank = new Map(groups.map((g, i) => [`${g.kind}|${g.field}`, i]));
     const byRow = new Map<number, Issue[]>();
-    for (const issue of issues) byRow.set(issue.row, [...(byRow.get(issue.row) ?? []), issue]);
+    for (const issue of issues) {
+        const list = byRow.get(issue.row);
+        if (list) list.push(issue);
+        else byRow.set(issue.row, [issue]);
+    }
     const rows = source.rows
         .filter((r) => byRow.has(r.row))
         .map((r) => ({ r, worst: Math.min(...(byRow.get(r.row) ?? []).map((i) => rank.get(`${i.kind}|${i.field}`) ?? 99)) }))
@@ -42,9 +61,9 @@ export async function buildExceptions(source: Source, issues: readonly Issue[], 
     const book = new ExcelJS.Workbook();
     const sheet = book.addWorksheet(EXCEPTIONS_SHEET, { views: [{ state: "frozen", ySplit: 1, xSplit: 2 }] });
     sheet.columns = [
-        { header: "Row", key: "Row", width: 6 },
-        { header: "Problem", key: "Problem", width: 60 },
-        { header: "Fix", key: "Fix", width: 24 },
+        { header: EXCEPTION_COLUMNS.row, key: "Row", width: 7 },
+        { header: EXCEPTION_COLUMNS.problem, key: "Problem", width: 60 },
+        { header: EXCEPTION_COLUMNS.fix, key: "Fix", width: 24 },
         ...source.headers.map((h) => ({ header: h, key: `c:${h}`, width: Math.min(40, Math.max(10, h.length + 2)) })),
     ];
     const header = sheet.getRow(1);
@@ -64,7 +83,7 @@ export async function buildExceptions(source: Source, issues: readonly Issue[], 
 
     const about = book.addWorksheet(ABOUT_SHEET);
     about.columns = [{ width: 14 }, { width: 60 }];
-    for (const [k, v] of [["Import ID", info.importId], ["Entity", info.entity], ["Company", info.company], ["Source", source.name + (source.sheet ? ` (sheet ${source.sheet})` : "")], ["Written", new Date().toISOString()], ["How to use", "Fix the rows on the first sheet, save, and give this file back to import_from_csv. Rows already created are skipped."]]) about.addRow([k, v]);
+    for (const [k, v] of [["Import ID", info.importId], ["Entity", info.entity], ["Company", info.company], ["Last row", String(source.rows.reduce((last, r) => Math.max(last, r.row), source.fromExceptions?.lastRow ?? 0))], ["Source", source.name + (source.sheet ? ` (sheet ${source.sheet})` : "")], ["Written", new Date().toISOString()], ["How to use", "Fix the rows on the first sheet, save, and give this file back to import_from_csv. Rows already created are skipped. A row you add gets a new row number."]]) about.addRow([k, v]);
     about.getColumn(1).font = { bold: true };
     return { data: Buffer.from(await book.xlsx.writeBuffer()), rows: rows.length };
 }

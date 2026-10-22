@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { draftBatches, type BatchInputs } from "../src/mrp/batches.js";
-import type { ApprovedLine } from "../src/mrp/csv.js";
+import { externalIdFor, type ApprovedLine } from "../src/mrp/csv.js";
 
 const line = (over: Partial<ApprovedLine>): ApprovedLine => ({ row: "Line 2", line: "L0007", item: "JCOMPOUND", vendor: "", qty: 3, unit: "5 GAL", unitCost: null, neededBy: "2026-10-05", partNo: "", changes: [], ...over });
 const inputs: BatchInputs = {
@@ -21,7 +21,7 @@ test("a batch draft lists every component, per one finished good, each line in i
     const { drafts, problems } = draftBatches([line({})], inputs);
     assert.deepEqual(problems, []);
     assert.deepEqual(drafts[0]?.body, {
-        EXTERNALID: "mrp-sbx-20260921-140533-make-L0007",
+        EXTERNALID: externalIdFor("mrp-sbx-20260921-140533", "make-L0007"),
         WAREHOUSE: "MAINSHOP",
         MEMO: "MRP mrp-sbx-20260921-140533, needed by 2026-10-05",
         FinishedDetails: [{

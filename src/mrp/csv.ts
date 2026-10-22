@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { BOM, parseCsvRecords } from "../spreadsheet.js";
+import { fromTabHeaders } from "./workbook.js";
 
 /**
  * The planner's worksheet: one CSV with the status of every planned item and a recommendation
@@ -18,9 +20,6 @@ import { createHash } from "node:crypto";
 export function checkCode(run: string, line: string, item: string): string {
     return "k" + createHash("sha256").update(`${run}|${line}|${item}`).digest("hex").slice(0, 8);
 }
-
-/** The byte-order mark Excel needs to read UTF-8. Written as a code so no invisible character sits in the source. */
-export const BOM = String.fromCharCode(0xfeff);
 
 export const COLUMNS = [
     "Run", "Company", "Line", "Check", "Type", "Item", "Description", "Status", "Recommendation", "Why", "Needed By", "Order By", "Lead Days", "Lead From",
@@ -61,35 +60,6 @@ export function toCsv(rows: readonly SheetRow[]): string {
     const lines = [COLUMNS.join(","), ...rows.map((row) => COLUMNS.map((column) => cell(row[column])).join(","))];
     // A byte-order mark makes Excel read UTF-8 correctly; CRLF is what it expects.
     return BOM + lines.join("\r\n") + "\r\n";
-}
-
-/**
- * RFC 4180 parsing: quoted fields, doubled quotes, commas and line breaks inside quotes. Every
- * record is kept, blank ones too, so record n is row n + 1 of the file as a spreadsheet shows it.
- */
-export function parseCsvRecords(text: string): string[][] {
-    const records: string[][] = [];
-    let field = "";
-    let record: string[] = [];
-    let quoted = false;
-    const source = text.replace(new RegExp("^" + BOM), "");
-    for (let i = 0; i < source.length; i += 1) {
-        const ch = source[i] as string;
-        if (quoted) {
-            if (ch === '"' && source[i + 1] === '"') { field += '"'; i += 1; }
-            else if (ch === '"') quoted = false;
-            else field += ch;
-        } else if (ch === '"') quoted = true;
-        else if (ch === ",") { record.push(field); field = ""; }
-        else if (ch === "\n" || ch === "\r") {
-            if (ch === "\r" && source[i + 1] === "\n") i += 1;
-            record.push(field); field = "";
-            records.push(record);
-            record = [];
-        } else field += ch;
-    }
-    if (field !== "" || record.length > 0) { record.push(field); records.push(record); }
-    return records;
 }
 
 /** The records of a CSV keyed by its header, blank records dropped. */
@@ -145,16 +115,19 @@ export function parseQuantity(text: string): number | null {
     return null;
 }
 
+/** A M/D/YYYY date that reads as another day the other way round: 03/04/2026. */
+export const ambiguousDate = (text: string): boolean => {
+    const us = /^(\d{1,2})\/(\d{1,2})\/\d{4}$/.exec(text.trim());
+    return us !== null && Number(us[1]) <= 12 && Number(us[2]) <= 12 && Number(us[1]) !== Number(us[2]);
+};
+
 /** ISO, or the M/D/YYYY a US spreadsheet turns it into. Anything else is not guessed at. */
 export function parseDate(text: string): string | null {
     const clean = text.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(clean)) return clean;
     const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(clean);
-    if (!us) return null;
-    const [, m, d, y] = us;
-    const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const iso = /^\d{4}-\d{2}-\d{2}$/.test(clean) ? clean : us ? `${us[3]}-${String(us[1]).padStart(2, "0")}-${String(us[2]).padStart(2, "0")}` : null;
     // A date that does not survive a round trip (4/31, 2/30) does not exist.
-    return Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || new Date(`${iso}T00:00:00Z`).toISOString().slice(0, 10) !== iso ? null : iso;
+    return iso === null || Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || new Date(`${iso}T00:00:00Z`).toISOString().slice(0, 10) !== iso ? null : iso;
 }
 
 /**
@@ -168,7 +141,9 @@ export function readSheet(text: string, manifest: RunManifest | null = null, wan
     if (rows.length > 0 && Object.keys(rows[0] ?? {}).length === 1 && header.includes(";")) {
         return { run: "", company: "", fromManifest: false, approved: [], problems: ["The file is separated by semicolons, which is how some spreadsheet settings save CSV. Save it again as comma-separated CSV (in Excel: \"CSV UTF-8 (comma delimited)\")."], notes: [], counts: { rows: rows.length, candidates: 0, approved: 0, notApproved: 0 } };
     }
-    return readRows(rows, manifest, want, (index) => `Line ${index + 2}`);
+    // A tab of the workbook saved as CSV carries the tab's headers ("Qty", "Order by"), not the worksheet's.
+    const saved = rows.length > 0 && !("Order Qty" in (rows[0] ?? {}));
+    return readRows(saved ? rows.map(fromTabHeaders) : rows, manifest, want, (index) => `Line ${index + 2}`);
 }
 
 /**
@@ -194,8 +169,12 @@ export function readRows(rows: ReadonlyArray<Record<string, string>>, manifest: 
         if (companies.size > 1) problems.push(`The file mixes companies (${[...companies].join(", ")}).`);
     }
     const run = [...runs].find(Boolean) ?? "";
-    const company = [...companies].find(Boolean) ?? "";
+    const cells = [...companies].find(Boolean) ?? "";
     if (manifest && manifest.run !== run) problems.push(`The file says run ${run || "(blank)"} but the run record found is ${manifest.run}. The Run cell must not be changed.`);
+    // The run record, else the run ID, says whose run this is; a Company cell is only a copy, and can be edited.
+    const recorded = (manifest?.company ?? /^mrp-(.+)-\d{8}-\d{4,6}$/i.exec(run)?.[1] ?? "").toUpperCase();
+    if (cells && recorded && cells !== recorded) problems.push(`The file mixes companies: its Company cells say ${cells} but its ${manifest ? "run record" : "run"} says ${recorded}. The Company cells must not be changed.`);
+    const company = recorded || cells;
     const blocked = problems.length > 0;
 
     const approved: ApprovedLine[] = [];
@@ -251,6 +230,7 @@ export function readRows(rows: ReadonlyArray<Record<string, string>>, manifest: 
         if (!known) {
             const parsed = parseDate(row["Needed By"] ?? "");
             if (parsed === null && (row["Needed By"] ?? "").trim() !== "") notes.push(`${at}: Needed By "${row["Needed By"]}" is not a date this can read, so it cannot be compared with the date EBMS expects the goods.`);
+            if (parsed !== null && ambiguousDate(row["Needed By"] ?? "")) notes.push(`${at}: Needed By "${row["Needed By"]}" was read as month/day (${parsed}).`);
             neededBy = parsed ?? "";
         }
         const costCell = parseQuantity((row["Unit Cost"] ?? "").replace(/[$]/g, ""));
@@ -281,9 +261,15 @@ export interface PurchaseOrderDraft {
     body: Record<string, unknown>;
 }
 
-/** EXTERNALID is 50 characters: the vendor is always kept whole, and the run is what gets shortened. */
+/**
+ * EXTERNALID is 50 characters: mrp-<date and time of the run>-<6 characters of the run's hash>-<vendor>.
+ * The time is never cut, so a second run on the same day is never mistaken for the first, however
+ * long the company and vendor IDs.
+ */
 export function externalIdFor(run: string, vendor: string): string {
-    return `${run.slice(0, Math.max(1, 50 - vendor.length - 1))}-${vendor}`.slice(0, 50);
+    const stamp = /(\d{8})-(\d{4,6})$/.exec(run);
+    const hash = createHash("sha256").update(run).digest("hex").slice(0, 6);
+    return `mrp-${stamp ? `${stamp[1]}${stamp[2]}-` : ""}${hash}-${vendor}`.slice(0, 50);
 }
 
 /** One purchase order per vendor. The EXTERNALID ties it to the run, so a worksheet handed in twice cannot order twice. */

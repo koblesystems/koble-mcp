@@ -24,8 +24,11 @@ and stop.
   path to `po_from_csv` as `path`. If you don't know the path (a new conversation), call
   `po_from_csv` without one: it lists the newest worksheets in `Documents/Koble MRP`. Ask the
   user which one, and never pick for them. An attached workbook reaches you as text, which
-  cannot be used; ask for the path instead. An older CSV worksheet still works, passed as `csv`
-  exactly as received; the CSV copy `mrp_plan` puts in the chat cannot, by design.
+  cannot be used; ask for the path instead. A CSV works too: the **To order** tab saved as CSV
+  from Excel (by path), or an older CSV worksheet, passed as `csv` exactly as received; the CSV
+  copy `mrp_plan` puts in the chat cannot, by design. Only .xlsx, .csv, .tsv and .txt files are
+  read, none in a hidden or settings folder; if a path is refused, ask the user to copy the file
+  to an ordinary folder such as Documents.
 - Problems name the tab and row ("To order row 7"). In the workbook only **Yes** approves a row.
 - Confirm the company by name. It must be the company the worksheet was made for; `po_from_csv`
   refuses a mismatch. If the server is in testing mode, writes only go to the sandbox company —

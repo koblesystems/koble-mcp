@@ -112,7 +112,7 @@ test("an untouched row is ordered exactly as the run wrote it, and the tool neve
     fresh();
     const r = await call({ company: "sbx", path: worksheet({ L0001: { Approve: "Y" } }) });
     assert.equal(r.runRecordFound, true);
-    assert.deepEqual(r.drafts[0].write.body, { ID: "V1", EXTERNALID: `${RUN}-V1`, Details: [{ INVEN: "WIDGET", O_QUAN_VIS: 2, UNIT_MEAS: "CASE", UNIT_VIS: 48 }] });
+    assert.deepEqual(r.drafts[0].write.body, { ID: "V1", EXTERNALID: externalIdFor(RUN, "V1"), Details: [{ INVEN: "WIDGET", O_QUAN_VIS: 2, UNIT_MEAS: "CASE", UNIT_VIS: 48 }] });
     assert.deepEqual(r.drafts[0].changedByPlanner, []);
     assert.deepEqual(writes, []);
 });
