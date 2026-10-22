@@ -10,6 +10,7 @@
  * "Available" is what the caller says it is — on hand, or on hand plus incoming minus
  * already-promised — which is a planning choice, not arithmetic.
  */
+import { round } from "./values.js";
 
 export interface BomItem {
     id: string;
@@ -20,7 +21,7 @@ export interface BomItem {
     nonStock?: boolean;
 }
 
-export interface TreeNode {
+interface TreeNode {
     item: string;
     level: number;
     /** Quantity of this item per ONE of its parent. */
@@ -36,7 +37,7 @@ export interface TreeNode {
     children: TreeNode[];
 }
 
-export interface TreeSummary {
+interface TreeSummary {
     item: string;
     action: "make" | "buy";
     required: number;
@@ -44,7 +45,6 @@ export interface TreeSummary {
     short: number;
 }
 
-const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 
 export function buildTree(input: { item: string; qty: number; items: readonly BomItem[]; available: Readonly<Record<string, number>> }): { root: TreeNode; totals: TreeSummary[]; canBuildFromStock: boolean } {
     const byId = new Map(input.items.map((item) => [item.id, item]));

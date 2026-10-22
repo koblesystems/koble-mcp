@@ -37,12 +37,14 @@ globalThis.fetch = (async (url: string | URL) => {
             { AUTOID: "2", ID: "BAR", PRI_VENDOR: "ACME", ...stock },
             { AUTOID: "3", ID: "BOLT", PRI_VENDOR: "NUTCO", ...stock },
         ],
-        // Only rows that set a lead time are asked for. CRANK's other vendor must not be used.
+        // CRANK's other vendor must not be used.
         INVENDOR: [{ AUTOID: "i1", ID: "CRANK", VENDOR_ID: "OTHER", LEAD_DAYS: 7 }, { AUTOID: "i2", ID: "CRANK", VENDOR_ID: "acme", LEAD_DAYS: 120 }],
         APVENDOR: [{ AUTOID: "v1", ID: "ACME", LEAD_DAYS: 14 }],
         ARINVDET: ["CRANK", "BAR", "BOLT"].map((item, i) => ({ AUTOID: `s${i}`, INVOICE: `SO-${i}`, INVEN: item, QUAN: 1, SHIP: 0, SHIP_DATE: "2026-12-01T00:00:00Z", DOC_TYPE: "S", PURC_M_VIS: "Stocked", PAR_TIME: "", TIMESTAMP: `t${i}` })),
     };
-    const value = rows[entity ?? ""] ?? [];
+    // Only the fields asked for, as EBMS answers.
+    const fields = (u.searchParams.get("$select") ?? "").split(",");
+    const value = (rows[entity ?? ""] ?? []).map((row) => Object.fromEntries(Object.entries(row as Record<string, unknown>).filter(([field]) => fields.includes(field))));
     return new Response(JSON.stringify({ value, "@odata.count": value.length }), { status: 200 });
 }) as typeof fetch;
 const fresh = () => { configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p", EBMS_COMPANIES: "sbx" }); resetAuth(); };

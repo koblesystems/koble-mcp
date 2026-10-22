@@ -24,7 +24,8 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
 2. **The scope.** "Is this for everything, or are you working particular vendors or products
    today?" Buyers often do one vendor at a time. Pass `scope` as `everything`, `vendors` (with
    `vendors`: IDs or names, as the user says them) or `products` (with `items`). `mrp_plan`
-   refuses to run without it, and asks back if a vendor name fits more than one vendor. The plan
+   refuses to run without it, and asks back if a vendor name fits more than one vendor or a
+   product ID matches no active product (`similarProducts` lists near matches). The plan
    is always worked out for the whole company, because demand flows between items; the scope
    decides what is reported and what goes on the worksheet. A vendor-scoped plan leaves out
    `MAKE` rows; say how many batches were planned elsewhere if the result mentions them.
@@ -53,7 +54,8 @@ Call `mrp_plan` with the company and the time frame. It takes about half a minut
 company and longer on a large one; say so before you call it.
 
 It returns a summary, and saves the **worksheet** — an Excel workbook — on the user's computer
-(in `Documents/Koble MRP` unless they chose a folder with `saveTo`). A CSV copy of its rows is
+(in `Documents/Koble MRP` unless they named another folder, passed as `saveTo`; hidden and
+settings folders are refused). A CSV copy of its rows is
 attached to the result so you can read them; it is not what the planner approves in.
 
 **Give the user the workbook's path** (`worksheet.savedAt`) as the first thing in your answer, as

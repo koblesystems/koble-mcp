@@ -2,6 +2,7 @@
 import { addDays, type Plan, type PlannedOrder } from "./engine.js";
 import type { InScope } from "./scope.js";
 import type { Snapshot } from "./snapshot.js";
+import { round } from "./values.js";
 
 const cap = <T>(list: readonly T[], max: number): { shown: T[]; notShown: number } => ({ shown: list.slice(0, max), notShown: Math.max(0, list.length - max) });
 /** Reported as one line each, not row by row: on old data they would bury everything else. */
@@ -13,7 +14,7 @@ const QUIET = new Set(["assumed-date", "past-due-demand"]);
  * left above the minimum at the end of the time frame, and receipts due after it, are netted
  * first; only the shortfall whose order-by date falls inside the time frame is reported.
  */
-export interface OrderWindow { item: string; neededFrom: string; qty: number; leadDays: number; orderBy: string; make: boolean }
+interface OrderWindow { item: string; neededFrom: string; qty: number; leadDays: number; orderBy: string; make: boolean }
 export function orderBeforeFrameEnds(plan: Plan, snapshot: Snapshot): OrderWindow[] {
     const through = plan.through;
     if (!through) return [];
@@ -37,7 +38,7 @@ export function orderBeforeFrameEnds(plan: Plan, snapshot: Snapshot): OrderWindo
             balance = 0; // counted as ordered
         }
         if (neededFrom === null) return [];
-        return [{ item: row.item, neededFrom, qty: Math.round(short * 10_000) / 10_000, leadDays: lead.days, orderBy: addDays(neededFrom, -lead.days), make: item?.make === true }];
+        return [{ item: row.item, neededFrom, qty: round(short), leadDays: lead.days, orderBy: addDays(neededFrom, -lead.days), make: item?.make === true }];
     });
 }
 

@@ -15,7 +15,7 @@ import type { EntityMeta } from "./metadata.js";
 import type { Lookups, Resolved } from "./lookups.js";
 import { importPrefix } from "./lookups.js";
 import type { EntityRule } from "./rules.js";
-import type { CheckedRow, Issue } from "./validate.js";
+import type { CheckedRow } from "./validate.js";
 
 export const CHILD_ROWS_PER_PATCH = 50;
 
@@ -43,9 +43,7 @@ export interface DraftSet {
     drafts: Draft[];
     /** Rows that could be drafted, in write order. */
     ready: number;
-    issues: Issue[];
     nextRowsFrom: number | null;
-    notes: string[];
 }
 
 /** The EXTERNALID a row's create carries: <= 50 characters, and found again by the import's prefix. */
@@ -79,7 +77,6 @@ export interface DraftOptions {
 
 /** Drafts for the rows that are valid, not in EBMS and not created by an earlier run. */
 export function buildDrafts(rule: EntityRule, meta: EntityMeta, rows: readonly CheckedRow[], lookups: Lookups, options: DraftOptions): DraftSet {
-    const notes: string[] = [];
     const unverified = rule.tier !== "verified" ? ({ unverified: true } as const) : {};
     const inWindow = (row: number): boolean => row >= (options.rowsFrom ?? 0) && row <= (options.rowsTo ?? Number.MAX_SAFE_INTEGER);
 
@@ -88,7 +85,9 @@ export function buildDrafts(rule: EntityRule, meta: EntityMeta, rows: readonly C
         const groups = new Map<string, CheckedRow[]>();
         for (const row of rows.filter((r) => inWindow(r.row))) {
             const product = String(row.values["ID"] ?? "").trim().toUpperCase();
-            groups.set(product, [...(groups.get(product) ?? []), row]);
+            const group = groups.get(product);
+            if (group) group.push(row);
+            else groups.set(product, [row]);
         }
         const all: Draft[] = [];
         for (const [product, members] of groups) {
@@ -107,7 +106,7 @@ export function buildDrafts(rule: EntityRule, meta: EntityMeta, rows: readonly C
                 });
             }
         }
-        return windowed(all, inWindow, options.maxDrafts, notes, rows.length);
+        return windowed(all, inWindow, options.maxDrafts, rows.length);
     }
 
     const all: Draft[] = [...rows].sort((a, b) => a.row - b.row).map((row) => {
@@ -123,14 +122,14 @@ export function buildDrafts(rule: EntityRule, meta: EntityMeta, rows: readonly C
             write: { tool: "ebms_write", method: "POST", path: rule.entity, body, ...(rule.readBack ? { readBack: rule.readBack } : {}) },
         };
     });
-    return windowed(all, inWindow, options.maxDrafts, notes, all.length);
+    return windowed(all, inWindow, options.maxDrafts, all.length);
 }
 
-function windowed(all: Draft[], inWindow: (row: number) => boolean, maxDrafts: number, notes: string[], ready: number): DraftSet {
+function windowed(all: Draft[], inWindow: (row: number) => boolean, maxDrafts: number, ready: number): DraftSet {
     const candidates = all.filter((d) => inWindow(d.row));
     const drafts = candidates.slice(0, maxDrafts);
     const rest = candidates.slice(maxDrafts);
     let nextRowsFrom: number | null = null;
     if (rest.length > 0) nextRowsFrom = Math.min(...rest.flatMap((d) => d.rows ?? [d.row]));
-    return { drafts, ready, issues: [], nextRowsFrom, notes };
+    return { drafts, ready, nextRowsFrom };
 }

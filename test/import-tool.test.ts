@@ -5,8 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
 import { configure } from "../src/config.js";
@@ -371,4 +371,119 @@ test("a row window on a units file takes every row inside it, whatever row its p
     assert.deepEqual(capped.drafts.map((d: any) => d.rows), [[2, 5]]);
     assert.equal(capped.nextRowsFrom, 3);
     assert.deepEqual(writes, []);
+});
+
+// --- From the October 2026 code review. ---
+
+test("a path into koble's settings or a hidden folder is refused before anything is read, and nothing of it comes back", async () => {
+    fresh();
+    const settings = await mkdtemp(join(tmpdir(), "koble-cfg-"));
+    process.env["KOBLE_CONFIG_DIR"] = settings;
+    try {
+        await writeFile(join(settings, "credentials.json"), '{"koble-mcp:cof":"b64:c2VjcmV0"}');
+        await writeFile(join(settings, "copy.csv"), "{,x\nb64:c2VjcmV0,1\n");
+        for (const path of [join(settings, "credentials.json"), join(settings, "copy.csv")]) {
+            const r = await call({ entity: "ARCUST", path, mapping: { "{": "L_NAME" } });
+            assert.equal(r.blocked, true);
+            assert.deepEqual(r.drafts, []);
+            assert.ok(!JSON.stringify(r).includes("c2VjcmV0"), path);
+        }
+        assert.equal(reads.length, 0, "not even EBMS's metadata is read");
+    } finally {
+        delete process.env["KOBLE_CONFIG_DIR"];
+    }
+});
+
+test("pasted text corrected and pasted again continues the same import; a customer by the same name and ZIP is reported", async () => {
+    fresh();
+    const csv = "Last name,Folder,ZIP\nSmith,1,11111\nJones,1,22222\n";
+    const first = await call({ entity: "ARCUST", csv });
+    for (const d of first.drafts) tables["ARCUST"]!.push({ AUTOID: `c${d.row}`, ID: `GEN${d.row}`, L_NAME: d.label, EXTERNALID: d.externalId });
+    const again = await call({ entity: "ARCUST", csv: csv.replace("22222", "22223") });
+    assert.equal(again.importId, first.importId);
+    assert.equal(again.counts.createdEarlier, 2);
+    assert.deepEqual(again.drafts, []);
+
+    fresh();
+    tables["ARCUST"]!.push({ AUTOID: "c9", ID: "C0012", L_NAME: "Bean Co", ZIP: "12345-6789" }, { AUTOID: "c10", ID: "C0013", L_NAME: "Other", ZIP: "99999" });
+    const r = await call({ entity: "ARCUST", csv: "Last name,Folder,ZIP\nBean Co,1,12345\nOther,1,11111\nNew Co,1,\n" });
+    assert.equal(r.counts.drafted, 3, "reported, not skipped: two customers can share a name");
+    assert.deepEqual(r.likelyExisting.rows, ["Row 2"]);
+    assert.match(r.likelyExisting.matches[0], /^Row 2: C0012 Bean Co 12345-6789$/);
+    assert.deepEqual(writes, []);
+});
+
+test("an exceptions file handed back for another company is refused", async () => {
+    fresh();
+    const first = await call({ entity: "INVENTRY", path: await file("products.csv", "ID,Folder,Classification\nGOOD,26,2\nBAD,26,Widget\n") });
+    assert.ok(first.exceptionsFile);
+    const r = await call({ company: "sbx", entity: "INVENTRY", path: first.exceptionsFile });
+    assert.equal(r.blocked, true);
+    assert.match(r.fatal.join(" "), /import into COF, not SBX/);
+});
+
+test("when the exceptions file cannot be saved beside the source, it goes to the usual folder and the review still comes back", async () => {
+    fresh();
+    const path = await file("products.csv", "ID,Folder,Classification\nGOOD,26,2\nBAD,26,Widget\n");
+    // A folder where the file would go: the write fails on every system, as a read-only folder does.
+    await mkdir(join(path, "..", "products.exceptions.xlsx"));
+    const r = await call({ entity: "INVENTRY", path });
+    assert.equal(r.blocked, false);
+    assert.equal(r.counts.drafted, 1);
+    assert.equal(r.exceptionsFile, join(process.env["KOBLE_OUTPUT_DIR"] as string, "imports", `inventry-${r.importId}.exceptions.xlsx`));
+    assert.ok(existsSync(r.exceptionsFile));
+    assert.match(r.notes.join(" "), /could not be saved beside the source/);
+});
+
+test("the exceptions round trip survives a file with its own Row column, and a row the person adds is numbered past the original", async () => {
+    fresh();
+    const path = await file("products.csv", "Row,ID,Folder,Classification\n1,GOOD,26,2\n2,BAD,26,Widget\n3,ALSO,26,2\n4,WORSE,26,Gadget\n");
+    const first = await call({ entity: "INVENTRY", path, mapping: { Row: "" } });
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.readFile(first.exceptionsFile);
+    const sheet = book.getWorksheet("Fix these")!;
+    assert.deepEqual((sheet.getRow(1).values as unknown[]).slice(1), ["⚑ Row", "⚑ Problem", "⚑ Fix", "Row", "ID", "Folder", "Classification"]);
+    sheet.getRow(2).getCell(7).value = "2";
+    sheet.getRow(3).getCell(7).value = "2";
+    sheet.addRow([null, null, null, "9", "EXTRA", "26", "2"]);
+    await book.xlsx.writeFile(first.exceptionsFile);
+    const back = await call({ entity: "INVENTRY", path: first.exceptionsFile, mapping: { Row: "" } });
+    assert.equal(back.blocked, false, JSON.stringify(back.fatal));
+    assert.deepEqual(back.drafts.map((d: any) => [d.row, d.key, d.externalId]), [[3, "BAD", `claude-import-${first.importId}-r3`], [5, "WORSE", `claude-import-${first.importId}-r5`], [6, "EXTRA", `claude-import-${first.importId}-r6`]]);
+    assert.match(back.notes.join(" "), /numbered from row 6/);
+});
+
+test("a later window reads EBMS for its own rows only and leaves the full review's exceptions file alone; a bill of materials reads its products once", async () => {
+    fresh();
+    const path = await file("products.csv", "ID,Folder,Classification\nA,26,2\nB,26,Widget\nC,26,2\nD,26,2\nE,26,2\n");
+    const first = await call({ entity: "INVENTRY", path });
+    assert.ok(first.exceptionsFile);
+    reads.length = 0;
+    const later = await call({ entity: "INVENTRY", path, rowsFrom: 5 });
+    assert.deepEqual(later.drafts.map((d: any) => d.key), ["D", "E"]);
+    const keyReads = reads.filter((x) => x.startsWith("INVENTRY toupper(ID)")).join(" ");
+    assert.match(keyReads, /'D'/);
+    assert.doesNotMatch(keyReads, /'A'|'C'/);
+    assert.equal(later.exceptionsFile, first.exceptionsFile);
+    assert.match(later.notes.join(" "), /left as it is/);
+
+    fresh();
+    tables["INVENTRY"]!.push({ AUTOID: "pl", ID: "LEG" });
+    await call({ entity: "INVENDET", csv: "Product,Component,Qty\nBENCH,LEG,4\nBENCH,TOP,1\n" });
+    assert.equal(reads.filter((x) => x.startsWith("INVENTRY ")).length, 1, "the product and its components in one read");
+    assert.deepEqual(writes, []);
+});
+
+test("exceptionsTo never overwrites the file being imported, and never goes to a hidden or settings folder", async () => {
+    fresh();
+    const path = await file("products.csv", "ID,Folder,Classification\nBAD,26,Widget\n");
+    const onSource = JSON.parse(textOf(await tool({ company: "cof", entity: "INVENTRY", path, exceptionsTo: path })));
+    assert.match(onSource.error.message, /exceptionsTo must name an \.xlsx file/);
+    const sameXlsx = await file("book.xlsx", "");
+    const book = new ExcelJS.Workbook();
+    book.addWorksheet("S").addRow(["ID", "Folder", "Classification"]).worksheet.addRow(["BAD", "26", "Widget"]);
+    await book.xlsx.writeFile(sameXlsx);
+    assert.match(JSON.parse(textOf(await tool({ company: "cof", entity: "INVENTRY", path: sameXlsx, exceptionsTo: sameXlsx }))).error.message, /would be overwritten/);
+    assert.match(JSON.parse(textOf(await tool({ company: "cof", entity: "INVENTRY", path, exceptionsTo: join(homedir(), ".ssh", "x.xlsx") }))).error.message, /hidden folder/);
+    assert.equal(existsSync(path), true);
 });

@@ -21,14 +21,14 @@ async function review(source: ReturnType<typeof readCsvText>) {
     return { v, built: await buildExceptions(source, v.issues, groups, { company: "COF", entity: "INVENTRY", importId: "abc123" }) };
 }
 
-test("the workbook holds only the problem rows: Row, Problem, Fix, then the original columns as they were", async () => {
+test("the workbook holds only the problem rows: ⚑ Row, ⚑ Problem, ⚑ Fix, then the original columns as they were", async () => {
     const { built } = await review(readCsvText(CSV));
     assert.equal(built.rows, 2);
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(built.data as unknown as ArrayBuffer);
     const sheet = book.getWorksheet("Fix these")!;
     const header = (sheet.getRow(1).values as unknown[]).slice(1);
-    assert.deepEqual(header, ["Row", "Problem", "Fix", "ID", "Name", "Folder", "Classification", "Cost"]);
+    assert.deepEqual(header, ["⚑ Row", "⚑ Problem", "⚑ Fix", "ID", "Name", "Folder", "Classification", "Cost"]);
     assert.equal(sheet.rowCount, 3);
     assert.deepEqual([sheet.getRow(2).getCell(1).value, sheet.getRow(3).getCell(1).value].sort(), [3, 5]);
     const zeros = [2, 3].map((n) => sheet.getRow(n)).find((r) => r.getCell(1).value === 5)!;
@@ -50,7 +50,7 @@ test("read back as a source, it keeps the original row numbers and ignores Row, 
 
     const back = await openSource({ path });
     assert.deepEqual(back.fatal, []);
-    assert.deepEqual(back.fromExceptions, { importId: "abc123", entity: "INVENTRY" });
+    assert.deepEqual(back.fromExceptions, { importId: "abc123", entity: "INVENTRY", company: "COF", lastRow: 5 });
     assert.deepEqual(back.headers, ["ID", "Name", "Folder", "Classification", "Cost"]);
     assert.deepEqual(back.rows.map((r) => r.row).sort(), [3, 5]);
     assert.equal(exceptionsPath(back, "INVENTRY", "abc123"), path, "a returned exceptions file is replaced in place, not nested");

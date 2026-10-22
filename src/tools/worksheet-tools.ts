@@ -7,17 +7,17 @@
  */
 import { z } from "zod/v4";
 import { assertWriteCompany, resolveCompany } from "../config.js";
-import { odataString } from "../ebms/client.js";
 import { draftBatches, type BatchComponent } from "../mrp/batches.js";
 import { draftPurchaseOrders, type ApprovedLine, type SheetReading } from "../mrp/csv.js";
 import { readWorksheet, recentWorksheets } from "../mrp/files.js";
-import { BATCH_LINES, readAll, readByIds } from "../mrp/snapshot.js";
-import { baseUnitOf, fromBaseUnits, toBaseUnits, type UnitRow } from "../mrp/units.js";
+import { BATCH_LINES, readByIds, recordsByItem, vendorRecordOf } from "../mrp/snapshot.js";
+import { fromBaseUnits, toBaseUnits, unitsByItem, unitsOf, type UnitRow } from "../mrp/units.js";
+import { text } from "../mrp/values.js";
+import { purchaseTerms } from "../mrp/worksheet.js";
 import type { McpToolResult, ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
 type Row = Record<string, unknown>;
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
 const source = {
     company: z.string().min(1).describe("Required. Company, by ID or name. Must match the worksheet's company."),
@@ -50,12 +50,8 @@ async function openWorksheet(args: { company: string; path?: string | undefined;
 
 /** Records already created from this run, by the EXTERNALID each draft would carry. */
 async function alreadyCreated(company: string, entity: string, select: string, externalIds: readonly string[]): Promise<Map<string, Row>> {
-    const found = new Map<string, Row>();
-    for (const id of externalIds) {
-        const [row] = await readAll(company, entity, { $filter: `EXTERNALID eq ${odataString(id)}`, $select: select });
-        if (row) found.set(id, row);
-    }
-    return found;
+    const found = new Map((await readByIds(company, entity, "EXTERNALID", externalIds, select)).map((row) => [text(row["EXTERNALID"]).toUpperCase(), row]));
+    return new Map(externalIds.flatMap((id) => { const row = found.get(id.toUpperCase()); return row ? [[id, row] as const] : []; }));
 }
 
 /**
@@ -68,12 +64,12 @@ async function settleUnits(company: string, lines: ApprovedLine[], problems: str
     const open = lines.filter((line) => line.unit === null);
     if (open.length === 0) return lines;
     const ids = open.map((line) => line.item);
-    const vendorRows = await readByIds(company, "INVENDOR", "ID", ids, "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO");
-    const units = (await readByIds(company, "INVENUNT", "ID", ids, "ID,UNIT,MULTIPLIER,MULTIPLY")) as unknown as UnitRow[];
+    const records = recordsByItem((await readByIds(company, "INVENDOR", "ID", ids, "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO")).map(vendorRecordOf));
+    const byItem = unitsByItem((await readByIds(company, "INVENUNT", "ID", ids, "ID,UNIT,MULTIPLIER,MULTIPLY")) as unknown as UnitRow[]);
     const dropped = new Set<ApprovedLine>();
     for (const line of open) {
-        const theirs = vendorRows.find((row) => text(row["ID"]) === line.item && text(row["VENDOR_ID"]).toUpperCase() === line.vendor);
-        const unit = theirs ? text(theirs["UNIT_MEAS"]) : baseUnitOf(line.item, units);
+        const units = unitsOf(byItem, line.item);
+        const { record: theirs, unit, cost, partNo } = purchaseTerms(line.item, line.vendor, records, units);
         if (line.originalUnit !== undefined) {
             const stock = toBaseUnits(line.item, line.qty, line.originalUnit, units);
             const converted = fromBaseUnits(line.item, stock.qty, unit ?? "", units);
@@ -91,8 +87,8 @@ async function settleUnits(company: string, lines: ApprovedLine[], problems: str
             line.changes.push(`${line.vendor} has no vendor record for this product, so it is ordered in the stock unit${unit ? ` (${unit})` : ""} with no cost`);
             continue;
         }
-        if (line.unitCost === null && typeof theirs["COST"] === "number" && theirs["COST"] > 0) line.unitCost = theirs["COST"];
-        line.partNo ||= text(theirs["PART_NO"]);
+        if (line.unitCost === null && cost !== null) line.unitCost = cost;
+        line.partNo ||= partNo;
     }
     return lines.filter((line) => !dropped.has(line));
 }

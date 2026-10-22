@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { z } from "zod/v4";
 import { assertWriteCompany, resolveCompany } from "../config.js";
 import { buildDrafts, externalIdFor } from "../import/drafts.js";
-import { buildExceptions, exceptionsPath, writeExceptions } from "../import/exceptions.js";
+import { buildExceptions, exceptionsPath, fallbackPath, writeExceptions } from "../import/exceptions.js";
 import { lookUp } from "../import/lookups.js";
 import { keyFields, resolveMapping } from "../import/mapping.js";
 import { readMetadata, type EntityMeta } from "../import/metadata.js";
@@ -20,20 +20,18 @@ import { groupIssues, validateRows, type Issue } from "../import/validate.js";
 import type { ToolRegistrar } from "./types.js";
 import { errorResult, jsonResult } from "./types.js";
 
-const hash = (text: string): string => createHash("sha256").update(text).digest("hex").slice(0, 6);
+/** Six hex characters of a hash of the parts. */
+const importIdOf = (...parts: string[]): string => createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 6);
 
 /**
- * Six hex characters that stay the same for the same entity, file name and header row, so a file
- * corrected and run again continues its import. Pasted text has no name, so its whole content
- * counts. A different file under the same name gets the same ID; lookups never skip a row on that
- * alone (the record found must be the row's), and contentImportId is offered to start afresh.
+ * The same for the same entity, file name and header row, so a file (or pasted text) corrected
+ * and run again continues its import: what it created is skipped. A different file under the same
+ * name gets the same ID; lookups never skip a row on that alone (the record found must be the
+ * row's), and newImportId, from the whole content, is offered to start afresh.
  */
-export const defaultImportId = (entity: string, name: string, headers: readonly string[], content = ""): string =>
-    hash(`${entity}|${name}|${headers.join(",")}${content ? `|${content}` : ""}`);
-
-/** An ID from everything in the file, for treating a reused file name as a new import. */
+const defaultImportId = (entity: string, source: Source): string => importIdOf(entity, source.name, source.headers.join(","));
 const contentImportId = (entity: string, source: Source): string =>
-    hash(`${entity}|${source.headers.join(",")}|${source.rows.map((r) => source.headers.map((h) => r.cells[h] ?? "").join(",")).join("\n")}`);
+    importIdOf(entity, source.headers.join(","), source.rows.map((r) => source.headers.map((h) => r.cells[h] ?? "").join(",")).join("\n"));
 
 const summary = (rows: readonly number[], message: string) => ({ message, count: rows.length, rows: rows.slice(0, 20).map((r) => `Row ${r}`) });
 
@@ -50,7 +48,7 @@ export function registerImportTools(register: ToolRegistrar): void {
             inputSchema: z.object({
                 company: z.string().min(1).describe("Required. Company, by ID or name."),
                 entity: z.enum(ENTITIES).describe("What the file holds: INVENTRY products; INVENUNT units, INVENDOR vendor records, INVENDET bill-of-materials lines (each row names its product in ID); ARCUST customers; APVENDOR vendors; PYEMP workers; INVENTRE / ARCUSTRE / APVENTRE / PYEMPTRE / PYWORKTRE folders; ARTAX tax rates; or a configuration set."),
-                path: z.string().optional().describe("Path of the file on this computer: .csv or .xlsx (also an exceptions workbook this tool wrote). Give this or csv."),
+                path: z.string().optional().describe("Path of the file on this computer: .csv, .tsv, .txt or .xlsx (also an exceptions workbook this tool wrote), up to 20 MB. Hidden files and settings folders are refused. Give this or csv."),
                 csv: z.string().optional().describe("The file's CSV text, as the user attached or pasted it."),
                 sheet: z.string().optional().describe("For a workbook with several sheets: the one to read. Default: the first."),
                 mapping: z.record(z.string(), z.string()).optional().describe("Header -> field, overriding the automatic match. Map a header to \"\" to leave the column out."),
@@ -60,7 +58,7 @@ export function registerImportTools(register: ToolRegistrar): void {
                 rowsTo: z.number().int().min(1).optional(),
                 maxDrafts: z.number().int().min(1).max(500).optional().describe("At most this many drafts in one result. Default 200."),
                 failedRows: z.array(z.object({ row: z.number().int(), problem: z.string() })).optional().describe("Rows whose ebms_write failed in this import, with what EBMS said: they go to the exceptions workbook instead of being drafted again."),
-                exceptionsTo: z.string().optional().describe("Where to save the exceptions workbook. Default: beside the file as <name>.exceptions.xlsx."),
+                exceptionsTo: z.string().optional().describe("Only a path the user named: an .xlsx file to save the exceptions workbook as. Default: beside the file as <name>.exceptions.xlsx."),
             }),
         },
         async (args) => {
@@ -86,6 +84,9 @@ export function registerImportTools(register: ToolRegistrar): void {
                 if (source.fromExceptions && source.fromExceptions.entity && source.fromExceptions.entity !== rule.entity) {
                     source.fatal.push(`This is an exceptions file from an import of ${source.fromExceptions.entity}, not ${rule.entity}.`);
                 }
+                if (source.fromExceptions && source.fromExceptions.company && source.fromExceptions.company.toUpperCase() !== company.toUpperCase()) {
+                    source.fatal.push(`This is an exceptions file from an import into ${source.fromExceptions.company}, not ${company}. Its rows belong to that company's import.`);
+                }
                 if (source.fatal.length > 0) return blocked(source.fatal);
 
                 let meta: EntityMeta;
@@ -101,30 +102,46 @@ export function registerImportTools(register: ToolRegistrar): void {
                 const mappingOut = mapping.columns.map((c) => `${c.header} -> ${c.field}${meta.fields.get(c.field)?.label ? ` (${meta.fields.get(c.field)?.label})` : ""}${c.by === "field name" ? "" : `, by ${c.by}`}`);
                 if (mapping.fatal.length > 0) return blocked(mapping.fatal, { mapping: mappingOut, unmapped: mapping.unmapped });
 
-                const importId = args.importId ?? source.fromExceptions?.importId ?? defaultImportId(rule.entity, source.name, source.headers, source.path ? "" : source.rows.map((r) => Object.values(r.cells).join(",")).join("\n"));
+                const importId = args.importId ?? source.fromExceptions?.importId ?? defaultImportId(rule.entity, source);
                 const validation = validateRows(source.rows, rule, meta, mapping, defaults);
                 notes.push(...validation.notes);
-                const lookups = await lookUp(company, rule, meta, validation.rows, { importId, externalIdFor: (row) => externalIdFor(importId, row) });
+                // A later window (rowsFrom) reads EBMS for its own rows only; the first call checked the rest.
+                // Folders are always read whole: a row's parent may be an earlier row.
+                const windowed = args.rowsFrom !== undefined && !rule.folder;
+                const inWindow = (row: number): boolean => row >= (args.rowsFrom ?? 0) && row <= (args.rowsTo ?? Number.MAX_SAFE_INTEGER);
+                const checked = windowed ? validation.rows.filter((r) => inWindow(r.row)) : validation.rows;
+                const lookups = await lookUp(company, rule, meta, checked, { importId, externalIdFor: (row) => externalIdFor(importId, row) });
                 notes.push(...lookups.notes);
 
                 const failed: Issue[] = (args.failedRows ?? [])
                     .filter((f) => source.rows.some((r) => r.row === f.row) && !lookups.created.has(f.row) && !lookups.existing.has(f.row))
                     .map((f) => ({ row: f.row, kind: "write-failed", field: "", value: "", text: `EBMS refused it: ${f.problem}` }));
                 const flagged = new Set([...lookups.issues, ...failed].map((i) => i.row));
-                const ready = validation.rows.filter((r) => !flagged.has(r.row) && !lookups.existing.has(r.row) && !lookups.created.has(r.row) && !lookups.waiting.has(r.row));
+                const ready = checked.filter((r) => !flagged.has(r.row) && !lookups.existing.has(r.row) && !lookups.created.has(r.row) && !lookups.waiting.has(r.row));
                 if (lookups.waiting.size > 0) notes.push(`${lookups.waiting.size} ${rule.plural} wait for a parent folder this import creates (rows ${[...lookups.waiting].sort((a, b) => a - b).slice(0, 20).join(", ")}). Run the import again once these are written: they will be drafted then.`);
                 const drafts = buildDrafts(rule, meta, rule.cannotCreate ? [] : ready, lookups, { company, importId, rowsFrom: args.rowsFrom, rowsTo: args.rowsTo, maxDrafts: args.maxDrafts ?? 200 });
-                notes.push(...drafts.notes);
                 if (rule.cannotCreate) notes.unshift(rule.cannotCreate);
 
-                const issues = [...validation.issues, ...lookups.issues, ...failed, ...drafts.issues];
+                const issues = [...validation.issues, ...lookups.issues, ...failed];
                 const problems = groupIssues(issues, { company, maxLength: (field) => meta.fields.get(field)?.maxLength ?? 0 });
                 const target = exceptionsPath(source, rule.entity, importId, args.exceptionsTo);
                 let exceptionsFile: string | null = null;
-                if (issues.length > 0) {
+                if (windowed) {
+                    // Only this window was checked against EBMS: rewriting the file would drop the rest.
+                    exceptionsFile = existsSync(target) ? target : null;
+                    notes.push(`Rows from ${args.rowsFrom} on were checked against EBMS in this call; the exceptions file from the full review was left as it is.`);
+                } else if (issues.length > 0) {
                     const built = await buildExceptions(source, issues, problems, { company, entity: rule.entity, importId });
-                    await writeExceptions(target, built.data);
-                    exceptionsFile = target;
+                    try {
+                        await writeExceptions(target, built.data);
+                        exceptionsFile = target;
+                    } catch (error) {
+                        // A read-only folder (an upload directory, a network share) must not cost the review.
+                        const fallback = fallbackPath(rule.entity, importId);
+                        await writeExceptions(fallback, built.data);
+                        exceptionsFile = fallback;
+                        notes.push(`The exceptions file could not be saved beside the source (${error instanceof Error ? error.message : String(error)}), so it was saved in ${fallback}.`);
+                    }
                 } else if (existsSync(target) && target !== source.path) {
                     notes.push(`Every row passes now, so ${target} from an earlier review is out of date and was left as it is.`);
                 }
@@ -133,6 +150,8 @@ export function registerImportTools(register: ToolRegistrar): void {
                 const existingRows = [...lookups.existing.keys()].sort((a, b) => a - b);
                 const createdRows = [...lookups.created.keys()].sort((a, b) => a - b);
                 const keyName = keyFields(rule, meta).join(" / ");
+                const likely = [...(lookups.likely ?? new Map<number, Record<string, unknown>>())].sort(([a], [b]) => a - b);
+                const describe = (record: Record<string, unknown>): string => [record["ID"], ...rule.label.map((f) => record[f]), record["ZIP"]].map((v) => String(v ?? "").trim()).filter(Boolean).join(" ");
                 return jsonResult({
                     ...base,
                     importId,
@@ -155,6 +174,9 @@ export function registerImportTools(register: ToolRegistrar): void {
                     problems,
                     ...(existingRows.length > 0 ? { existing: summary(existingRows, `${existingRows.length} ${rule.plural} already exist in ${company} (same ${keyName}); they are skipped, not changed`) } : {}),
                     ...(createdRows.length > 0 ? { alreadyCreated: summary(createdRows, `${createdRows.length} rows were created by an earlier run of this import; they are skipped`) } : {}),
+                    ...(likely.length > 0
+                        ? { likelyExisting: { ...summary(likely.map(([row]) => row), `${likely.length} ${rule.plural} without an ID have the same name${meta.fields.has("ZIP") ? " (and ZIP)" : ""} as one already in ${company}. They are drafted; ask whether they are the same before writing them`), matches: likely.slice(0, 20).map(([row, record]) => `Row ${row}: ${describe(record)}`) } }
+                        : {}),
                     notes: [...new Set([...(rule.note ? [rule.note] : []), ...notes])],
                     exceptionsFile,
                     drafts: drafts.drafts,

@@ -5,6 +5,7 @@
  * same column names, so the numbers a person approves are the numbers that become orders.
  */
 import ExcelJS from "exceljs";
+import { cellText, loadWorkbook } from "../spreadsheet.js";
 import type { Column, SheetRow } from "./csv.js";
 
 interface Col {
@@ -99,10 +100,20 @@ const ALL: Col[] = [
 const REQUIRED = new Set<Column>(["Approve", "Order Qty", "Item", "Run", "Company", "Line", "Check", "Type"]);
 
 /** The tabs a person approves on, and the row type each holds. Read back in this order. */
-export const ACTION_SHEETS = [
+const ACTION_SHEETS = [
     { name: "To order", type: "BUY", columns: ORDER },
     { name: "To make", type: "MAKE", columns: MAKE },
 ] as const;
+
+/** A tab's header (lower case) -> the worksheet column it holds. */
+const TAB_HEADERS = new Map<string, Column>(ACTION_SHEETS.flatMap((s) => s.columns).map((c) => [c.header.toLowerCase(), c.key]));
+
+/** A row of a tab saved as CSV, under the worksheet's column names ("Qty" is Order Qty). To make has no Vendor; it reads as blank. */
+export function fromTabHeaders(row: Readonly<Record<string, string>>): Record<string, string> {
+    const out: Record<string, string> = { Vendor: "" };
+    for (const [header, value] of Object.entries(row)) out[TAB_HEADERS.get(header.toLowerCase()) ?? header] = value;
+    return out;
+}
 
 export interface WorkbookContext {
     company: string;
@@ -272,32 +283,14 @@ export async function buildWorkbook(rows: readonly SheetRow[], context: Workbook
     return Buffer.from(await book.xlsx.writeBuffer());
 }
 
-/** A cell as the CSV reader would see it: text, with a date as yyyy-mm-dd and a formula as its result. */
-/** A cell as text: dates as YYYY-MM-DD, formulas as their result, rich text and links as their text. */
-export function cellText(value: ExcelJS.CellValue): string {
-    if (value === null || value === undefined) return "";
-    if (value instanceof Date) return value.toISOString().slice(0, 10);
-    if (typeof value === "object") {
-        if ("result" in value) return cellText((value as ExcelJS.CellFormulaValue).result as ExcelJS.CellValue);
-        if ("richText" in value) return (value as ExcelJS.CellRichTextValue).richText.map((part) => part.text).join("");
-        if ("text" in value) return String((value as ExcelJS.CellHyperlinkValue).text);
-        return "";
-    }
-    return String(value);
-}
-
 /**
  * The rows of the tab a person approves one kind on (To order for BUY, To make for MAKE), keyed by
  * the worksheet's column names whatever the header says, with where each came from
  * ("To order row 7") for messages. The other tab is not read, so a problem there blocks nothing.
  */
 export async function readWorkbook(data: Buffer, want: "BUY" | "MAKE" = "BUY"): Promise<{ rows: Array<Record<string, string>>; where: string[]; problems: string[] }> {
-    const book = new ExcelJS.Workbook();
-    try {
-        await book.xlsx.load(data as unknown as ArrayBuffer);
-    } catch {
-        return { rows: [], where: [], problems: ["The file could not be opened as an Excel workbook (.xlsx). Save it from Excel or Google Sheets as .xlsx and try again."] };
-    }
+    const book = await loadWorkbook(data);
+    if (!book) return { rows: [], where: [], problems: ["The file could not be opened as an Excel workbook (.xlsx). Save it from Excel or Google Sheets as .xlsx and try again."] };
     const rows: Array<Record<string, string>> = [];
     const where: string[] = [];
     const problems: string[] = [];
@@ -318,7 +311,7 @@ export async function readWorkbook(data: Buffer, want: "BUY" | "MAKE" = "BUY"): 
             sheet.getRow(n).eachCell({ includeEmpty: false }, (cell, c) => {
                 const key = keys[c];
                 if (!key) return;
-                record[key] = cellText(cell.value).trim();
+                record[key] = cellText(cell.value, cell.numFmt).trim();
                 if (record[key]) any = true;
             });
             if (!any) continue;

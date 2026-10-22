@@ -2,7 +2,7 @@
  * What the planner asked to see. The whole company is always planned, because demand flows
  * between items; the scope only decides what is reported and what goes on the worksheet.
  */
-import { readByIds, type Snapshot } from "./snapshot.js";
+import type { Snapshot } from "./snapshot.js";
 
 export type InScope = (item: string, type: string) => boolean;
 
@@ -12,25 +12,32 @@ export interface Scope {
     label: unknown;
 }
 
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+type Ask = { ask: string } & Record<string, unknown>;
 
-/** Vendors may be given by ID or by name; one that fits no vendor, or several, is asked about rather than guessed. */
-export async function resolveScope(
-    company: string,
-    snapshot: Snapshot,
+/**
+ * Products are matched by ID whatever their case; vendors by ID or by name. One that fits nothing,
+ * or a vendor name that fits several, is asked about rather than guessed. Needs only the products
+ * and vendors, so it runs before the rest of the snapshot is read.
+ */
+export function resolveScope(
+    found: Pick<Snapshot, "products" | "vendors">,
     args: { scope: "everything" | "vendors" | "products"; vendors?: readonly string[] | undefined; items?: readonly string[] | undefined },
-): Promise<Scope | { ask: string; vendorsWithProducts: Array<{ id: string; name: string }> }> {
+): Scope | Ask {
     if (args.scope === "everything") return { inScope: () => true, label: "everything" };
     if (args.scope === "products") {
-        const wanted = new Set((args.items ?? []).map((id) => id.trim()));
+        const byUpper = new Map([...found.products.keys()].map((id) => [id.toUpperCase(), id]));
+        const given = (args.items ?? []).map((id) => id.trim()).filter(Boolean);
+        const unknown = given.filter((id) => !byUpper.has(id.toUpperCase()));
+        if (unknown.length > 0) {
+            const like = [...found.products.keys()].filter((id) => unknown.some((u) => id.toLowerCase().includes(u.toLowerCase()))).slice(0, 20);
+            return { ask: `Ask the user to check ${unknown.map((id) => `"${id}"`).join(", ")}: no active product has ${unknown.length === 1 ? "that ID" : "those IDs"}.`, ...(like.length > 0 ? { similarProducts: like } : {}) };
+        }
+        const wanted = new Set(given.map((id) => byUpper.get(id.toUpperCase()) as string));
         return { inScope: (item) => wanted.has(item), label: { products: [...wanted] } };
     }
 
-    const primary = [...snapshot.products.values()].map((product) => product.vendor.toUpperCase());
-    const known = (await readByIds(company, "APVENDOR", "ID", primary, "ID,F_NAME,L_NAME")).map((row) => ({
-        id: text(row["ID"]).toUpperCase(),
-        name: `${text(row["F_NAME"])} ${text(row["L_NAME"])}`.trim(),
-    }));
+    const primary = new Set([...found.products.values()].map((product) => product.vendor.toUpperCase()));
+    const known = [...found.vendors].filter(([id]) => primary.has(id)).map(([id, vendor]) => ({ id, name: vendor.name }));
     const chosen = new Map<string, string>();
     const unclear: string[] = [];
     for (const given of (args.vendors ?? []).map((v) => v.trim()).filter(Boolean)) {
@@ -43,7 +50,7 @@ export async function resolveScope(
     }
     if (unclear.length > 0) return { ask: `Ask the user which vendor they mean: ${unclear.join("; ")}.`, vendorsWithProducts: known.slice(0, 60) };
 
-    const vendorOf = (item: string): string => (snapshot.products.get(item)?.vendor ?? "").toUpperCase();
+    const vendorOf = (item: string): string => (found.products.get(item)?.vendor ?? "").toUpperCase();
     return {
         // A vendor's buyer is not planning production, so batches are left off.
         inScope: (item, type) => type !== "MAKE" && chosen.has(vendorOf(item)),

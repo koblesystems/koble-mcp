@@ -1,21 +1,30 @@
 /**
- * Turns a plan into the planner's worksheet rows. Does the two extra reads a purchase order
- * needs that a plan does not: the vendor's unit, part number and cost for each item to buy
- * (INVENDOR), and those items' units (INVENUNT) so stock quantities become order quantities.
+ * Turns a plan into the planner's worksheet rows. A purchase order needs what a plan does not:
+ * the vendor's unit, part number and cost for each item to buy (its vendor record), and the
+ * item's units so stock quantities become order quantities. The snapshot has read both.
  */
 import { TYPE_ORDER, checkCode, type RunManifest, type SheetRow } from "./csv.js";
 import type { Peg, Plan, PlannedOrder } from "./engine.js";
 import { orderBeforeFrameEnds } from "./report.js";
-import { readByIds, type Snapshot } from "./snapshot.js";
-import { baseUnitOf, fromBaseUnits, type UnitRow } from "./units.js";
+import type { Snapshot, VendorRecord } from "./snapshot.js";
+import { baseUnitOf, fromBaseUnits, unitsOf, type UnitRow } from "./units.js";
+import { round } from "./values.js";
 
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 const round2 = (value: number): number => Math.round(value * 100) / 100;
 
 /** Local date and time to the second, so two runs a moment apart never share an ID. */
 export function runId(company: string, now = new Date()): string {
     const pad = (n: number): string => String(n).padStart(2, "0");
     return `mrp-${company.toLowerCase()}-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+/**
+ * What a vendor sells an item in, for how much and as which part: its record for that vendor,
+ * or with none, the item's stock unit and no cost. The unit is null when the item has no units set up.
+ */
+export function purchaseTerms(item: string, vendor: string, records: ReadonlyMap<string, readonly VendorRecord[]>, units: readonly UnitRow[]): { record: VendorRecord | undefined; unit: string | null; cost: number | null; partNo: string } {
+    const record = records.get(item)?.find((candidate) => candidate.vendor.toUpperCase() === vendor.toUpperCase());
+    return { record, unit: record ? record.unit : baseUnitOf(item, units), cost: record?.cost ?? null, partNo: record?.partNo ?? "" };
 }
 
 /** "1209" → "SO 1209"; a batch's or job's number with its kind; a minimum in words. */
@@ -25,32 +34,27 @@ function pegLabel(peg: Peg): string {
     if (peg.kind === "batch") return `Batch ${peg.ref}`;
     if (peg.kind === "forecast") return `Forecast ${peg.ref}`.trim();
     if (peg.kind === "dependent") return `To make ${/^make (.+?) x[\d.]+ for /.exec(peg.ref)?.[1] ?? peg.ref}`;
-    return /negative/.test(peg.ref) ? "On hand is negative" : `Back to minimum ${peg.ref}`;
+    if (peg.kind === "negative") return "On hand is negative";
+    return `Back to minimum ${peg.ref}`;
 }
 
 /** Why a row is there, short enough to read in a cell: the first few reasons, quantities added up. */
-export function whyText(pegs: readonly Peg[], max = 3): string {
+function whyText(pegs: readonly Peg[], max = 3): string {
     const totals = new Map<string, number>();
-    for (const peg of pegs) totals.set(pegLabel(peg), Math.round(((totals.get(pegLabel(peg)) ?? 0) + peg.qty) * 10_000) / 10_000);
+    for (const peg of pegs) totals.set(pegLabel(peg), round((totals.get(pegLabel(peg)) ?? 0) + peg.qty));
     const parts = [...totals].map(([label, qty]) => `${label} (${qty})`);
     return parts.length > max ? `${parts.slice(0, max).join(" · ")} · and ${parts.length - max} more` : parts.join(" · ");
 }
 
-export async function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan, include: (item: string, type: string) => boolean = () => true): Promise<{ rows: SheetRow[]; warnings: string[]; manifest: RunManifest }> {
+export function buildWorksheet(company: string, run: string, snapshot: Snapshot, plan: Plan, include: (item: string, type: string) => boolean = () => true): { rows: SheetRow[]; warnings: string[]; manifest: RunManifest } {
     const warnings: string[] = [];
-    // The items that get a unit and, for purchases, a vendor: everything the plan orders within scope.
-    const buyIds = [...new Set(plan.plannedOrders.filter((order) => include(order.item, order.action === "buy" ? "BUY" : "MAKE")).map((order) => order.item))];
-    const vendorRows = await readByIds(company, "INVENDOR", "ID", buyIds, "ID,VENDOR_ID,UNIT_MEAS,COST,PART_NO");
-    const unitRows = (await readByIds(company, "INVENUNT", "ID", buyIds, "ID,UNIT,MULTIPLIER,MULTIPLY")) as unknown as UnitRow[];
     const vendorFor = (item: string): { vendor: string; unit: string; cost: number | null; partNo: string } => {
-        const product = snapshot.products.get(item);
-        const mine = vendorRows.filter((row) => text(row["ID"]) === item);
-        const chosen = mine.find((row) => text(row["VENDOR_ID"]).toUpperCase() === (product?.vendor ?? "").toUpperCase()) ?? (product?.vendor ? undefined : mine[0]);
-        const cost = typeof chosen?.["COST"] === "number" && chosen["COST"] > 0 ? chosen["COST"] : null;
+        // The primary vendor; with none, the first vendor the product has a record for.
+        const vendor = snapshot.products.get(item)?.vendor || snapshot.vendorRecords.get(item)?.[0]?.vendor || "";
         // With no vendor record to say otherwise, order in the product's own stock unit — and say
         // so on the purchase order, so EBMS cannot default the line to a case.
-        const unit = chosen ? text(chosen["UNIT_MEAS"]) : (baseUnitOf(item, unitRows) ?? "");
-        return { vendor: product?.vendor || text(chosen?.["VENDOR_ID"]) || "(no primary vendor)", unit, cost, partNo: text(chosen?.["PART_NO"]) };
+        const terms = purchaseTerms(item, vendor, snapshot.vendorRecords, unitsOf(snapshot.units, item));
+        return { vendor: vendor || "(no primary vendor)", unit: terms.unit ?? "", cost: terms.cost, partNo: terms.partNo };
     };
 
     const base = { Run: run, Company: company };
@@ -109,7 +113,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 ...timing(order, "Start"),
                 "Needed By": order.receiptDate,
                 "Recommended Qty (stock unit)": order.qty,
-                "Purchase Unit": baseUnitOf(order.item, unitRows) ?? "",
+                "Purchase Unit": baseUnitOf(order.item, unitsOf(snapshot.units, order.item)) ?? "",
                 "Order Qty": order.qty,
                 Approve: "",
                 Why: whyText(order.pegs),
@@ -119,7 +123,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             continue;
         }
         const vendor = vendorFor(order.item);
-        const converted = fromBaseUnits(order.item, order.qty, vendor.unit, unitRows);
+        const converted = fromBaseUnits(order.item, order.qty, vendor.unit, unitsOf(snapshot.units, order.item));
         if (converted.warning && !warnings.includes(converted.warning)) warnings.push(converted.warning);
         rows.push({
             ...base, Type: "BUY", Item: order.item, ...figures(order.item),
@@ -142,13 +146,12 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
             ].filter(Boolean).join(" "),
         });
     }
-    // "178" alone does not say what it is: a batch or a purchase order.
-    const supplyKind = new Map(snapshot.supplies.map((supply) => [supply.ref, supply.kind]));
-    const documentLabel = (ref: string): string => (supplyKind.get(ref) === "batch" ? `Batch ${ref}` : /^PO/i.test(ref) ? ref : `PO ${ref}`);
+    // "178" alone does not say what it is: a batch or a purchase order. The two can share a number.
+    const documentLabel = ({ ref, kind }: { ref: string; kind?: string | undefined }): string => (kind === "batch" ? `Batch ${ref}` : /^PO/i.test(ref) ? ref : `PO ${ref}`);
     for (const exception of plan.exceptions) {
         if (exception.type === "expedite") {
             touched.add(exception.item);
-            const receipt = `${documentLabel(exception.ref)} (${exception.qty})`;
+            const receipt = `${documentLabel(exception)} (${exception.qty})`;
             rows.push({
                 ...base,
                 Type: "EXPEDITE",
@@ -157,7 +160,7 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 Status: exception.dateAssumed ? "On order with no expected date in EBMS" : "Receipt arrives after it is needed",
                 Recommendation: exception.dateAssumed ? `Confirm ${receipt} will arrive by ${exception.to}` : `Move ${receipt} from ${exception.from} to ${exception.to}`,
                 "Needed By": exception.to ?? "",
-                Document: documentLabel(exception.ref),
+                Document: documentLabel(exception),
                 Because: exception.message,
                 Notes: windowNotes.get(exception.item) ?? "",
             });
@@ -169,8 +172,8 @@ export async function buildWorksheet(company: string, run: string, snapshot: Sna
                 Item: exception.item,
                 ...figures(exception.item),
                 Status: "On order but nothing needs it",
-                Recommendation: `Defer or cancel ${documentLabel(exception.ref)} (${exception.qty})`,
-                Document: documentLabel(exception.ref),
+                Recommendation: `Defer or cancel ${documentLabel(exception)} (${exception.qty})`,
+                Document: documentLabel(exception),
                 Because: exception.message,
                 Notes: windowNotes.get(exception.item) ?? "",
             });
