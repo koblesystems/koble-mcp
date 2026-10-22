@@ -148,14 +148,17 @@ Ask in your own words — *"order 10 tubes from Bike Parts Co"*, *"what's open f
 | Products, tasks | `/ebms-products`, `/ebms-tasks` | ＋ → **product**, **task** |
 | Reschedule a week's tasks so nobody overlaps | `/ebms-task-reflow` | ＋ → **task-reflow** |
 | Customers and vendors | `/ebms-customers-vendors` | ＋ → **customer**, **vendor** |
+| Import a CSV or Excel file (review first, then one yes) | `/ebms-import` | ＋ → **import**, **import-products**, **import-customers**, **import-vendors**, **review-spreadsheet** |
+| Set up a new, empty company from scratch | `/ebms-new-company` | ＋ → **new-company** |
 | Check or repair the install | `/koble-setup` | run `koble doctor` in a terminal |
 
 The server's named workflows also appear in Claude Code as `/mcp__koble-mcp__mrp-plan` and so on,
 and in other apps wherever they list an MCP server's prompts.
 
-**What is safe.** Planning is read-only: `mrp_plan`, `mrp_item_view`, `po_from_csv` and
-`batches_from_csv` never write to EBMS. Purchase orders and batches are only created by the second
-and third skills, one at a time, after you say yes to each. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
+**What is safe.** Planning and import review are read-only: `mrp_plan`, `mrp_item_view`,
+`po_from_csv`, `batches_from_csv` and `import_from_csv` never write to EBMS. Purchase orders and
+batches are only created by the second and third skills, one at a time, after you say yes to
+each; an import's records only by the ebms-import skill, after one yes for the file. With `EBMS_SANDBOX` set, writes can only go to that company: the company is part of a URL
 this server builds itself, and a request that would land anywhere else is refused before it is
 sent. Leave it set while testing. The `PROCESS` field is refused in every request body, and
 `ebms_command` runs only a short list of actions, none of which posts, pays or sends.
@@ -168,10 +171,11 @@ Testing it? [TESTING.md](TESTING.md) has a checklist and what to send back.
 |---|---|---|
 | `ebms_companies` | Lists the companies the serial reaches — ID, name, version, and whether writes are allowed. Needs no credentials. | — |
 | `ebms_get` | One GET: a collection or a record, with `select`/`filter`/`expand`/`orderby`/`top`/`skip`. Reports `total` and `truncated` for collections. | anything but `ENTITY` or `ENTITY('key')`; a key containing `/ \ ? %` or `..` |
-| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV`/`INMFG`/`TASK`/`ARCUST`/`APVENDOR` whose `EXTERNALID` already exists; a vendor (`APVENDOR`) POST without an `ID`; the same path rules |
+| `ebms_write` | One POST, PATCH or DELETE with a JSON body. | a company that is not configured (or not the sandbox, while testing); `PROCESS` anywhere in the body; a POST to `ARINV`/`APINV`/`INMFG`/`TASK`/`ARCUST`/`APVENDOR`/`INVENTRY`/`PYEMP` whose `EXTERNALID` already exists; a vendor (`APVENDOR`) POST without an `ID`; the same path rules |
 | `ebms_command` | One bound action: `POST /ENTITY('key')/Model.Entities.<Command>`, with or without a dialog body. | a company that is not configured (or not the sandbox, while testing); any action that is not on the allow-list (`MarkAllAsShipped`, `RecalculateAllPrices`, `CalculateFreight`, `ChangeCustomer` by default); `PROCESS` in the body |
 | `ebms_guide` | Serves the skills: the list, one skill, or one reference file. Lets Claude Desktop use them without uploading anything. | — (read-only; only the files it shipped with) |
 | `mrp_plan`, `mrp_item_view`, `po_from_csv`, `batches_from_csv` | Planning and worksheet reading (see *Planning*). | — (read-only) |
+| `import_from_csv` | Reviews a CSV or Excel file of one entity against EBMS and drafts the writes (see *Importing*). | — (read-only) |
 
 Every result names the company it ran against. Every failure carries `uncertain` and says
 what it means:
@@ -228,6 +232,32 @@ and tells the caller not to resend. `verify: false` switches it off.
 
 The write result no longer echoes EBMS's whole record (about a hundred fields); it returns
 the record's `AUTOID`, `INVOICE` and `ID` plus the verification.
+
+## Importing
+
+`import_from_csv` reads a CSV or Excel file of products, units, vendor records, bills of
+materials, customers, vendors, workers, folders, tax rates or configuration records. It maps the
+columns to fields using EBMS's live metadata, checks every row (blanks, types, lengths,
+duplicates, and every folder, vendor, product and unit a row names), skips rows already in EBMS
+or created by an earlier run of the same import, and returns the exact `ebms_write` call for each
+remaining row. Problems come back grouped by kind with counts, and the rows that need a person
+are saved to an exceptions workbook beside the file (`<name>.exceptions.xlsx`) with a Problem
+and a Fix column. That workbook can be corrected and handed straight back.
+
+It writes nothing. The `ebms-import` skill shows the mapping, the problems and a few drafts, asks
+once for the file, and writes the drafts in order; every create carries an `EXTERNALID`
+(`claude-import-<importId>-r<row>`), so a rerun skips what exists and a resend is refused. A row
+is only skipped when the record found is the row's own (same key, or same name for a customer EBMS
+numbered); a marker on a different record (a row deleted, or another file under the same name) is
+reported, never skipped.
+`ebms-new-company` puts the files in the order they depend on each other. The shaping the tool
+does (units and vendor records grouped per product, at most 50 to a PATCH; a folder drafted only
+once its parent exists, since EBMS numbers new folders itself) never decides anything: it is
+deterministic and documented in `src/import/drafts.ts` and `src/import/lookups.ts`.
+
+Some records cannot be created through the EBMS API (1.8.184): customer and vendor folders,
+workers, warehouses and price levels. Those are set up in EBMS; a worker file can still be
+reviewed. Verified on a live company, with what was not, in the two skills.
 
 ## Planning (MRP)
 

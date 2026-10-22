@@ -63,8 +63,11 @@ export function toCsv(rows: readonly SheetRow[]): string {
     return BOM + lines.join("\r\n") + "\r\n";
 }
 
-/** RFC 4180 parsing: quoted fields, doubled quotes, commas and line breaks inside quotes. */
-export function parseCsv(text: string): Array<Record<string, string>> {
+/**
+ * RFC 4180 parsing: quoted fields, doubled quotes, commas and line breaks inside quotes. Every
+ * record is kept, blank ones too, so record n is row n + 1 of the file as a spreadsheet shows it.
+ */
+export function parseCsvRecords(text: string): string[][] {
     const records: string[][] = [];
     let field = "";
     let record: string[] = [];
@@ -81,11 +84,17 @@ export function parseCsv(text: string): Array<Record<string, string>> {
         else if (ch === "\n" || ch === "\r") {
             if (ch === "\r" && source[i + 1] === "\n") i += 1;
             record.push(field); field = "";
-            if (record.some((value) => value !== "")) records.push(record);
+            records.push(record);
             record = [];
         } else field += ch;
     }
-    if (field !== "" || record.length > 0) { record.push(field); if (record.some((value) => value !== "")) records.push(record); }
+    if (field !== "" || record.length > 0) { record.push(field); records.push(record); }
+    return records;
+}
+
+/** The records of a CSV keyed by its header, blank records dropped. */
+export function parseCsv(text: string): Array<Record<string, string>> {
+    const records = parseCsvRecords(text).filter((record) => record.some((value) => value !== ""));
     const [header, ...body] = records;
     if (!header) return [];
     const names = header.map((name) => name.trim());
@@ -144,7 +153,8 @@ export function parseDate(text: string): string | null {
     if (!us) return null;
     const [, m, d, y] = us;
     const iso = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    return Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || Number(m) > 12 || Number(d) > 31 ? null : iso;
+    // A date that does not survive a round trip (4/31, 2/30) does not exist.
+    return Number.isNaN(Date.parse(`${iso}T00:00:00Z`)) || new Date(`${iso}T00:00:00Z`).toISOString().slice(0, 10) !== iso ? null : iso;
 }
 
 /**

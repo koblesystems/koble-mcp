@@ -1,6 +1,6 @@
 ---
 name: ebms-products
-description: Create and update products in EBMS / Koble (the INVENTRY entity) — checking for duplicates, choosing the product folder and classification, setting cost and base price, units of measure, vendor records with part numbers and purchase costs, minimum/maximum and reorder quantities, and bills of materials. Use whenever someone wants to add, create, set up, import or edit a product, SKU, item or part in EBMS or Koble, to change a price or cost, to set up a case or box unit, to link a product to a vendor or set a vendor part number, or when a sales order, purchase order or MRP run needs a product that doesn't exist yet. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
+description: Create and update products in EBMS / Koble (the INVENTRY entity) — checking for duplicates, choosing the product folder and classification, setting cost and base price, units of measure, vendor records with part numbers and purchase costs, minimum/maximum and reorder quantities, and bills of materials. Use whenever someone wants to add, create, set up or edit a product, SKU, item or part in EBMS or Koble (a whole file of them goes through ebms-import), to change a price or cost, to set up a case or box unit, to link a product to a vendor or set a vendor part number, or when a sales order, purchase order or MRP run needs a product that doesn't exist yet. Builds on the ebms-api skill. Needs the koble-mcp server (tools ebms_get and ebms_write).
 ---
 
 # EBMS products
@@ -14,6 +14,11 @@ classification enum and folder details.
 If those tools are not available, say the koble-mcp server is not connected and stop.
 
 Verified against a live install (EBMS 1.8.148, 2026-09-16) by creating, reading,
+For many products at once, from a CSV or Excel file, use **ebms-import**; it applies this
+skill's rules to every row. The server refuses a product POST whose `EXTERNALID` already exists
+(since 0.1.0-rc.14), as it does for orders: read the existing product and continue from it.
+
+Verified against a live install (SBX, EBMS 1.8.148, 2026-09-16) by creating, reading,
 updating and deleting a test product. The sections marked *not yet verified* were not.
 
 ## Ground rules

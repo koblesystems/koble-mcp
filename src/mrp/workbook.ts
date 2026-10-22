@@ -273,7 +273,8 @@ export async function buildWorkbook(rows: readonly SheetRow[], context: Workbook
 }
 
 /** A cell as the CSV reader would see it: text, with a date as yyyy-mm-dd and a formula as its result. */
-function cellText(value: ExcelJS.CellValue): string {
+/** A cell as text: dates as YYYY-MM-DD, formulas as their result, rich text and links as their text. */
+export function cellText(value: ExcelJS.CellValue): string {
     if (value === null || value === undefined) return "";
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     if (typeof value === "object") {

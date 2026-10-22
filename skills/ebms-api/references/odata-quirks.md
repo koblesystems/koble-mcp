@@ -184,10 +184,42 @@ Verified 2026-09-23, with a throwaway test task:
 ## Products created through the API
 
 - A new product gets a single blank main unit (`INVENUNT` `UNIT` "", `Smaller`, multiplier 0)
-  and blank `EACH_UNIT` / `DEF_UNIT`.
+  and blank `EACH_UNIT` / `DEF_UNIT` — unless the create sends `EACH_UNIT` and `DEF_UNIT`
+  (`"EA"`): then the main unit is named from the start (COF, 1.8.184, 2026-10-12).
+- A product's bill of materials cannot be added through a PATCH: `INVENDETs` is a paged
+  collection ("You cannot add entities to a paged collection"). `POST INVENDET` with
+  `{"ID", "COMP_ID", "QUAN"}` works, though the metadata marks `ID` read-only (COF, 2026-10-12).
 - Units and vendor records can be added as child collections on a product PATCH
   (`INVENUNTs`, `INVENDORs`). Adding a vendor record does not set `PRI_VENDOR`. Deleting the
   product removes both.
+
+## Creating folders and setup records (COF, 1.8.184, 2026-10-12)
+
+- **EBMS numbers a new folder itself.** Sending `TREE_ID` on an `INVENTRE` POST is refused (403,
+  "this field is read only in EBMS") although the metadata marks it writable.
+- **A folder's `PARENT_ID` must be sent space-padded to five** (`"   36"`). Unpadded, EBMS pads
+  it on the wrong side ("The category "1    " … could not be found"). A product's `TREE_ID`, by
+  contrast, is accepted unpadded.
+- **Filters on a folder number need the padded value**: `TREE_ID eq '    2'` matches, `'2'`
+  returns nothing.
+- `INVENTRE`, `PYEMPTRE`, `PYWORKTRE` POSTs with `{PARENT_ID, TREE_DESCR}` work. A new product
+  folder gets a `($)` defaults row with the install's defaults (tax group, purchase account,
+  markup).
+- **Customer and vendor folders cannot be created** (`ARCUSTRE`, `APVENTRE`): EBMS requires a
+  `PARENT_ID` those API entities do not expose. Nothing is saved.
+- **Workers cannot be created**: every `PYEMP` POST fails with 422 "Invalid constructor
+  parameter", with or without an ID, folder or pay fields.
+- `ARSALESP` needs `COM_GL` (a commission GL account) or EBMS refuses it. `ARTAX` needs
+  `COUNTRY`. `INWH.WAREHOUSE`, `INPRICE.LEVEL` and every `ARSHVIA` field are read-only.
+- `IsRequired` in the metadata is not always what EBMS demands: `INVENDOR.DATE` is "required"
+  but defaults to today (its DataType is `DateDefaultedToday`), and `ARCUST.ID` is "required"
+  but EBMS makes one from the name when it is blank.
+- `startswith(EXTERNALID,'…')` filters work on `INVENTRY` and `ARCUST`.
+- **`eq` on an ID is case-sensitive**: `ID eq 'padep'` finds nothing while `PADEP` exists.
+  `toupper(ID) eq 'PADEP'` works, ORed too; `tolower(ID) eq …` and `startswith(tolower(ID),…)`
+  fail with "Unhandled exception occurred"; `contains(tolower(ID),'…')` works.
+- `ARCUSTAX` (a customer's tax exemption) can be created but not deleted (403); deleting the
+  customer removes it. A sales order lists the rates EBMS considered in `ARINVTAXes`.
 
 ## Other
 
