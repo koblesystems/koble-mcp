@@ -1,15 +1,16 @@
 ---
 name: ebms-api
-description: Read and write EBMS / Koble data (Koble Systems ERP) through the koble-mcp server — how to call ebms_companies, ebms_get, ebms_write and ebms_command, OData filter and select syntax, write conventions, how to read a write's verification, and the install-specific quirks that make correct-looking requests fail. Use this whenever a task touches EBMS data: products (INVENTRY), customers (ARCUST), sales orders (ARINV), purchase orders (APINV), vendors (APVENDOR), tasks or workers (TASK/PYEMP), or whenever someone mentions EBMS, Koble, koblesystems.dev, an ERP OData endpoint, or is debugging a 401/422/500 from one. The task skills (ebms-sales-orders, ebms-purchase-orders, ebms-products, ebms-customers-vendors, ebms-tasks, ebms-mrp) build on this one. Needs the koble-mcp server (tools ebms_companies, ebms_get, ebms_write, ebms_command).
+description: Read and write EBMS / Koble data (Koble Systems ERP) through the koble-mcp server — how to call ebms_companies, ebms_get, ebms_export, ebms_write and ebms_command, OData filter and select syntax, write conventions, how to read a write's verification, and the install-specific quirks that make correct-looking requests fail. Use this whenever a task touches EBMS data: products (INVENTRY), customers (ARCUST), sales orders (ARINV), purchase orders (APINV), vendors (APVENDOR), tasks or workers (TASK/PYEMP), or whenever someone mentions EBMS, Koble, koblesystems.dev, an ERP OData endpoint, or is debugging a 401/422/500 from one. The task skills (ebms-sales-orders, ebms-purchase-orders, ebms-products, ebms-customers-vendors, ebms-tasks, ebms-mrp) build on this one. Needs the koble-mcp server (tools ebms_companies, ebms_get, ebms_export, ebms_write, ebms_command).
 ---
 
 # The EBMS API through koble-mcp
 
 EBMS exposes an OData v4 API. The **koble-mcp** server owns the connection: the serial number,
 the credentials, the token and its refresh, which companies may be touched, and a few hard
-guards. Four tools are all you get, and all you need.
+guards. Four tools are all you get, and all you need — `ebms_companies`, `ebms_get`,
+`ebms_write`, `ebms_command` — plus `ebms_export` for reads too big for the conversation.
 
-**You never build a URL, send a token, or run curl.** If the four tools are not available, say
+**You never build a URL, send a token, or run curl.** If these tools are not available, say
 the koble-mcp server is not connected and stop — do not reach for the network another way.
 
 Read this page, then open `references/` for the entity you are actually touching. For anything
@@ -46,8 +47,11 @@ ebms_get  company: <company>
 ```
 
 A collection returns `rows`, `returned`, `total`, `truncated`; one record returns `record`.
-`truncated: true` means there are more rows than you asked for — page with `skip`, do not assume
-you have seen everything.
+`truncated: true` means there are more rows than you saw — do not assume you have seen
+everything. Without `top`, `ebms_get` shows at most 200 rows, and never more than about 150 KB
+whatever `top` says; `received` then says how many EBMS sent. Paging with `skip` is for a
+second or third page of a read you have sized with `top`; when `ebms_get` has cut a read short,
+do not page on — use `ebms_export` (see *Large reads*).
 
 **Always pass `select`, including inside `expand`** (`Details($select=AUTOID,INVEN,M_QUAN_VIS)`).
 It is not a nicety. Requests are cut off at about two minutes, and an unselected read returns
@@ -65,6 +69,51 @@ explicitly — they appear neither in a plain read nor under `select: *`.
 Escape a single quote inside a string literal by doubling it: `contains(ID,'O''Brien')`.
 Search case-insensitively with `contains(tolower(FIELD),'…')`, then rank exact and prefix
 matches to the top yourself.
+
+### Large reads — `ebms_export`
+
+A read of thousands of rows (a year of sales lines, every product, all open PO lines) does not
+fit in the conversation, and paging through it with `skip` fills the context long before the
+answer. Instead:
+
+1. **Count first.** `ebms_get` with the filter, `select: AUTOID`, `top: 1` — `total` is the
+   count. A few hundred rows or fewer: read them with `ebms_get`.
+2. **Over a few hundred, export.** `ebms_export` takes the same `path`, `select`, `filter`,
+   `expand`, `orderby`, plus `format` (`csv` default, `xlsx`, `jsonl`). The server pages it
+   itself and writes the file to `~/Documents/Koble Exports` (or `folder`, which must already
+   exist). It returns only the path, `rows`, `columns`, five `sample` rows, min/max/sum of each
+   `numeric` column, and `notes` — read the notes. With `explode` the header's numbers are
+   summed once per record, not once per line. In a CSV, text that starts with `=`, `+`, `-` or
+   `@` is written with a leading `'` so Excel does not run it; a script should strip it if it
+   matters. Excel holds 1,048,575 rows; a bigger export must be `csv` or `jsonl`.
+   Select only the fields you need. For line-level questions expand the lines through their
+   parent and pass `explode` — `expand: Details($select=INVEN,O_QUAN_VIS)`, `explode: Details`
+   gives one row per line, the header's fields repeated and the line's as `Details.<FIELD>`.
+   Reading the line entity on its own is faster but its `_VIS` fields read 0 (see
+   `references/odata-quirks.md`). Without `explode` an expanded collection is JSON text in one
+   cell. The default page is 500 rows, 25 with an expand; lower `pageSize` if a page times out.
+3. **Analyse the file with a script** — Python with pandas, or duckdb, via Bash — and print only
+   the aggregates: totals, group-bys, the top 20. Never print or read the whole file into the
+   conversation.
+4. **Never write a script that calls the OData API.** The credentials, the company allowlist
+   and the guards live in the server; a script reads the exported file and nothing else. If
+   the file lacks a field, export again with it selected.
+
+```
+ebms_export  company: sbx
+             path: ARINV
+             select: INVOICE,ID,INV_DATE
+             filter: STATUS eq 'U'
+             expand: Details($select=INVEN,QUAN,SO_AMOUNT)
+             explode: Details
+```
+
+```bash
+python3 -c "import pandas as pd; d=pd.read_csv('<path>'); print(d.groupby('Details.INVEN')['Details.SO_AMOUNT'].sum().nlargest(20))"
+```
+
+Date comparisons in `filter` are unreliable on this build (see the quirks file); export the wider
+set and filter by date in the script.
 
 ## 3. Write — `ebms_write`
 
