@@ -53,7 +53,8 @@ Call `mrp_plan` with the company and the time frame. It takes about half a minut
 company and longer on a large one; say so before you call it.
 
 It returns a summary, and saves the **worksheet** — an Excel workbook — on the user's computer
-(in `Documents/Koble MRP` unless they chose a folder with `saveTo`). A CSV copy of its rows is
+(in `Documents/Koble MRP` unless they named another folder, passed as `saveTo`; hidden and
+settings folders are refused). A CSV copy of its rows is
 attached to the result so you can read them; it is not what the planner approves in.
 
 **Give the user the workbook's path** (`worksheet.savedAt`) as the first thing in your answer, as
