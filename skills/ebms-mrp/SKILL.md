@@ -24,7 +24,8 @@ Ask these, in one message, and wait for the answers. Do not assume any of them.
 2. **The scope.** "Is this for everything, or are you working particular vendors or products
    today?" Buyers often do one vendor at a time. Pass `scope` as `everything`, `vendors` (with
    `vendors`: IDs or names, as the user says them) or `products` (with `items`). `mrp_plan`
-   refuses to run without it, and asks back if a vendor name fits more than one vendor. The plan
+   refuses to run without it, and asks back if a vendor name fits more than one vendor or a
+   product ID matches no active product (`similarProducts` lists near matches). The plan
    is always worked out for the whole company, because demand flows between items; the scope
    decides what is reported and what goes on the worksheet. A vendor-scoped plan leaves out
    `MAKE` rows; say how many batches were planned elsewhere if the result mentions them.

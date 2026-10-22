@@ -34,12 +34,19 @@ const tables: Record<string, Array<Record<string, unknown>>> = {
     APINVDET: [{ AUTOID: "m1", INVEN: "GADGET", WAREHOUSE: "MAIN", INV_DATE: "2026-05-01T00:00:00Z" }],
 };
 const writes: string[] = [];
+const reads: string[] = [];
 globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const u = new URL(String(url));
     if (u.pathname.endsWith("/Token")) return new Response(JSON.stringify({ AccessToken: "a" }), { status: 200 });
     if ((init?.method ?? "GET") !== "GET") { writes.push(`${init?.method} ${u.pathname}`); return new Response("{}", { status: 200 }); }
     const entity = u.pathname.split("/").pop() ?? "";
     const filter = u.searchParams.get("$filter") ?? "";
+    reads.push(`${entity} ${filter}`);
+    const external = [...filter.matchAll(/EXTERNALID eq '([^']*)'/g)].map((m) => m[1]);
+    if (external.length > 0) {
+        const found = (tables[entity] ?? []).filter((row) => external.includes(String(row["EXTERNALID"])));
+        return new Response(JSON.stringify({ "@odata.count": found.length, value: found }), { status: 200 });
+    }
     const ids = [...filter.matchAll(/\b(ID|INVEN) eq '([^']*)'/g)].map((m) => m[2]);
     const rows = (tables[entity] ?? []).filter((row) => ids.length === 0 || ids.includes(String(row["ID"] ?? row["INVEN"])) || ids.includes(String(row["INVEN"])));
     return new Response(JSON.stringify({ "@odata.count": rows.length, value: rows }), { status: 200 });
@@ -75,7 +82,7 @@ function worksheet(edits: Record<string, Partial<SheetRow>>): string {
     writeFileSync(file, toCsv(base.map((row) => ({ ...row, ...(edits[String(row.Line)] ?? {}) }))));
     return file;
 }
-const fresh = () => { configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p", EBMS_COMPANIES: "sbx" }); resetAuth(); writes.length = 0; };
+const fresh = () => { configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p", EBMS_COMPANIES: "sbx" }); resetAuth(); writes.length = 0; reads.length = 0; };
 
 test("moving a line to another vendor converts the quantity with it: 2 cases of 24 is 48 each, never 2 each", async () => {
     fresh();
@@ -159,4 +166,17 @@ test("one worksheet, both kinds approved: each tool takes its own rows and neith
     assert.equal(draft.write.body.FinishedDetails[0].O_QUAN_VIS, 6);
     assert.match(batches.problems.join("\n"), /SOFTGOOD cannot be made through EBMS's API because it is not classified Track Count/);
     assert.deepEqual(writes, [], "drafting never writes");
+});
+
+test("drafts already created for this run are found in one read and not offered again", async () => {
+    fresh();
+    tables["APINV"] = [{ AUTOID: "po1", INVOICE: "1201", EXTERNALID: `${RUN}-V1` }];
+    try {
+        const r = await call({ company: "sbx", path: worksheet({ L0001: { Approve: "Y" }, L0002: { Approve: "Y", Vendor: "V2" } }) });
+        assert.deepEqual(r.drafts.map((d: any) => [d.vendor, typeof d.write === "string" ? d.write : "write"]), [["V1", "Already created for this run; do not create it again."], ["V2", "write"]]);
+        assert.deepEqual(r.drafts[0].alreadyCreated, { AUTOID: "po1", INVOICE: "1201", EXTERNALID: `${RUN}-V1` });
+        assert.equal(reads.filter((read) => read.includes("EXTERNALID")).length, 1, "one request for every draft");
+    } finally {
+        tables["APINV"] = [];
+    }
 });

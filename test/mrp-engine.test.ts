@@ -287,5 +287,13 @@ test("a receipt pulled in to cover a shortage is never also called spare, and an
 
 test("a negative on-hand balance is a shortage today, with a reason", () => {
     const plan = runMrp({ today, items: [{ id: "A", onHand: -4 }], demands: [sales("A", 1, "2026-10-20", "SO-1")], supplies: [] });
-    assert.deepEqual(plan.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}: ${o.pegs.map((p) => p.ref).join()}`), ["4 by 2026-09-18: 0 (on hand is negative)", "1 by 2026-10-20: SO-1"]);
+    assert.deepEqual(plan.plannedOrders.map((o) => `${o.qty} by ${o.receiptDate}: ${o.pegs.map((p) => `${p.kind} ${p.ref}`).join()}`), ["4 by 2026-09-18: negative on hand", "1 by 2026-10-20: sales SO-1"], "a stock-out, not a minimum to restore");
+});
+
+test("forty thousand lines on one item are planned in well under a second", () => {
+    const demands = Array.from({ length: 40_000 }, (_, i) => sales("A", 1, "2026-10-01", `SO-${i}`));
+    const started = Date.now();
+    const plan = runMrp({ today, items: [{ id: "A", onHand: 0 }], demands, supplies: [] });
+    assert.equal(plan.plannedOrders[0]?.qty, 40_000);
+    assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms; building each item's list by copying took about 2 s`);
 });

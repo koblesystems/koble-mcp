@@ -18,9 +18,10 @@
  *   5. scheduled receipts the plan never needs are reported ("not needed").
  * Every planned order remembers the demands that caused it, so any number can be explained.
  */
+import { round } from "./values.js";
 
-export type DemandKind = "sales" | "job" | "batch" | "dependent" | "forecast" | "minimum";
-export type SupplyKind = "purchase" | "batch";
+type DemandKind = "sales" | "job" | "batch" | "dependent" | "forecast" | "minimum";
+type SupplyKind = "purchase" | "batch";
 
 export interface ItemParams {
     id: string;
@@ -63,7 +64,8 @@ export interface Supply {
 
 export interface Peg {
     ref: string;
-    kind: DemandKind;
+    /** "negative": stock was already below zero today, which is a stock-out, not a minimum to restore. */
+    kind: DemandKind | "negative";
     qty: number;
     date: string;
 }
@@ -83,9 +85,9 @@ export interface PlannedOrder {
     pegs: Peg[];
 }
 
-export type ExceptionType = "expedite" | "not-needed" | "past-due-release" | "past-due-demand" | "unknown-item" | "bom-cycle" | "assumed-date";
+type ExceptionType = "expedite" | "not-needed" | "past-due-release" | "past-due-demand" | "unknown-item" | "bom-cycle" | "assumed-date";
 
-export interface PlanException {
+interface PlanException {
     type: ExceptionType;
     item: string;
     ref: string;
@@ -95,16 +97,18 @@ export interface PlanException {
     qty?: number;
     /** On an expedite: the receipt had no expected date in EBMS, so "from" is an assumption. */
     dateAssumed?: boolean;
+    /** On an expedite or not-needed: whether the receipt is a purchase order or a batch, whose numbers can coincide. */
+    kind?: SupplyKind;
 }
 
-export interface TimelineRow {
+interface TimelineRow {
     date: string;
     change: number;
     balance: number;
     what: string;
 }
 
-export interface ItemPlan {
+interface ItemPlan {
     item: string;
     level: number;
     timeline: TimelineRow[];
@@ -112,7 +116,7 @@ export interface ItemPlan {
 }
 
 /** Demand and supply dated after the horizon: counted for the reader, left out of the netting. */
-export interface BeyondHorizon {
+interface BeyondHorizon {
     item: string;
     demandQty: number;
     supplyQty: number;
@@ -132,7 +136,6 @@ export interface Plan {
     beyondHorizon: BeyondHorizon[];
 }
 
-const round = (value: number): number => Math.round(value * 10_000) / 10_000;
 const DAY = 86_400_000;
 export const addDays = (date: string, days: number): string => new Date(Date.parse(`${date}T00:00:00Z`) + days * DAY).toISOString().slice(0, 10);
 const later = (a: string, b: string): string => (a > b ? a : b);
@@ -145,7 +148,7 @@ export function lotSize(shortfall: number, item: Pick<ItemParams, "orderMultiple
     return round(multiple > 0 ? Math.ceil(shortfall / multiple - 1e-9) * multiple : shortfall);
 }
 
-export interface LowLevel {
+interface LowLevel {
     levels: Map<string, number>;
     /** Each distinct loop, once. */
     cycles: string[][];
@@ -189,7 +192,9 @@ export function lowLevelCodes(items: readonly ItemParams[]): LowLevel {
     for (const item of items) {
         for (const component of item.components ?? []) {
             if (component.item === item.id || broken.has(`${item.id}>${component.item}`)) continue;
-            parents.set(component.item, [...(parents.get(component.item) ?? []), item.id]);
+            const list = parents.get(component.item);
+            if (list) list.push(item.id);
+            else parents.set(component.item, [item.id]);
         }
     }
     const levels = new Map<string, number>();
@@ -219,7 +224,7 @@ interface Receipt extends Supply {
  * plan the rest of the time frame with that order in place (so it can replace an expedite).
  * "by-end": the minimum is a level to be back at by the end of the time frame — order for the last day.
  */
-export type MinimumRule = "when-crossed" | "by-end";
+type MinimumRule = "when-crossed" | "by-end";
 
 interface Frame { today: string; lastDay: string; laterShortfall: number; rule: MinimumRule }
 
@@ -271,7 +276,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             balance = round(balance + receipt.qty);
             timeline.push({ date, change: receipt.qty, balance, what: `${receipt.kind} ${receipt.ref}` });
         }
-        let pegs: Peg[] = startsShort && date === today ? [{ ref: "0 (on hand is negative)", kind: "minimum", qty: round(-item.onHand), date }] : [];
+        let pegs: Peg[] = startsShort && date === today ? [{ ref: "on hand", kind: "negative", qty: round(-item.onHand), date }] : [];
         for (const demand of demands) {
             if (demand.due !== date) continue;
             const before = balance;
@@ -295,7 +300,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             timeline.push({ date, change: next.qty, balance, what: `${next.kind} ${next.ref} (${next.dateAssumed ? "no expected date; needed now" : `expedited from ${next.due}`})` });
             const why = pegs.map((peg) => `${peg.kind} ${peg.ref}`).join(", ") || "a negative on-hand balance";
             out.exceptions.push({
-                type: "expedite", item: item.id, ref: next.ref, qty: next.qty, from: next.due, to: date, ...(next.dateAssumed ? { dateAssumed: true } : {}),
+                type: "expedite", item: item.id, ref: next.ref, kind: next.kind, qty: next.qty, from: next.due, to: date, ...(next.dateAssumed ? { dateAssumed: true } : {}),
                 message: next.dateAssumed
                     ? `${next.kind} ${next.ref}: ${next.qty} of ${item.id} has no expected date in EBMS, and is needed by ${date} for ${why}.`
                     : `${next.kind} ${next.ref}: ${next.qty} of ${item.id} is due ${next.due} but is needed ${date} for ${why}.`,
@@ -321,7 +326,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
         while (since > 0 && (endOfDay[since - 1]?.balance ?? 0) < safety) since -= 1;
         const wentUnder = since === 0 && round(item.onHand) < safety ? today : (endOfDay[since]?.date ?? today);
         const date = frame.rule === "by-end" ? frame.lastDay : wentUnder;
-        const peg: Peg = { ref: safety > 0 ? String(safety) : "0 (on hand is negative)", kind: "minimum", qty: round(safety - balance), date };
+        const peg: Peg = safety > 0 ? { ref: String(safety), kind: "minimum", qty: round(safety - balance), date } : { ref: "on hand", kind: "negative", qty: round(-balance), date };
         const qty = lotSize(round(target - balance), item);
         if (frame.rule === "when-crossed") return planItem(item, demandsIn, suppliesIn, frame, { date, qty, peg });
         balance = round(balance + qty);
@@ -353,7 +358,7 @@ function planItem(item: ItemParams, demandsIn: readonly Demand[], suppliesIn: re
             if (receipt.effective !== receipt.due) continue; // pulled in to cover a shortage: needed by definition
             if (!survives(new Set([...spare, receipt]))) continue;
             spare.add(receipt);
-            out.exceptions.push({ type: "not-needed", item: item.id, ref: receipt.ref, qty: receipt.qty, from: receipt.due, message: `${receipt.kind} ${receipt.ref}: ${receipt.qty} of ${item.id} is not needed by anything in the plan; consider deferring or cancelling it.` });
+            out.exceptions.push({ type: "not-needed", item: item.id, ref: receipt.ref, kind: receipt.kind, qty: receipt.qty, from: receipt.due, message: `${receipt.kind} ${receipt.ref}: ${receipt.qty} of ${item.id} is not needed by anything in the plan; consider deferring or cancelling it.` });
         }
     }
 
@@ -404,7 +409,11 @@ export function runMrp(input: { today: string; through?: string | undefined; min
 
     const demands = new Map<string, Demand[]>();
     const supplies = new Map<string, Supply[]>();
-    const push = <T>(map: Map<string, T[]>, key: string, value: T): void => void map.set(key, [...(map.get(key) ?? []), value]);
+    const push = <T>(map: Map<string, T[]>, key: string, value: T): void => {
+        const list = map.get(key);
+        if (list) list.push(value);
+        else map.set(key, [value]);
+    };
     for (const demand of input.demands) if (inside(demand.date)) push(demands, demand.item, demand);
     for (const supply of input.supplies) if (inside(supply.date)) push(supplies, supply.item, supply);
 
