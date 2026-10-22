@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assertWriteCompany, availableCompanies, configure, connectionFor, isWriteCompany, loadSettings, resolveCompany } from "../src/config.js";
+import { assertWriteCompany, availableCompanies, companyListUrl, configure, connectionFor, isSerial, isWriteCompany, loadSettings, resolveCompany } from "../src/config.js";
 
 const base = { EBMS_SERIAL_NUMBER: "000000000000000", EBMS_USERNAME: "u", EBMS_PASSWORD: "p" };
 
@@ -58,4 +58,15 @@ test("per-company credentials override the defaults and never leak into the URL"
 test("a company with no credentials at all is an error, not a request", () => {
     configure({ EBMS_SERIAL_NUMBER: "000000000000000", EBMS_COMPANIES: "sbx" });
     assert.throws(() => connectionFor("sbx"), /no credentials/);
+});
+
+test("a serial number is one host label: anything that could move the host is refused", () => {
+    for (const good of ["000000000000000", "1", "abc-123"]) assert.equal(isSerial(good), true, good);
+    for (const bad of ["", "evil.example/x?", "evil.example#", "user@evil.example", "a.b", "a b", "-1", "1-", "x".repeat(41)]) assert.equal(isSerial(bad), false, bad);
+    configure({ ...base, EBMS_SERIAL_NUMBER: "evil.example/x?", EBMS_COMPANIES: "sbx" });
+    assert.throws(() => loadSettings(), /EBMS_SERIAL_NUMBER/);
+    assert.throws(() => connectionFor("sbx"), /EBMS_SERIAL_NUMBER/);
+    assert.throws(() => companyListUrl(), /EBMS_SERIAL_NUMBER/);
+    configure({ ...base, EBMS_COMPANIES: "sbx" });
+    assert.equal(new URL(companyListUrl()).hostname, "000000000000000.koblesystems.dev");
 });

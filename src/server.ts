@@ -35,14 +35,19 @@ function describeSetup(): string {
     }
 }
 
+/** How long startup waits for the company list before connecting anyway. */
+const DISCOVERY_WAIT_MS = 3_000;
+
 /** Runs the MCP server over stdio until the host closes it. */
 export async function startServer(): Promise<void> {
-    try {
-        setDiscoveredCompanies(await discoverCompanies());
-    } catch (error) {
-        setDiscoveryError(error instanceof Error ? error.message : String(error));
-        console.error(`koble-mcp: could not list companies for this serial (${error instanceof Error ? error.message : String(error)}); using EBMS_COMPANIES if set.`);
-    }
+    // The company names go into the instructions, so wait for them briefly, but never hold the host
+    // up for the whole discovery timeout: a late answer still lands before the first tool call needs it.
+    const discovery = discoverCompanies().then(setDiscoveredCompanies, (error: unknown) => {
+        const why = error instanceof Error ? error.message : String(error);
+        setDiscoveryError(why);
+        console.error(`koble-mcp: could not list companies for this serial (${why}); using EBMS_COMPANIES if set.`);
+    });
+    await Promise.race([discovery, new Promise((resolve) => setTimeout(resolve, DISCOVERY_WAIT_MS).unref())]);
 
     const guide = loadGuide();
     const server = new McpServer(

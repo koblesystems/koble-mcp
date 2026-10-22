@@ -17,8 +17,11 @@ const SERIAL = "000000000000000";
 // The serial reaches three companies; each accepts one username and password of its own.
 const PASSWORDS: Record<string, [string, string]> = { SBX: ["deke", "sbx-pass"], LIVE: ["buyer", "live-pass"], ROV: ["deke", "rov-pass"] };
 const signIns: string[] = [];
+const passwordsSent: string[] = [];
+const requests: string[] = [];
 globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     const u = String(url);
+    requests.push(u);
     if (u.includes("ebmscompanylist")) {
         return new Response(JSON.stringify([{ Id: "SBX", Name: "Sample Coffee Co" }, { Id: "LIVE", Name: "Acme Hardware" }, { Id: "ROV", Name: "Rova Bicycles" }]), { status: 200 });
     }
@@ -26,6 +29,7 @@ globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
     if (u.endsWith("/Token")) {
         const { Username, Password } = JSON.parse(String(init?.body)) as { Username: string; Password: string };
         signIns.push(`${company}:${Username}`);
+        passwordsSent.push(Password);
         const ok = PASSWORDS[company]?.[0] === Username && PASSWORDS[company]?.[1] === Password;
         return ok ? new Response(JSON.stringify({ AccessToken: "t" }), { status: 200 }) : new Response(JSON.stringify({ Messages: [{ TextBriefDescription: "Invalid user name or password" }] }), { status: 401 });
     }
@@ -139,4 +143,25 @@ test("a first setup without a terminal must name its companies", async () => {
     fresh();
     writeConfig({ serial: "999999999999999" });
     assert.equal(await quiet(() => setup({ serial: SERIAL, sandbox: "none", "skip-password": true, "no-connect": true, yes: true })), 1);
+});
+
+test("setup refuses a serial number that would move the host, before any request is made", async () => {
+    fresh();
+    requests.length = 0;
+    for (const serial of ["evil.example/x?", "evil.example#", "user@evil.example", "a.b"]) {
+        assert.equal(await quiet(() => setup({ serial, companies: "SBX", sandbox: "none", "skip-password": true, "no-connect": true, yes: true })), 1, serial);
+        assert.equal(await quiet(() => companiesCommand({ serial })), 1, serial);
+    }
+    assert.deepEqual(requests, [], "nothing was sent anywhere");
+    assert.equal(readConfig(), null, "nothing was saved");
+});
+
+test("a piped password keeps its spaces; only the line ending goes", async () => {
+    fresh();
+    writeConfig({ serial: SERIAL, companies: "SBX", sandbox: "SBX", logins: { SBX: { username: "deke" } } });
+    setPasswordInput((async function* () { yield "  spaced pass \r\n"; })());
+    resetAuth();
+    passwordsSent.length = 0;
+    await quiet(() => login({ "password-stdin": true }));
+    assert.deepEqual(passwordsSent, ["  spaced pass "]);
 });

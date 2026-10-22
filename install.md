@@ -15,12 +15,12 @@ it against the release's checksums.
 
 - macOS / Linux:
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | KOBLE_SKIP_SETUP=1 bash
+  curl -fsSL https://github.com/koblesystems/koble-mcp/releases/latest/download/install.sh | KOBLE_SKIP_SETUP=1 bash
   ```
   Installs to `~/.local/bin/koble`.
 - Windows (PowerShell):
   ```powershell
-  $env:KOBLE_SKIP_SETUP = '1'; irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex
+  $env:KOBLE_SKIP_SETUP = '1'; irm https://github.com/koblesystems/koble-mcp/releases/latest/download/install.ps1 | iex
   ```
   Installs to `%LOCALAPPDATA%\Programs\koble\koble.exe`.
 

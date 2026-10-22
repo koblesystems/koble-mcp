@@ -12,7 +12,7 @@ import { createRequire } from "node:module";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export interface SkillInfo {
+interface SkillInfo {
     /** The skill's folder, which is also its name. */
     name: string;
     description: string;
@@ -25,11 +25,21 @@ export interface Guide {
     read(path: string): string | undefined;
 }
 
-/** `skills/` in the single-file build: an index asset lists the files, each stored under its path. */
-function fromEmbedded(): Map<string, string> | null {
+/** The single-file build's node:sea, or null when running from source. */
+export function singleFile(): { getAsset(key: string, encoding: string): string } | null {
     try {
         const sea = createRequire(import.meta.url)("node:sea") as { isSea(): boolean; getAsset(key: string, encoding: string): string };
-        if (!sea.isSea()) return null;
+        return sea.isSea() ? sea : null;
+    } catch {
+        return null;
+    }
+}
+
+/** `skills/` in the single-file build: an index asset lists the files, each stored under its path. */
+function fromEmbedded(): Map<string, string> | null {
+    const sea = singleFile();
+    if (!sea) return null;
+    try {
         const index = JSON.parse(sea.getAsset("skills/index.json", "utf8")) as string[];
         return new Map(index.map((path) => [path, sea.getAsset(`skills/${path}`, "utf8")]));
     } catch {
@@ -37,7 +47,8 @@ function fromEmbedded(): Map<string, string> | null {
     }
 }
 
-function fromFolder(root: string): Map<string, string> {
+/** Every .md and .py file under a skills folder, by its path there. The single-file build embeds the same set. */
+export function fromFolder(root: string): Map<string, string> {
     const files = new Map<string, string>();
     const walk = (dir: string): void => {
         for (const name of readdirSync(dir).sort()) {

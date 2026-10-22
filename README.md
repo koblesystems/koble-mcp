@@ -41,7 +41,7 @@ add an app later.
 In **PowerShell** (Start menu → PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.ps1 | iex
+irm https://github.com/koblesystems/koble-mcp/releases/latest/download/install.ps1 | iex
 ```
 
 It installs `koble.exe` to `%LOCALAPPDATA%\Programs\koble` and adds that folder to your PATH.
@@ -57,7 +57,7 @@ The password goes to Windows Credential Manager.
 In **Terminal**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash
+curl -fsSL https://github.com/koblesystems/koble-mcp/releases/latest/download/install.sh | bash
 ```
 
 It installs `koble` to `~/.local/bin` (Apple silicon). The password goes to the macOS Keychain.
@@ -66,12 +66,17 @@ Intel Macs are not built yet.
 ### Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/koblesystems/koble-mcp/master/scripts/install.sh | bash
+curl -fsSL https://github.com/koblesystems/koble-mcp/releases/latest/download/install.sh | bash
 ```
 
 x64 and arm64. The password goes to the Secret Service keyring when `secret-tool` is available,
 otherwise to a file in `~/.config/koble` that only you can read. Claude Desktop does not run on
 Linux; use Claude Code.
+
+> **Checking a download.** The installers and `koble update` check each file against the
+> release's `checksums.txt`. Every release file also carries a build provenance attestation, so
+> with the GitHub CLI you can confirm it was built by this repository's release workflow:
+> `gh attestation verify koble-darwin-arm64 --repo koblesystems/koble-mcp`.
 
 ### Claude Code
 

@@ -7,16 +7,16 @@
  */
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { createRequire } from "node:module";
 import { createInterface } from "node:readline/promises";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { configure, setDiscoveredCompanies, type CompanyInfo } from "../config.js";
+import { configure, isSerial, setDiscoveredCompanies, type CompanyInfo } from "../config.js";
 import { resetAuth, request } from "../ebms/client.js";
 import { discoverCompanies } from "../ebms/companies.js";
 import { EbmsError } from "../ebms/errors.js";
+import { singleFile } from "../guide.js";
 import { VERSION } from "../version.js";
 import { APPS, appById, type App } from "./apps.js";
 import { accountHasKoblePlugin, desktopLog, desktopRunning, readDesktopLog, type Launch } from "./hosts.js";
@@ -29,15 +29,9 @@ const REPO = "koblesystems/koble-mcp";
 const say = (line = ""): void => void process.stdout.write(`${line}\n`);
 
 /** The single-file build is the executable itself; from source it is node plus cli.js. */
-export function isSingleFile(): boolean {
-    try {
-        return (createRequire(import.meta.url)("node:sea") as { isSea(): boolean }).isSea();
-    } catch {
-        return false;
-    }
-}
+const isSingleFile = (): boolean => singleFile() !== null;
 
-export function selfLaunch(): Launch {
+function selfLaunch(): Launch {
     if (isSingleFile()) return { command: process.execPath, args: ["mcp"] };
     return { command: process.execPath, args: [fileURLToPath(new URL("../../cli.js", import.meta.url)), "mcp"] };
 }
@@ -63,14 +57,17 @@ export function setPasswordInput(input: AsyncIterable<unknown>): void {
     pipedLines = null;
 }
 
-/** --password-stdin: everything piped in is read once, and each call takes the next line (one per company). */
+/**
+ * --password-stdin: everything piped in is read once, and each call takes the next line (one per
+ * company). Only the line ending goes: spaces at either end can be part of a password.
+ */
 async function readLineFromPipe(): Promise<string> {
     if (pipedLines === null) {
         let text = "";
         for await (const chunk of passwordInput) text += String(chunk);
         pipedLines = text.split(/\r?\n/);
     }
-    return (pipedLines.shift() ?? "").trim();
+    return pipedLines.shift() ?? "";
 }
 
 /** Typed without echo. Needs a terminal: a password is never taken from a flag. */
@@ -104,16 +101,17 @@ async function askHidden(question: string): Promise<string> {
 // ------------------------------------------------------------------ EBMS checks
 
 async function companiesFor(serial: string): Promise<CompanyInfo[]> {
+    if (!isSerial(serial)) throw new Error(`"${serial}" is not an EBMS serial number: it is letters, digits and hyphens only, usually 15 digits`);
     configure({ EBMS_SERIAL_NUMBER: serial });
     return discoverCompanies();
 }
 
-/** Signs in and makes one tiny read, so "saved" only ever means "works". */
-async function signIn(serial: string, username: string, password: string, company: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+/** Signs in and makes one tiny read, so "saved" only ever means "works". `companies` saves listing them again. */
+async function signIn(serial: string, username: string, password: string, company: string, companies?: CompanyInfo[]): Promise<{ ok: true } | { ok: false; reason: string }> {
     configure({ EBMS_SERIAL_NUMBER: serial, EBMS_USERNAME: username, EBMS_PASSWORD: password });
     resetAuth();
     try {
-        setDiscoveredCompanies(await discoverCompanies());
+        setDiscoveredCompanies(companies ?? (await discoverCompanies()));
         await request(company, "GET", "INVENTRY?$top=1&$select=ID");
         return { ok: true };
     } catch (error) {
@@ -219,18 +217,18 @@ export async function setup(flags: Flags): Promise<number> {
     say(`koble ${VERSION} setup`);
     say();
 
-    let serial = String(flags["serial"] ?? process.env["KOBLE_SERIAL"] ?? "");
+    let serial = String(flags["serial"] ?? process.env["KOBLE_SERIAL"] ?? "").trim();
     let companies: CompanyInfo[] = [];
     for (;;) {
         if (!serial) {
             if (!interactive) return fail("No serial number. Pass --serial or set KOBLE_SERIAL.");
-            serial = await ask("EBMS serial number", existing?.serial ?? "");
+            serial = (await ask("EBMS serial number", existing?.serial ?? "")).trim();
         }
         try {
             companies = await companiesFor(serial);
             break;
         } catch (error) {
-            say(`That serial number did not reach EBMS (${error instanceof Error ? error.message : String(error)}).`);
+            say(isSerial(serial) ? `That serial number did not reach EBMS (${error instanceof Error ? error.message : String(error)}).` : `${error instanceof Error ? error.message : String(error)}.`);
             if (!interactive) return 1;
             serial = "";
         }
@@ -461,7 +459,7 @@ export async function doctor(flags: Flags): Promise<number> {
                 if (!companies.some((c) => c.id === id)) { add({ status: "warn", label, detail: "enabled, but no longer on this serial", fix: `koble companies remove ${id}` }); continue; }
                 const login = workingLogin(config, id);
                 if (!login) { const named = config.logins?.[id]?.username; add({ status: "fail", label, detail: named ? `no password stored for ${named}` : "no login", fix: `koble login ${id}` }); continue; }
-                const signed = await signIn(config.serial, login.username, login.password, id);
+                const signed = await signIn(config.serial, login.username, login.password, id, companies);
                 if (!signed.ok) add({ status: "fail", label, detail: signed.reason, fix: `koble login ${id}` });
                 else if (login.shared) add({ status: "warn", label, detail: `works with the shared login ${login.username}`, fix: `koble login ${id} (to give it its own)` });
                 else add({ status: "ok", label, detail: `works as ${login.username} (password in ${login.where})` });
@@ -665,8 +663,16 @@ export async function uninstall(flags: Flags): Promise<number> {
     for (const account of accounts) forgetPassword(account);
     if (credential) say(`Password${accounts.length > 1 ? "s" : ""}: removed from ${credential.where}.`);
     if (existsSync(configDir())) {
-        rmSync(configDir(), { recursive: true, force: true });
-        say(`Settings: removed ${configDir()}.`);
+        // Only koble's own files: KOBLE_CONFIG_DIR may point at a folder that holds other things too.
+        for (const name of ["config.json", "credentials.json"]) rmSync(join(configDir(), name), { force: true });
+        for (const name of readdirSync(configDir())) if (/^(config|credentials)\.json\.tmp-\d+$/.test(name)) rmSync(join(configDir(), name), { force: true });
+        let empty = true;
+        try {
+            rmdirSync(configDir());
+        } catch {
+            empty = false;
+        }
+        say(empty ? `Settings: removed ${configDir()}.` : `Settings: removed koble's files from ${configDir()}; it holds other files, so the folder was kept.`);
     }
     if (program && process.platform === "win32" && removeFromWindowsPath(dirname(program))) say("PATH: removed koble's folder.");
     const removed = removeSelf();
@@ -704,6 +710,3 @@ function fail(message: string): number {
     process.stderr.write(`${message}\n`);
     return 1;
 }
-
-/** Reads a small text file if it exists — used by the tests to check what setup wrote. */
-export const readIfExists = (path: string): string | null => (existsSync(path) ? readFileSync(path, "utf8") : null);
