@@ -9,6 +9,7 @@ import { describeCompanies, loadSettings, setDiscoveredCompanies, setDiscoveryEr
 import { discoverCompanies } from "./ebms/companies.js";
 import { loadGuide, skillSummary } from "./guide.js";
 import { registerPrompts } from "./prompts.js";
+import { registerExportTools } from "./tools/export-tools.js";
 import { registerGuideTools } from "./tools/guide-tools.js";
 import { registerImportTools } from "./tools/import-tools.js";
 import { registerMrpTools } from "./tools/mrp-tools.js";
@@ -51,6 +52,7 @@ export async function startServer(): Promise<void> {
                 "Thin proxy over EBMS OData, plus read-only planning and import tools. " +
                 "The procedures live in skills. If the matching skill is not already loaded in this app, call ebms_guide with its name before any task beyond a single read, and follow it. " +
                 `Skills: ${skillSummary(guide)}. ` +
+                "For more than a few hundred rows use ebms_export, which writes a file and returns only a summary; analyse the file with a script, never one that calls EBMS. " +
                 "PROCESS is never accepted, and ebms_command runs only a short allow-list of actions; a POST whose EXTERNALID already exists is refused; a 2xx is not proof a write applied — read back. " +
                 describeSetup(),
         },
@@ -60,6 +62,7 @@ export async function startServer(): Promise<void> {
         server.registerTool(name, definition as never, handler as never);
     };
     registerProxyTools(register);
+    registerExportTools(register);
     registerMrpTools(register);
     registerWorksheetTools(register);
     registerImportTools(register);

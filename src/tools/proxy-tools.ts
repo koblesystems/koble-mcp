@@ -45,6 +45,22 @@ function buildQuery(options: { select?: string | undefined; filter?: string | un
     return query.length > 0 ? `?${query}` : "";
 }
 
+/** Rows ebms_get shows when no top was asked for; beyond this, ebms_export is the way. */
+export const GET_ROW_CAP = 200;
+/** About 40k tokens: the most rows one ebms_get puts into the conversation, whatever top says. */
+export const GET_BYTE_CAP = 150_000;
+
+/** The rows that fit: at most GET_ROW_CAP when no top was given, and never more than GET_BYTE_CAP of JSON. */
+export function capRows(rows: unknown[], noTop: boolean): unknown[] {
+    const limit = noTop ? Math.min(rows.length, GET_ROW_CAP) : rows.length;
+    let bytes = 0;
+    for (let i = 0; i < limit; i += 1) {
+        bytes += JSON.stringify(rows[i] ?? null).length + 1;
+        if (bytes > GET_BYTE_CAP) return rows.slice(0, Math.max(1, i));
+    }
+    return limit === rows.length ? rows : rows.slice(0, limit);
+}
+
 /** The request must be the right shape for its verb, and must not carry PROCESS anywhere. */
 function checkShape(method: "POST" | "PATCH" | "DELETE", path: string, body: unknown): void {
     const keyed = path.includes("(");
@@ -117,6 +133,7 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 "Read from EBMS OData: a collection (path 'ARINV') or one record (path \"ARINV('<AUTOID>')\").",
                 "Always pass select — an unselected read returns every field, many computed, and large ones hit the 2-minute limit.",
                 "For a collection, count is on by default and the result says whether rows were truncated.",
+                `For more than a few hundred rows use ebms_export instead: without top only ${GET_ROW_CAP} rows are shown, and never more than about ${GET_BYTE_CAP / 1000} KB.`,
                 "Query syntax and the install's quirks are in the ebms-api skill.",
             ].join(" "),
             inputSchema: z.object({
@@ -143,8 +160,11 @@ export function registerProxyTools(register: ToolRegistrar): void {
                 const body = result.body as { value?: unknown[]; "@odata.count"?: number } | null;
                 if (isCollection && body && Array.isArray(body.value)) {
                     const total = typeof body["@odata.count"] === "number" ? body["@odata.count"] : null;
-                    const truncated = total !== null && (args.skip ?? 0) + body.value.length < total;
-                    return jsonResult({ company, rows: body.value, returned: body.value.length, total, truncated, warnings: [...warnings, ...result.warnings], ms: result.ms });
+                    const rows = capRows(body.value, args.top === undefined);
+                    const clipped = rows.length < body.value.length;
+                    const truncated = clipped || (total !== null && (args.skip ?? 0) + body.value.length < total);
+                    if (clipped) warnings.push(`EBMS returned ${body.value.length} rows; only the first ${rows.length} are shown, to keep the conversation from filling up. Do not page through the rest with skip: use ebms_export with the same path, select and filter, which writes them all to a file and returns a summary, then analyse the file with a script.`);
+                    return jsonResult({ company, rows, returned: rows.length, ...(clipped ? { received: body.value.length } : {}), total, truncated, warnings: [...warnings, ...result.warnings], ms: result.ms });
                 }
                 return jsonResult({ company, record: result.body, warnings: [...warnings, ...result.warnings], ms: result.ms });
             } catch (error) {
