@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { basename, dirname, join } from "node:path";
@@ -21,6 +21,7 @@ import { VERSION } from "../version.js";
 import { APPS, appById, type App } from "./apps.js";
 import { accountHasKoblePlugin, desktopLog, desktopRunning, readDesktopLog, type Launch } from "./hosts.js";
 import { outputDir } from "../mrp/files.js";
+import { clearOld, swapInto } from "./swap.js";
 import { accountFor, configDir, enabledCompanies, forgetPassword, loadPassword, loginAccount, loginFor, readConfig, savePassword, writeConfig, type StoredConfig } from "./store.js";
 
 export type Flags = Record<string, string | boolean>;
@@ -444,6 +445,7 @@ export async function doctor(flags: Flags): Promise<number> {
     const checks: Check[] = [];
     const add = (check: Check): void => void checks.push(check);
     add({ status: "info", label: "koble", detail: `${VERSION}, ${isSingleFile() ? process.execPath : "running from source"}` });
+    if (isSingleFile() && process.platform === "win32") clearOld(process.execPath);
 
     const config = readConfig();
     if (!config) add({ status: "fail", label: "Settings", detail: "none saved", fix: "koble setup" });
@@ -558,13 +560,12 @@ export async function update(flags: Flags): Promise<number> {
     const fresh = `${target}.new`;
     writeFileSync(fresh, Buffer.from(binary));
     if (process.platform !== "win32") chmodSync(fresh, 0o755);
-    if (process.platform === "win32") {
-        // A running .exe can be renamed but not overwritten.
-        const old = `${target}.old`;
-        if (existsSync(old)) rmSync(old, { force: true });
-        renameSync(target, old);
+    try {
+        swapInto(target, fresh);
+    } catch (error) {
+        rmSync(fresh, { force: true });
+        return fail(`Could not put the new koble in place (${error instanceof Error ? error.message : String(error)}). Quit Claude Desktop and run \`koble update\` again.`);
     }
-    renameSync(fresh, target);
     say(`Updated to ${latest.tag}. Restart Claude Desktop (and Claude Code sessions) to use it.`);
     return 0;
 }
@@ -619,7 +620,7 @@ function removeSelf(): string {
         return exe;
     }
     const dir = dirname(exe);
-    const command = `ping -n 3 127.0.0.1 >nul & del /f /q "${exe}" "${exe}.old" "${exe}.new" & rmdir "${dir}"`;
+    const command = `ping -n 3 127.0.0.1 >nul & del /f /q "${exe}" "${exe}.old*" "${exe}.new" & rmdir "${dir}"`;
     spawn("cmd.exe", ["/d", "/c", command], { detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true }).unref();
     return exe;
 }

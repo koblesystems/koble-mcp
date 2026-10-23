@@ -40,7 +40,9 @@ try {
 
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $target = Join-Path $dir 'koble.exe'
-    if (Test-Path $target) { Move-Item $target "$target.old" -Force }   # a running koble.exe can be renamed, not overwritten
+    # A running koble.exe can be renamed, not overwritten or deleted; an older copy may still be running too.
+    Get-ChildItem "$target.old*" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    if (Test-Path $target) { Move-Item $target "$target.old-$([DateTime]::UtcNow.Ticks)" }
     Move-Item (Join-Path $tmp $asset) $target -Force
     Unblock-File $target
 } finally {
