@@ -32,6 +32,7 @@ jobs:
           $d = Join-Path $env:RUNNER_TEMP 'koble-uninstall'
           New-Item -ItemType Directory -Force $d | Out-Null
           Copy-Item dist\koble-windows-x64.exe "$d\koble.exe"
+          foreach ($left in 'koble.exe.old', 'koble.exe.old-1', 'koble.exe.new') { Set-Content "$d\$left" 'left by an update' }
           $env:KOBLE_CONFIG_DIR = "$d\settings"; $env:KOBLE_CREDENTIAL_STORE = 'file'
           New-Item -ItemType Directory -Force $env:KOBLE_CONFIG_DIR | Out-Null
           Set-Content "$env:KOBLE_CONFIG_DIR\config.json" '{"serial":"000000000000000","username":"ci"}'
@@ -39,8 +40,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "uninstall exited $LASTEXITCODE" }
           Start-Sleep -Seconds 8
           if (Test-Path "$d\koble.exe") { throw 'koble.exe was not removed' }
+          if (Get-ChildItem "$d\koble.exe.*" -ErrorAction SilentlyContinue) { throw 'an old or new koble.exe copy was not removed' }
           if (Test-Path $env:KOBLE_CONFIG_DIR) { throw 'the settings folder was not removed' }
           'koble uninstall removed itself and its settings'
+      - name: koble update swaps in a new koble.exe while old copies still run
+        if: runner.os == 'Windows'
+        run: node scripts/update-selftest.mjs
       - name: install.ps1 parses in Windows PowerShell 5.1
         if: runner.os == 'Windows'
         shell: powershell
