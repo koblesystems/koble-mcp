@@ -16,6 +16,7 @@ import { createInterface } from "node:readline";
 import ExcelJS from "exceljs";
 import { request } from "../ebms/client.js";
 import { EbmsError } from "../ebms/errors.js";
+import { privatePlace } from "../spreadsheet.js";
 
 type Row = Record<string, unknown>;
 export type ExportFormat = "csv" | "xlsx" | "jsonl";
@@ -275,14 +276,18 @@ export async function runExport(company: string, options: ExportOptions): Promis
     };
 
     const folder = exportDir(options.folder);
+    const name = exportName(company, entity, format, options.filename);
     if (options.folder?.trim()) {
+        // A folder the model names is checked, as import's are; the usual one is the user's own setting.
+        const why = privatePlace(join(folder, name));
+        if (why) throw new Error(`The export was not written to ${folder}: ${why}. Leave folder out to use ${exportDir()}, or name an ordinary folder.`);
         // Only the usual folder is created; a folder the caller names must already be there.
         const found = await stat(folder).catch(() => null);
         if (!found?.isDirectory()) throw new Error(`folder ${folder} does not exist. Name an existing folder, or leave folder out to use ${exportDir()}.`);
     } else {
         await mkdir(folder, { recursive: true });
     }
-    const { path, final, temp, tempOut } = await reserve(folder, exportName(company, entity, format, options.filename));
+    const { path, final, temp, tempOut } = await reserve(folder, name);
 
     const columns: string[] = [];
     const known = new Set<string>();

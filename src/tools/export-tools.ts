@@ -45,7 +45,7 @@ export function registerExportTools(register: ToolRegistrar): void {
                 explode: z.string().optional().describe("An expanded collection, e.g. Details: one row per child, with the parent's fields repeated and the child's as Details.<FIELD>. Without it an expanded collection is JSON text in one cell."),
                 orderby: z.string().optional().describe("Default AUTOID, so pages do not shift while being read; where EBMS refuses that sort, the server's own order is used and repeats are still removed by AUTOID (the result says ordered: false)."),
                 format: z.enum(["csv", "xlsx", "jsonl"]).optional().describe("Default csv."),
-                folder: z.string().optional().describe("An existing folder for the file. Default: KOBLE_EXPORT_DIR, or 'Koble Exports' in the user's Documents (created if missing)."),
+                folder: z.string().optional().describe("Only a folder the user named: an existing one, not hidden and not koble's settings. Default: KOBLE_EXPORT_DIR, or 'Koble Exports' in the user's Documents (created if missing)."),
                 filename: z.string().optional().describe("File name only. Default <company>-<entity>-<timestamp>. An existing file is never overwritten."),
                 pageSize: z.number().int().min(1).max(1000).optional().describe("Rows per request. Default 500, or 25 with an expand. Lower it if a page times out."),
                 maxRows: z.number().int().min(1).optional().describe(`Refuse an export larger than this. Default ${DEFAULT_MAX_ROWS}.`),

@@ -4,7 +4,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, readdir } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
@@ -16,6 +17,13 @@ import type { McpToolResult } from "../src/tools/types.js";
 
 const out = await mkdtemp(join(tmpdir(), "koble-export-"));
 process.env["KOBLE_EXPORT_DIR"] = out;
+// A temporary home folder, so the hidden-folder rule is tested without touching the real one, and
+// koble's settings in an ordinary-looking folder, so that reason is tested apart on every system.
+const home = await mkdtemp(join(tmpdir(), "koble-home-"));
+process.env["HOME"] = home;
+process.env["USERPROFILE"] = home;
+const settings = join(home, "Koble Settings");
+process.env["KOBLE_CONFIG_DIR"] = settings;
 
 type Handler = (args: unknown) => Promise<McpToolResult>;
 const tools: Record<string, Handler> = {};
@@ -317,4 +325,76 @@ test("a folder that cannot be written to fails the call, not the server", { skip
     } finally {
         await chmod(locked, 0o700);
     }
+});
+
+test("a folder named for the export is never koble's settings, ~/.ssh, ~/.aws, another hidden folder, or a link to one", async () => {
+    fresh();
+    serve = pages(lines(10));
+    const documents = join(home, "Documents");
+    for (const folder of [settings, join(home, ".ssh"), join(home, ".aws"), join(home, ".config", "other"), documents]) await mkdir(folder, { recursive: true });
+    // A junction on Windows needs no special rights; elsewhere the type is ignored.
+    await symlink(join(home, ".aws"), join(documents, "reports"), "junction");
+    await symlink(settings, join(documents, "settings"), "junction");
+    // The real path of the home folder: on Windows the long form of an 8.3 name (RUNNER~1), on macOS /private/var.
+    const long = realpathSync.native(home);
+    const refused: Array<[string, RegExp]> = [
+        [settings, /settings folder/],
+        [join(settings, "..", "Koble Settings"), /settings folder/],
+        [join(home, ".ssh"), /hidden folder/],
+        [join(home, ".config", "other"), /hidden folder/],
+        [join(long, ".ssh"), /hidden folder/],
+        [join(documents, "reports"), /hidden folder/],
+        [join(documents, "settings"), /settings folder/],
+    ];
+    for (const [folder, why] of refused) {
+        requests = [];
+        const r = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder });
+        assert.equal(r.isError, true, folder);
+        assert.match(r.raw, why, folder);
+        assert.equal(requests.length, 0, "nothing is read for a refused folder");
+    }
+    for (const folder of [settings, join(home, ".ssh"), join(home, ".aws")]) assert.deepEqual(await readdir(folder), [], folder);
+    // The home folder named the other way round: given in its short (or unresolved) form while the home folder is the long one.
+    process.env["HOME"] = long;
+    process.env["USERPROFILE"] = long;
+    try {
+        const r = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder: join(home, ".ssh") });
+        assert.match(r.raw, /hidden folder/);
+    } finally {
+        process.env["HOME"] = home;
+        process.env["USERPROFILE"] = home;
+    }
+    // An ordinary folder is fine, and the usual folder needs no naming.
+    const ok = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder: documents });
+    assert.equal(ok.isError, undefined, ok.raw);
+    assert.equal((await readFile(String(ok.path), "utf8")).split("\r\n").filter(Boolean).length, 11);
+});
+
+test("on Windows, a hidden folder named with other capitals or forward slashes is still refused", { skip: process.platform !== "win32" }, async () => {
+    fresh();
+    serve = pages(lines(10));
+    await mkdir(join(home, ".ssh"), { recursive: true });
+    for (const folder of [join(home, ".SSH").toUpperCase(), join(home, ".ssh").replace(/\\/g, "/"), `${home}\\Documents\\..\\.ssh`]) {
+        const r = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder });
+        assert.equal(r.isError, true, folder);
+        assert.match(r.raw, /hidden folder/, folder);
+    }
+});
+
+test("an export never writes over a file that is there, even one a link points at", async () => {
+    fresh();
+    serve = pages(lines(10));
+    const folder = await mkdtemp(join(home, "Documents", "keep-"));
+    const kept = join(folder, "source.csv");
+    await writeFile(kept, "ID\nmine\n");
+    const elsewhere = join(home, "elsewhere.csv");
+    await writeFile(elsewhere, "theirs\n");
+    await symlink(elsewhere, join(folder, "linked.csv"));
+    for (const filename of ["source", "linked"]) {
+        const r = await call("ebms_export", { company: "sbx", path: "ARINVDET", select: "AUTOID", folder, filename });
+        assert.equal(r.isError, undefined, r.raw);
+        assert.equal(r.path, join(folder, `${filename}-2.csv`));
+    }
+    assert.equal(await readFile(kept, "utf8"), "ID\nmine\n");
+    assert.equal(await readFile(elsewhere, "utf8"), "theirs\n");
 });
